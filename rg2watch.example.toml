@@ -54,6 +54,12 @@ price_in_per_mtok = 4.0
 price_out_per_mtok = 20.0
 # Background analysis worker threads
 analysis_workers = 4
+# PDF downloads have their own rate limiter (requests/second), on top of max_rps for listings
+download_max_rps = 0.5
+# Pause all analysis this long after a key/permission/model/request error (then one probe form)
+analysis_pause_s = 600
+# On shutdown, wait this long for in-flight analyses so their cost is recorded
+stop_wait_s = 120
 # Rule thresholds: turnout (A6), one list's share of valid votes (A7), assisted voters share (A8),
 # minimum registered/valid voters for ratio rules, named committee rows without signature (V4)
 turnout_high = 0.95

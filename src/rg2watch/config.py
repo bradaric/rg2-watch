@@ -34,6 +34,9 @@ class Config:
     price_in_per_mtok: float = 4.0
     price_out_per_mtok: float = 20.0
     analysis_workers: int = 4
+    download_max_rps: float = 0.5
+    analysis_pause_s: int = 600
+    stop_wait_s: int = 120
     turnout_high: float = 0.95
     leader_share_high: float = 0.90
     assisted_share: float = 0.05

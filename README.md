@@ -46,8 +46,22 @@ corrections, missing signatures, a different pen/hand in the results block, arit
 procedural flags. This happens in background worker threads (`analysis_workers`, default 4), so the
 watcher keeps sweeping. Findings (rules V*, P*, A*) are stored and alerted like the D-rule findings.
 Documents that cannot be processed give a LOW `D3` (not a PDF / unreadable), a LOW `X1` (model
-refused) or, after 3 failed attempts with 60 s / 120 s backoff (API errors, RIK unavailable), a LOW
-`X2`. Each document URL is analysed once; a replaced file is a new URL and is analysed again.
+refused) or, after 3 failed attempts with 60 s / 120 s backoff (Anthropic 429/5xx/overloaded/
+connection errors), a LOW `X2`. Each document URL is analysed once; a replaced file is a new URL
+and is analysed again.
+
+Errors that would fail every form (invalid key, no permission, unknown model, invalid request)
+pause all analysis for `analysis_pause_s` (default 600 s) with one "[rg2-watch] analysis paused:
+..." alert; no attempts are used. After the pause one form is tried; when it works, analysis
+resumes ("[rg2-watch] analysis resumed"). When RIK is busy or blocking a download, the form is
+retried after 120 s without using an attempt, and workers sit out the watcher's blocked pause.
+After fixing a problem, put failed forms back in the queue:
+
+    uv run rg2watch requeue [--parent <parent>]            # forms that used all 3 attempts (X2)
+    uv run rg2watch requeue [--parent <parent>] --failed   # every failed form, also D3/X1
+
+On Ctrl-C/SIGTERM, `watch` waits up to `stop_wait_s` (default 120 s) for in-flight analyses so
+their cost is recorded; anything still running is retried on the next start.
 `--baseline` only silences D-rule alerts: already-published RG-2 forms are analysed too.
 
 Analysis needs Anthropic credentials (`ANTHROPIC_API_KEY` or an ant profile). Without them `watch`
@@ -86,7 +100,9 @@ Re-enact it locally with a fake RIK server (documents appear along their origina
 ## Politeness
 
 All lanes share one rate limiter (default 2 requests/s, `max_rps`) that halves on timeouts and 5xx
-and recovers slowly. The watcher keeps running when RIK is overloaded. All lane work is resumable
+and recovers slowly. PDF downloads for analysis use a separate limiter (`download_max_rps`, default
+0.5/s, halved on 429/5xx/timeouts but not on slow transfers), so analysis never slows detection
+and the combined load on RIK stays at most `max_rps + download_max_rps` (2.5 requests/s by default). The watcher keeps running when RIK is overloaded. All lane work is resumable
 and charged to one per-tick request budget (`tick_request_budget`, default 40, minimum 5) in priority
 order: rare-type sweeps, removal re-checks, watchlist, RG-2 probe, missing stations, safety sweep.
 A share of the budget (`reserved_share`, default 0.25) is held back from watchlist and probe for the

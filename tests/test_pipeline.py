@@ -55,6 +55,8 @@ class FakeAnthropic:
     def _create(self, **kw):
         self.calls += 1
         r = self.reply
+        if callable(r):
+            r = r()
         if isinstance(r, BaseException):
             raise r
         return r
@@ -513,3 +515,277 @@ def test_analyze_url_of_known_document(tmp_path, monkeypatch, capsys):
     assert cli.main(["analyze", d.url, "--json", "--db", str(db)]) == 0
     assert seen == [(P, d.url)]
     assert [f["rule"] for f in json.loads(capsys.readouterr().out)["findings"]] == ["V9"]
+
+
+# fix round 1 -------------------------------------------------------------------
+
+def api_error(cls, status):
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls("nope", response=httpx.Response(status, request=req), body=None)
+
+
+def alerts(e, text):
+    return e.out.getvalue().count(text)
+
+
+def test_bad_key_pauses_alerts_once_no_attempts_and_recovers(tmp_path):
+    e = Env(tmp_path, api_error(anthropic.AuthenticationError, 401), analysis_pause_s=600)
+    a, b = doc("a.pdf", no="1"), doc("b.pdf", no="2")
+    e.publish(a, b)
+    assert e.pipe.process_next() is True  # newest (b) first -> global failure
+    assert e.status(b.url) == ("new", 0) and e.status(a.url) == ("new", 0)
+    for _ in range(3):
+        assert e.pipe.process_next() is False  # paused: nothing claimed
+    assert e.ai.calls == 1
+    e.clock.now += 600
+    assert e.pipe.process_next() is True  # one probe, still failing
+    assert e.pipe.process_next() is False  # paused again
+    assert e.ai.calls == 2
+    assert alerts(e, "[rg2-watch] analysis paused: AuthenticationError") == 1
+    e.ai.reply = resp(clean_report())
+    e.clock.now += 600
+    assert e.drain() == 2
+    assert e.status(a.url) == ("done", 1) and e.status(b.url) == ("done", 1)
+    assert alerts(e, "[rg2-watch] analysis resumed") == 1
+    assert [f.rule for f in e.findings if f.rule.startswith("X")] == []
+
+
+@pytest.mark.parametrize("cls,status", [(anthropic.PermissionDeniedError, 403),
+                                        (anthropic.NotFoundError, 404),
+                                        (anthropic.BadRequestError, 400)])
+def test_other_global_errors_pause(tmp_path, cls, status):
+    e = Env(tmp_path, api_error(cls, status))
+    d = doc()
+    e.publish(d)
+    e.drain()
+    assert e.status(d.url) == ("new", 0) and e.ai.calls == 1
+    assert alerts(e, f"[rg2-watch] analysis paused: {cls.__name__}") == 1
+
+
+def test_only_one_probe_while_paused(tmp_path):
+    e = Env(tmp_path, api_error(anthropic.AuthenticationError, 401))
+    e.publish(doc("a.pdf", no="1"), doc("b.pdf", no="2"))
+    e.pipe.process_next()
+    e.clock.now += 600
+    gate, entered = threading.Event(), threading.Event()
+
+    def slow():
+        entered.set()
+        gate.wait(5)
+        return resp(clean_report())
+
+    e.ai.reply = slow
+    t = threading.Thread(target=e.pipe.process_next)
+    t.start()
+    assert entered.wait(5)
+    assert e.pipe.process_next() is False  # second worker waits for the probe
+    gate.set()
+    t.join(5)
+    assert e.drain() == 1 and e.ai.calls == 3
+
+
+def test_rate_limit_consumes_attempt(tmp_path):
+    e = Env(tmp_path, api_error(anthropic.RateLimitError, 429))
+    d = doc()
+    e.publish(d)
+    e.drain()
+    assert e.status(d.url) == ("failed", 1)
+    assert "analysis paused" not in e.out.getvalue()
+
+
+@pytest.mark.parametrize("fail", [403, 503])
+def test_rik_unavailable_download_consumes_no_attempt(tmp_path, fail):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc()
+    e.publish(d)
+    e.fake.fail_status = fail
+    for _ in range(4):
+        e.drain()
+        e.clock.now += 121
+    assert e.status(d.url) == ("failed", 0) and e.findings == []
+    assert e.rik.blocked_streak == 0 and e.rik.last_ok is None  # watcher health untouched
+    e.fake.fail_status = None
+    assert e.drain() == 1
+    assert e.status(d.url) == ("done", 1)
+
+
+def test_download_retry_waits_120s(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc()
+    e.publish(d)
+    e.fake.fail_status = 403
+    e.drain()
+    e.fake.fail_status = None
+    e.clock.now += 119
+    assert e.drain() == 0
+    e.clock.now += 1
+    assert e.drain() == 1
+
+
+def test_downloads_keep_their_own_health_and_limiter(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    e.rik.blocked_streak = 2
+    used = []
+    for name in ("limiter", "download_limiter"):
+        lim = getattr(e.rik, name)
+        orig = lim.acquire
+        lim.acquire = lambda orig=orig, name=name: (used.append(name), orig())
+    e.publish(doc())
+    e.drain()
+    assert used == ["download_limiter"]
+    assert e.rik.download_limiter is not e.rik.limiter
+    assert e.rik.download_limiter.max_rps == 0.5
+    assert e.rik.blocked_streak == 2 and e.rik.last_ok is None
+    assert e.rik.download_last_ok is not None
+
+
+def test_download_limiter_ignores_slow_success():
+    lim = AdaptiveLimiter(0.5, slow_is_overload=False)
+    lim.on_success(30.0)
+    assert lim.current_rps == 0.5
+    lim.on_overload()
+    assert lim.current_rps == 0.25
+    lim.on_success(30.0)
+    assert lim.current_rps == pytest.approx(0.35)
+
+
+def test_cli_download_limiter_uses_config():
+    from rg2watch.rik_client import download_limiter_for
+
+    assert download_limiter_for(Config(download_max_rps=0.25)).max_rps == 0.25
+
+
+def test_watcher_blocked_pause_stops_workers(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc()
+    e.publish(d)
+    e.rik.paused_until = e.rik.limiter.clock() + 100
+    assert e.pipe.process_next() is False
+    assert e.status(d.url) == ("new", 0) and e.pdf_requests() == []
+    e.rik.paused_until = float("-inf")
+    assert e.drain() == 1
+
+
+def test_pause_starting_after_claim_refunds(tmp_path, monkeypatch):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc()
+    e.publish(d)
+    real = e.store.next_for_analysis
+
+    def claim_then_pause(*a, **kw):
+        out = real(*a, **kw)
+        e.rik.paused_until = e.rik.limiter.clock() + 100
+        return out
+
+    monkeypatch.setattr(e.store, "next_for_analysis", claim_then_pause)
+    assert e.pipe.process_next() is True
+    assert e.status(d.url) == ("new", 0) and e.pdf_requests() == []
+
+
+def test_save_failure_does_not_leave_running(tmp_path, monkeypatch, caplog):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc()
+    e.publish(d)
+
+    def boom(*a):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(e.store, "save_analysis", boom)
+    e.drain()
+    assert e.status(d.url) == ("failed", 1)
+    assert "could not be recorded" in caplog.text and "$0.014" in caplog.text
+
+
+def test_shutdown_waits_for_in_flight_and_records_cost(tmp_path):
+    gate, entered = threading.Event(), threading.Event()
+
+    def slow():
+        entered.set()
+        gate.wait(5)
+        return resp(clean_report())
+
+    e = Env(tmp_path, slow, analysis_workers=1, stop_wait_s=10)
+    d = doc()
+    e.publish(d)
+    e.pipe.start()
+    assert entered.wait(5)
+    threading.Timer(0.2, gate.set).start()
+    e.pipe.stop()  # returns only once the in-flight analysis is recorded
+    assert e.status(d.url) == ("done", 1)
+    assert e.store.total_spend() > 0
+
+
+def test_store_closed_before_worker_finishes_logs_cost(tmp_path, caplog):
+    gate, entered = threading.Event(), threading.Event()
+
+    def slow():
+        entered.set()
+        gate.wait(5)
+        return resp(clean_report())
+
+    e = Env(tmp_path, slow, analysis_workers=1, stop_wait_s=0)
+    db = tmp_path / "w.sqlite"
+    e.store = e.pipe.store = Store(db)
+    e.store.upsert_election(ELECTION)
+    d = doc()
+    e.publish(d)
+    e.pipe.start()
+    assert entered.wait(5)
+    e.pipe.stop()
+    e.store.close()
+    gate.set()
+    e.pipe._threads[0].join(5)
+    assert "could not be recorded" in caplog.text and "$0.014" in caplog.text
+    s = Store(db)
+    assert s._db.execute("SELECT analysis_status FROM documents").fetchone()[0] == "running"
+    assert s.requeue_running(P) == []
+    assert s._db.execute("SELECT analysis_status FROM documents").fetchone()[0] == "new"
+
+
+def test_requeue_running_only_own_parent_and_crash_loop_gives_x2(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    mine, crashed = doc("a.pdf", no="1"), doc("b.pdf", no="2")
+    other = Doc("Beta", "1", "S", "lbl", 6, f"{BASE}/extfile/other.pdf", "2026-10-19 20:00:00")
+    e.publish(mine, crashed)
+    e.store.apply_events("999", e.store.start_sweep("999", "t"), [Event("added", other)])
+    e.store._db.execute("UPDATE documents SET analysis_status='running'")
+    e.store._db.execute("UPDATE documents SET analysis_attempts=3 WHERE url=?", (crashed.url,))
+    e.pipe.start()
+    e.pipe.stop()
+    assert e.status(crashed.url) == ("failed", 3)
+    assert [(f.rule, f.doc.url) for f in e.findings if f.rule == "X2"] == [("X2", crashed.url)]
+    assert e.status(other.url)[0] == "running"
+    assert e.status(mine.url)[0] in ("new", "done")
+
+
+def test_requeue_cli(tmp_path, capsys):
+    from rg2watch.cli import main
+
+    db = tmp_path / "d.sqlite"
+    s = Store(db)
+    s.upsert_election(ELECTION)
+    x2, d3, ok = doc("a.pdf", no="1"), doc("b.pdf", no="2"), doc("c.pdf", no="3")
+    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", x) for x in (x2, d3, ok)])
+    s._db.execute("UPDATE documents SET analysis_status='failed', analysis_attempts=3 WHERE url=?", (x2.url,))
+    s._db.execute("UPDATE documents SET analysis_status='failed', analysis_attempts=1 WHERE url=?", (d3.url,))
+    s._db.execute("UPDATE documents SET analysis_status='done', analysis_attempts=1 WHERE url=?", (ok.url,))
+    s._db.commit()
+    s.close()
+    assert main(["requeue", "--db", str(db), "--parent", "999"]) == 0
+    assert "requeued 0" in capsys.readouterr().out
+    assert main(["requeue", "--db", str(db), "--parent", P]) == 0
+    assert "requeued 1" in capsys.readouterr().out
+    assert main(["requeue", "--db", str(db), "--failed"]) == 0
+    assert "requeued 1" in capsys.readouterr().out
+    s = Store(db)
+    rows = dict(s._db.execute("SELECT url, analysis_status || analysis_attempts FROM documents"))
+    assert rows == {x2.url: "new0", d3.url: "new0", ok.url: "done1"}
+
+
+def test_watch_once_keeps_analysis_off(tmp_path, monkeypatch, capsys):
+    from rg2watch.cli import main
+
+    db, made = _watch_env(tmp_path, monkeypatch, FakeAnthropic(None))
+    assert main(["watch", "--parent", P, "--db", str(db), "--once"]) == 0
+    assert made == []
+    assert capsys.readouterr().err.count("INFO rg2watch.cli: watch --once is a one-shot diff check") == 1

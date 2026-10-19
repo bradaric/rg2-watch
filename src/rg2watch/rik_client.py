@@ -17,6 +17,7 @@ from .rik_parse import (
 )
 
 DEFAULT_BASE_URL = "https://www.rik.parlament.gov.rs"
+DOWNLOAD_MAX_RPS = 0.5
 USER_AGENT = "rg2-watch/0.1 (+election monitoring)"
 MAX_ATTEMPTS = 4
 PAGE_SIZE = 10
@@ -37,8 +38,10 @@ class RikBlocked(RikUnavailable):
 class AdaptiveLimiter:
     """Shared request pacer with AIMD: halve on overload, +0.1 rps on fast success."""
 
-    def __init__(self, max_rps: float, min_rps: float = 0.1, clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, max_rps: float, min_rps: float = 0.1, clock=time.monotonic, sleep=time.sleep,
+                 slow_is_overload: bool = True):
         self.max_rps = max_rps
+        self.slow_is_overload = slow_is_overload  # False for PDF downloads: big files are slow
         self.min_rps = min_rps
         self.clock = clock
         self.sleep = sleep
@@ -59,7 +62,10 @@ class AdaptiveLimiter:
             self.sleep(slot - now)
 
     def on_success(self, latency_s: float) -> None:
-        if latency_s > 5.0:
+        if not self.slow_is_overload:
+            with self._lock:
+                self._rps = min(self.max_rps, self._rps + 0.1)
+        elif latency_s > 5.0:
             self.on_overload()
         elif latency_s < 2.0:
             with self._lock:
@@ -161,16 +167,27 @@ def _reject_non_pdf(url: str, head: bytes) -> None:
     raise RikError(f"GET {url}: not a PDF")
 
 
+def download_limiter_for(cfg: Config) -> AdaptiveLimiter:
+    return AdaptiveLimiter(cfg.download_max_rps, slow_is_overload=False)
+
+
 class RikClient:
     def __init__(self, election: Election, limiter: AdaptiveLimiter, http: httpx.Client,
-                 timeout_s: float = 20.0, max_pdf_bytes: int = 50_000_000):
+                 timeout_s: float = 20.0, max_pdf_bytes: int = 50_000_000,
+                 download_limiter: AdaptiveLimiter | None = None):
         self.max_pdf_bytes = max_pdf_bytes
         self.election = election
         self.limiter = limiter
+        # PDF downloads are paced separately so analysis can never throttle detection
+        self.download_limiter = download_limiter or AdaptiveLimiter(
+            DOWNLOAD_MAX_RPS, clock=limiter.clock, sleep=limiter.sleep, slow_is_overload=False)
         self.http = http
         self.timeout_s = timeout_s
-        self.last_ok: float | None = None  # limiter clock of the last successful request
-        self.blocked_streak = 0  # consecutive 401/403 responses
+        self.last_ok: float | None = None  # limiter clock of the last successful listing request
+        self.blocked_streak = 0  # consecutive 401/403 listing responses
+        self.paused_until = float("-inf")  # limiter clock; set by the watcher's blocked pause
+        self.download_last_ok: float | None = None  # downloads keep their own health state
+        self.download_blocked_streak = 0
         self._headers = {
             "X-Requested-With": "XMLHttpRequest",
             "Referer": f"{election.base_url}/zapisnici/{election.parent}",
@@ -187,7 +204,8 @@ class RikClient:
         http = httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True)
         resp = _send(http, limiter, cfg.request_timeout_s, "GET", base + parts.path)
         election = parse_election_page(resp.text, base)
-        return cls(election, limiter, http, cfg.request_timeout_s, cfg.max_pdf_bytes)
+        return cls(election, limiter, http, cfg.request_timeout_s, cfg.max_pdf_bytes,
+                   download_limiter_for(cfg))
 
     def _request(self, method: str, path: str, shape: str, **kwargs):
         """Returns decoded JSON; body must be a dict containing key `shape`
@@ -271,11 +289,12 @@ class RikClient:
             raise RikError(f"refusing download from foreign host: {parts.netloc}")
         path = quote(parts.path, safe="/%:@~-._!$&'()*+,;=")
         full = urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
-        deadline = self.limiter.clock() + max_total_s
+        lim = self.download_limiter
+        deadline = lim.clock() + max_total_s
 
         def opener() -> httpx.Response:
             return _read_capped(self.http, full, self.timeout_s, self.max_pdf_bytes, deadline,
-                                self.limiter.clock)
+                                lim.clock)
 
         def parse(resp: httpx.Response) -> bytes:
             if not resp.content.startswith(b"%PDF"):
@@ -283,11 +302,10 @@ class RikClient:
             return resp.content
 
         try:
-            body = _send(self.http, self.limiter, self.timeout_s, "GET", full,
-                         parse=parse, opener=opener)
+            body = _send(self.http, lim, self.timeout_s, "GET", full, parse=parse, opener=opener)
         except RikBlocked:
-            self.blocked_streak += 1
+            self.download_blocked_streak += 1
             raise
-        self.last_ok = self.limiter.clock()
-        self.blocked_streak = 0
+        self.download_last_ok = lim.clock()
+        self.download_blocked_streak = 0
         return body

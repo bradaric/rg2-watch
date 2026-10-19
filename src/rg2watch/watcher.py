@@ -211,6 +211,7 @@ class Watcher:
         if c.blocked_streak >= BLOCKED_STREAK:
             c.blocked_streak = 0
             self._paused_until = now + self.cfg.blocked_pause_s
+            c.paused_until = self._paused_until  # analysis workers honour the pause too
             log.warning("RIK refused %d requests in a row (401/403); pausing all lanes for %d s",
                         BLOCKED_STREAK, self.cfg.blocked_pause_s)
         last = c.last_ok if c.last_ok is not None else self._started

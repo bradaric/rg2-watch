@@ -143,13 +143,18 @@ def analyze_document(tiles: list[Tile], client, cfg: Config) -> AnalysisResult:
     tin = tout = 0
     cost = 0.0
     for max_tokens in (MAX_TOKENS, MAX_TOKENS * 2):
-        resp = client.beta.messages.create(
-            model=cfg.model,
-            max_tokens=max_tokens,
-            messages=messages,
-            output_config={"effort": cfg.effort, "format": {"type": "json_schema", "schema": SCHEMA}},
-            **extra,
-        )
+        try:
+            resp = client.beta.messages.create(
+                model=cfg.model,
+                max_tokens=max_tokens,
+                messages=messages,
+                output_config={"effort": cfg.effort, "format": {"type": "json_schema", "schema": SCHEMA}},
+                **extra,
+            )
+        except Exception as exc:
+            if cost:  # the truncated first call was billed: keep it visible to spend tracking
+                exc.input_tokens, exc.output_tokens, exc.cost_usd = tin, tout, cost
+            raise
         i, o, c = _usage_cost(resp.usage, cfg)
         tin, tout, cost = tin + i, tout + o, cost + c
         if resp.stop_reason != "max_tokens":

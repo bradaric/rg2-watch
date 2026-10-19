@@ -19,7 +19,7 @@ from .notify import Notifier
 from .pipeline import AnalysisPipeline
 from .render import RenderError, render_tiles
 from .replay import fetch_fixtures, make_replay_server
-from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError
+from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, download_limiter_for
 from .rules import evaluate_report
 from .store import Store
 from .watcher import Watcher
@@ -55,6 +55,12 @@ def _parser() -> argparse.ArgumentParser:
                        help="analyse one RG-2 PDF (local path or URL of a registered election)")
     s.add_argument("source", help="local PDF path or document URL")
     s.add_argument("--json", action="store_true", help="print report and findings as JSON")
+
+    s = sub.add_parser("requeue", parents=[common],
+                       help="reset documents whose analysis failed after all attempts to new")
+    s.add_argument("--parent", help="only this election")
+    s.add_argument("--failed", action="store_true",
+                   help="reset every failed document, also unreadable PDFs (D3) and refusals (X1)")
 
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
@@ -183,7 +189,8 @@ def _cmd_watch(args) -> int:
             if args.base_url:
                 stored = dataclasses.replace(stored, base_url=args.base_url.rstrip("/"))
             http = httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True)
-            client = RikClient(stored, AdaptiveLimiter(cfg.max_rps), http, cfg.request_timeout_s)
+            client = RikClient(stored, AdaptiveLimiter(cfg.max_rps), http, cfg.request_timeout_s,
+                               cfg.max_pdf_bytes, download_limiter_for(cfg))
         else:
             print("watch needs a zapisnici URL or --parent", file=sys.stderr)
             return 2
@@ -191,8 +198,11 @@ def _cmd_watch(args) -> int:
         notifier = Notifier(cfg, _notifier_http(), out=sys.stdout)
 
         pipeline = None
-        if args.once or args.no_analyze:
-            log.info("analysis off for this run; new RG-2 forms stay queued")
+        if args.once:
+            log.info("watch --once is a one-shot diff check: analysis is off, new RG-2 forms "
+                     "stay queued for the next live run")
+        elif args.no_analyze:
+            log.info("analysis off (--no-analyze); new RG-2 forms stay queued")
         else:
             ai, why = _anthropic_client()
             if ai is None:
@@ -258,7 +268,7 @@ def _cmd_analyze(args) -> int:
             return 2
         http = httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True)
         client = RikClient(election, AdaptiveLimiter(cfg.max_rps), http, cfg.request_timeout_s,
-                           cfg.max_pdf_bytes)
+                           cfg.max_pdf_bytes, download_limiter_for(cfg))
         try:
             path = fetch_pdf(client, src, _cache_dir(cfg))
         except RikError as exc:
@@ -291,6 +301,16 @@ def _cmd_analyze(args) -> int:
         print(f"[{f.severity}] {f.rule} {f.summary}")
     if not findings:
         print("no findings")
+    return 0
+
+
+def _cmd_requeue(args) -> int:
+    store = _open_store(_config(args))
+    try:
+        n = store.requeue_failed(args.parent, all_failed=args.failed)
+    finally:
+        store.close()
+    print(f"requeued {n} document(s) for analysis")
     return 0
 
 
@@ -337,7 +357,8 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr, format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True,
         level=logging.DEBUG if args.verbose else logging.INFO if args.cmd == "watch" else logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
-               "fixtures": _cmd_fixtures, "analyze": _cmd_analyze}[args.cmd]
+               "fixtures": _cmd_fixtures, "analyze": _cmd_analyze,
+               "requeue": _cmd_requeue}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
         previous = signal.signal(signal.SIGTERM, _sigterm)

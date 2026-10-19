@@ -429,6 +429,7 @@ def test_repeated_403_pauses_all_lanes_and_alerts_once():
         w.run_once()
     fake.request_log.clear()
     paused_at = t.now
+    assert w.client.paused_until == paused_at + 300  # shared with the analysis workers
     while t.now < paused_at + 299:
         t.now += 1
         w.run_once()

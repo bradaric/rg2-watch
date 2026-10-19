@@ -197,3 +197,20 @@ def test_cache_pricing():
     r.usage.cache_creation_input_tokens = 1_000_000
     res = analyze_document(TILES, FakeClient(r), Config())
     assert res.cost_usd == pytest.approx(0.4 + 5.0)
+
+
+def test_retry_api_error_carries_first_call_cost():
+    err = RuntimeError("overloaded")
+    calls = []
+
+    def create(**kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            return _resp(stop="max_tokens", tin=1_000_000, tout=0)
+        raise err
+
+    c = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
+    with pytest.raises(RuntimeError) as info:
+        analyze_document(TILES, c, Config())
+    assert info.value is err and info.value.cost_usd == pytest.approx(4.0)
+    assert info.value.input_tokens == 1_000_000

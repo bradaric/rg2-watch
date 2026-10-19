@@ -5,6 +5,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import anthropic
+
 from .analyze import AnalysisError, AnalysisRefused, analyze_document
 from .config import Config
 from .fetch import fetch_pdf
@@ -19,16 +21,21 @@ log = logging.getLogger("rg2watch.pipeline")
 
 PROMPT_VERSION = "v1"
 RETRY_STEP_S = 60
+RIK_RETRY_S = 120
 IDLE_POLL_S = 5.0
-STOP_JOIN_S = 5.0
 SPEND_CAP_ALERT = "[rg2-watch] spend cap reached"
+RESUMED_ALERT = "[rg2-watch] analysis resumed"
+# Errors that fail every form alike (bad key, no access, unknown model, invalid request):
+# pause all analysis instead of burning each document's attempts.
+GLOBAL_ERRORS = (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
+                 anthropic.NotFoundError, anthropic.BadRequestError)
 _MAX_ERROR = 200
 _RENDER_LOCK = threading.Lock()  # PDFium is not thread-safe
 
 
-def _short(exc: BaseException) -> str:
+def _short(exc: BaseException, limit: int = _MAX_ERROR) -> str:
     text = " ".join(f"{type(exc).__name__}: {exc}".split())
-    return text if len(text) <= _MAX_ERROR else text[:_MAX_ERROR - 3] + "..."
+    return text if len(text) <= limit else text[:limit - 3] + "..."
 
 
 class AnalysisPipeline:
@@ -42,8 +49,11 @@ class AnalysisPipeline:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._threads: list[threading.Thread] = []
-        self._cap_lock = threading.Lock()
+        self._state = threading.Lock()
         self._cap_alerted = False
+        self._paused = False  # global failure episode (bad key etc.)
+        self._pause_until = float("-inf")
+        self._probing = False
 
     # control ----------------------------------------------------------------
     def submit(self, events: list[Event]) -> None:
@@ -56,106 +66,182 @@ class AnalysisPipeline:
             self._wake.set()
 
     def start(self) -> None:
-        n = self.store.requeue_running()
-        if n:
-            log.info("requeued %d document(s) left running by a previous run", n)
+        for doc in self.store.requeue_running(self.parent):
+            self._emit([Finding("X2", "LOW", doc, f"analysis failed after {MAX_ANALYSIS_ATTEMPTS} "
+                                "attempts: interrupted every time (crash or shutdown)")])
         for i in range(max(1, self.cfg.analysis_workers)):
             t = threading.Thread(target=self._loop, name=f"analysis-{i}", daemon=True)
             t.start()
             self._threads.append(t)
 
     def stop(self) -> None:
+        """Stop taking work and wait up to `stop_wait_s` for in-flight analyses to be recorded."""
         self._stop.set()
         self._wake.set()
-        deadline = time.monotonic() + STOP_JOIN_S
+        deadline = time.monotonic() + self.cfg.stop_wait_s
         for t in self._threads:
             t.join(max(0.0, deadline - time.monotonic()))
+        busy = sum(t.is_alive() for t in self._threads)
+        if busy:
+            log.warning("%d analysis worker(s) still busy after %d s; their documents are "
+                        "requeued on the next start", busy, self.cfg.stop_wait_s)
 
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
                 busy = self.process_next()
             except Exception:
-                if self._stop.is_set():
-                    return
                 log.exception("analysis worker error; continuing")
                 busy = False
-            if not busy:
+            if not busy and not self._stop.is_set():
                 self._wake.wait(IDLE_POLL_S)
                 self._wake.clear()
 
     # work -------------------------------------------------------------------
     def process_next(self) -> bool:
-        """Analyse one due document; False when there is nothing to do (or spend cap reached)."""
-        if self._over_cap():
+        """Analyse one due document; False when there is nothing to do or analysis is paused
+        (spend cap, RIK blocked pause, global API failure)."""
+        if self._over_cap() or self._rik_paused():
             return False
-        docs = self.store.next_for_analysis(1, parent=self.parent, now=self.clock())
-        if not docs:
-            return False
-        self._process(docs[0])
-        return True
+        with self._state:
+            probe = self._paused
+            if probe:
+                if self.clock() < self._pause_until or self._probing:
+                    return False
+                self._probing = True  # one probe form decides whether to resume
+        outcome = None
+        try:
+            docs = self.store.next_for_analysis(1, parent=self.parent, now=self.clock())
+            if not docs:
+                return False
+            outcome = self._process(docs[0])
+            return True
+        finally:
+            if probe:
+                self._end_probe(outcome)
+
+    def _rik_paused(self) -> bool:
+        return self.client.limiter.clock() < self.client.paused_until
 
     def _over_cap(self) -> bool:
         spent = self.store.total_spend()
         if spent < self.cfg.max_spend_usd:
             return False
-        with self._cap_lock:
+        with self._state:
             first, self._cap_alerted = not self._cap_alerted, True
         if first:
             log.warning("spend cap reached ($%.2f of $%.2f); analysis paused, watcher continues",
                         spent, self.cfg.max_spend_usd)
-            try:
-                self.notifier.status(SPEND_CAP_ALERT)
-            except Exception:
-                log.exception("spend cap alert failed")
+            self._status(SPEND_CAP_ALERT)
         return True
 
-    def _process(self, doc: Doc) -> None:
+    def _status(self, text: str) -> None:
+        try:
+            self.notifier.status(text)
+        except Exception:
+            log.exception("status alert failed: %s", text)
+
+    def _process(self, doc: Doc) -> str | None:
+        """Returns "api" when the Anthropic API answered usably, "global" on a global failure,
+        None when no API call was made."""
+        try:
+            return self._run(doc)
+        except Exception as exc:  # a store write failed (e.g. closed at shutdown) or a bug
+            if not self._stop.is_set():
+                log.exception("analysis of %s failed unexpectedly", doc.url)
+            try:
+                self._transient(doc, exc)
+            except Exception:
+                log.error("could not record the failure of %s; it is requeued on the next start",
+                          doc.url)
+            return None
+
+    def _run(self, doc: Doc) -> str | None:
+        if self._rik_paused():  # watcher's blocked pause began after the claim
+            self.store.mark_analysis(doc.url, "new", refund=True)
+            return None
         try:
             path = fetch_pdf(self.client, doc.url, self.cache_dir)
             with _RENDER_LOCK:
                 tiles = render_tiles(path)
+        except RikUnavailable as exc:  # RIK busy/blocking is not the document's fault
+            log.warning("download of %s deferred %d s: %s", doc.url, RIK_RETRY_S, _short(exc))
+            self.store.mark_analysis(doc.url, "failed", _short(exc),
+                                     retry_at=self.clock() + RIK_RETRY_S, refund=True)
+            return None
         except (RenderError, RikError) as exc:
-            if isinstance(exc, RikUnavailable):
-                self._transient(doc, exc)
-            else:
-                self._permanent(doc, "D3", f"document could not be processed: {_short(exc)}", exc)
-            return
+            self._permanent(doc, "D3", f"document could not be processed: {_short(exc)}", exc)
+            return None
         except Exception as exc:
             self._transient(doc, exc)
-            return
+            return None
 
         try:
             result = analyze_document(tiles, self.anthropic, self.cfg)
+        except GLOBAL_ERRORS as exc:
+            self._record_cost(doc, exc)
+            self.store.mark_analysis(doc.url, "new", _short(exc), refund=True)
+            self._global_pause(exc)
+            return "global"
         except AnalysisRefused as exc:
-            self._record_failed(doc, exc)
+            self._record_cost(doc, exc)
             self._permanent(doc, "X1", f"analysis failed: {_short(exc)}", exc)
-            return
-        except Exception as exc:  # API errors (after SDK retries), truncated/invalid output
-            if isinstance(exc, AnalysisError):
-                self._record_failed(doc, exc)
+            return "api"
+        except Exception as exc:  # 429/5xx/overloaded/connection after SDK retries, bad output
+            self._record_cost(doc, exc)
             self._transient(doc, exc)
-            return
-        self.store.save_analysis(doc.url, result, PROMPT_VERSION)
+            return "api" if isinstance(exc, (AnalysisError, anthropic.APIStatusError)) else None
+        try:  # first write after a billed call: never lose its cost
+            self.store.save_analysis(doc.url, result, PROMPT_VERSION)
+        except Exception:
+            log.error("analysis of %s cost $%.3f but could not be recorded", doc.url, result.cost_usd)
+            raise
 
         try:
             found = evaluate_report(result.report, doc, self.cfg)
         except Exception as exc:  # malformed report: retrying would bill again
             log.exception("rules failed for %s", doc.url)
             self._permanent(doc, "X1", f"analysis output could not be evaluated: {_short(exc)}", exc)
-            return
+            return "api"
         self._emit(found)
         self.store.mark_analysis(doc.url, "done")
         log.info("analysed %s BM %s: %d finding(s), $%.3f", doc.municipality, doc.station_no,
                  len(found), result.cost_usd)
+        return "api"
+
+    # global pause -----------------------------------------------------------
+    def _global_pause(self, exc: BaseException) -> None:
+        with self._state:
+            first, self._paused = not self._paused, True
+            self._pause_until = self.clock() + self.cfg.analysis_pause_s
+        if first:
+            log.error("analysis paused for %d s: %s", self.cfg.analysis_pause_s, _short(exc))
+            self._status(f"[rg2-watch] analysis paused: {_short(exc, 120)}")
+        else:
+            log.warning("analysis still failing, paused another %d s: %s",
+                        self.cfg.analysis_pause_s, _short(exc))
+
+    def _end_probe(self, outcome: str | None) -> None:
+        with self._state:
+            self._probing = False
+            resumed = outcome == "api" and self._paused
+            if resumed:
+                self._paused = False
+        if resumed:
+            log.info("analysis resumed")
+            self._status(RESUMED_ALERT)
+            self._wake.set()
 
     # outcomes ---------------------------------------------------------------
-    def _record_failed(self, doc: Doc, exc: AnalysisError) -> None:
+    def _record_cost(self, doc: Doc, exc: BaseException) -> None:
+        cost = getattr(exc, "cost_usd", 0.0) or 0.0
+        if not cost:
+            return
         try:
-            self.store.save_failed_analysis(doc.url, self.cfg.model, PROMPT_VERSION, exc.cost_usd,
+            self.store.save_failed_analysis(doc.url, self.cfg.model, PROMPT_VERSION, cost,
                                             _short(exc))
         except Exception:
-            log.exception("could not record billed failure for %s ($%.3f)", doc.url, exc.cost_usd)
+            log.error("billed failure of %s ($%.3f) could not be recorded", doc.url, cost)
 
     def _emit(self, found: list[Finding]) -> None:
         if not found:

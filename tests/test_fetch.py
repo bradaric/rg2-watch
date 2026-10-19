@@ -14,7 +14,8 @@ BASE = "https://www.rik.parlament.gov.rs"
 def make(handler, clock=lambda: 0.0, **kw):
     limiter = AdaptiveLimiter(2.0, clock=clock, sleep=lambda s: None)
     http = httpx.Client(transport=httpx.MockTransport(handler))
-    return RikClient(Election("662405", "660578", "3", "Test", BASE), limiter, http, **kw), limiter, None
+    return RikClient(Election("662405", "660578", "3", "Test", BASE), limiter, http,
+                     download_limiter=limiter, **kw), limiter, None
 
 
 def count_overloads(limiter):

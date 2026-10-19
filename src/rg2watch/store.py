@@ -311,16 +311,40 @@ class Store:
         return row["analysis_attempts"] if row else 0
 
     def mark_analysis(self, url: str, status: str, error: str | None = None,
-                      retry_at: float | None = None) -> None:
-        """status done|failed; a failed document is retried at `retry_at` (None = never)."""
+                      retry_at: float | None = None, refund: bool = False) -> None:
+        """status new|done|failed; a failed document is retried at `retry_at` (None = never).
+        `refund` gives back the attempt counted when the document was claimed."""
         self._write(
-            "UPDATE documents SET analysis_status=?, analysis_next_at=?, analysis_error=? WHERE url=?",
-            (status, retry_at if status == "failed" else None, error, url))
+            "UPDATE documents SET analysis_status=?, analysis_next_at=?, analysis_error=?, "
+            "analysis_attempts=MAX(0, analysis_attempts - ?) WHERE url=?",
+            (status, retry_at if status == "failed" else None, error, int(refund), url))
 
-    def requeue_running(self) -> int:
-        """Documents left running by a previous process go back to new."""
-        return self._write("UPDATE documents SET analysis_status='new' "
-                           "WHERE analysis_status='running'").rowcount
+    def requeue_running(self, parent: str) -> list[Doc]:
+        """Documents of `parent` left running by a previous process go back to new; those that
+        already used every attempt (a crash loop) become failed and are returned."""
+        with self._lock, self._db:
+            exhausted = self._db.execute(
+                "SELECT * FROM documents WHERE analysis_status='running' AND parent=? "
+                "AND analysis_attempts >= ?", (parent, MAX_ANALYSIS_ATTEMPTS)).fetchall()
+            self._db.execute(
+                "UPDATE documents SET analysis_status = CASE WHEN analysis_attempts >= ? "
+                "THEN 'failed' ELSE 'new' END, analysis_next_at=NULL "
+                "WHERE analysis_status='running' AND parent=?", (MAX_ANALYSIS_ATTEMPTS, parent))
+        return [_doc(r) for r in exhausted]
+
+    def requeue_failed(self, parent: str | None = None, all_failed: bool = False) -> int:
+        """Reset failed documents to new with 0 attempts: those that used every attempt (X2),
+        or with `all_failed` every failed one (also D3/X1). Returns the number reset."""
+        sql = "UPDATE documents SET analysis_status='new', analysis_attempts=0, " \
+              "analysis_next_at=NULL, analysis_error=NULL WHERE analysis_status='failed'"
+        args: list = []
+        if not all_failed:
+            sql += " AND analysis_attempts >= ?"
+            args.append(MAX_ANALYSIS_ATTEMPTS)
+        if parent is not None:
+            sql += " AND parent=?"
+            args.append(parent)
+        return self._write(sql, args).rowcount
 
     def save_analysis(self, url: str, result: "AnalysisResult", prompt_version: str) -> None:
         self._insert_analysis(url, result.model, prompt_version, json.dumps(result.report),
