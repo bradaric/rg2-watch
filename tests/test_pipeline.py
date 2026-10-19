@@ -85,6 +85,7 @@ class Env:
         self.rik = RikClient(ELECTION, limiter, httpx.Client(transport=httpx.MockTransport(self.fake.handle)))
         self.store = Store(":memory:")
         self.store.upsert_election(ELECTION)
+        self.store.enable_analysis(P)  # everything published in a test is seen after enabling
         self.out = io.StringIO()
         self.cfg = Config(**cfg_kw)
         self.notifier = Notifier(self.cfg, None, out=self.out)
@@ -404,7 +405,7 @@ def _watch_env(tmp_path, monkeypatch, ai):
 
     class FakePipeline:
         def __init__(self, *a, **kw):
-            self.args, self.started, self.stopped = a, False, False
+            self.args, self.kw, self.started, self.stopped = a, kw, False, False
             made.append(self)
 
         def start(self):
@@ -432,16 +433,16 @@ def test_watch_starts_and_stops_pipeline(tmp_path, monkeypatch):
 
     ai = FakeAnthropic(None)
     db, made = _watch_env(tmp_path, monkeypatch, ai)
-    assert main(["watch", "--parent", P, "--db", str(db)]) == 0
+    assert main(["watch", "--parent", P, "--db", str(db), "--analyze"]) == 0
     assert len(made) == 1 and made[0].started and made[0].stopped
-    assert made[0].args[3] is ai
+    assert made[0].args[3] is ai and made[0].kw == {"backlog": False}
 
 
 def test_watch_without_credentials_warns_and_watches(tmp_path, monkeypatch, capsys):
     from rg2watch.cli import main
 
     db, made = _watch_env(tmp_path, monkeypatch, None)
-    assert main(["watch", "--parent", P, "--db", str(db)]) == 0
+    assert main(["watch", "--parent", P, "--db", str(db), "--analyze"]) == 0
     assert made == []
     err = capsys.readouterr().err
     assert err.count("WARNING rg2watch.cli: analysis disabled: no credentials") == 1
@@ -454,6 +455,88 @@ def test_watch_no_analyze_skips_credentials(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_anthropic_client", lambda: pytest.fail("must not build a client"))
     assert cli.main(["watch", "--parent", P, "--db", str(db), "--no-analyze"]) == 0
     assert made == []
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("analysis_enabled = true\n")
+    assert cli.main(["watch", "--parent", P, "--db", str(db), "--config", str(cfg),
+                     "--no-analyze"]) == 0  # the flag overrides the config
+    assert made == []
+
+
+def test_watch_analysis_is_opt_in(tmp_path, monkeypatch, capsys):
+    from rg2watch import cli
+
+    db, made = _watch_env(tmp_path, monkeypatch, FakeAnthropic(None))
+    monkeypatch.setattr(cli, "_anthropic_client", lambda: pytest.fail("must not build a client"))
+    assert cli.main(["watch", "--parent", P, "--db", str(db)]) == 0
+    assert made == []
+    assert "analysis off" in capsys.readouterr().err
+
+
+def test_watch_analysis_enabled_by_config_or_backlog_flag(tmp_path, monkeypatch):
+    from rg2watch import cli
+
+    db, made = _watch_env(tmp_path, monkeypatch, FakeAnthropic(None))
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("analysis_enabled = true\n")
+    assert cli.main(["watch", "--parent", P, "--db", str(db), "--config", str(cfg)]) == 0
+    assert cli.main(["watch", "--parent", P, "--db", str(db), "--analyze", "--analyze-backlog"]) == 0
+    assert [m.kw for m in made] == [{"backlog": False}, {"backlog": True}]
+
+
+def test_default_cap_is_20_and_analysis_off():
+    assert Config().max_spend_usd == 20.0 and Config().analysis_enabled is False
+
+
+def test_start_logs_cap_spend_queue_and_backlog(tmp_path, caplog):
+    import logging
+
+    e = Env(tmp_path, resp(clean_report()))
+    s = Store(":memory:")  # a DB where forms were recorded before analysis was ever enabled
+    s.upsert_election(ELECTION)
+    old, new = doc("a.pdf", no="1"), doc("b.pdf", no="2")
+    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", old)])
+    s._db.execute("UPDATE documents SET first_seen_at='2026-10-19T18:00:00Z'")
+    s.save_failed_analysis(old.url, "m", "v1", 1.25, "x")
+    e.store = s
+    e.pipe = AnalysisPipeline(e.rik, s, e.notifier, e.ai, e.cfg, e.on_findings, tmp_path / "c",
+                              clock=e.clock)
+    with caplog.at_level(logging.INFO, logger="rg2watch.pipeline"):
+        e.pipe.start()
+        e.pipe.stop()
+    msg = [r.getMessage() for r in caplog.records if "spend cap" in r.getMessage()]
+    assert msg == [f"analysis on for election {P}: spend cap $20.00, $1.25 spent so far on this "
+                   "election, 0 form(s) queued, 1 form(s) seen before analysis was enabled "
+                   "not analysed (--analyze-backlog to include)"]
+    assert e.status(old.url) == ("skipped", 0)
+    e.pipe = AnalysisPipeline(e.rik, s, e.notifier, e.ai, e.cfg, e.on_findings, tmp_path / "c",
+                              clock=e.clock)  # a stopped pipeline takes no work: drain with a new one
+    e.publish(new)
+    assert e.drain() == 1 and e.status(new.url) == ("done", 1) and e.ai.calls == 1
+
+
+def test_backlog_flag_analyses_older_forms(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    s = Store(":memory:")
+    s.upsert_election(ELECTION)
+    old = doc("a.pdf", no="1")
+    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", old)])
+    s._db.execute("UPDATE documents SET first_seen_at='2026-10-19T18:00:00Z'")
+    e.store = s
+    e.pipe = AnalysisPipeline(e.rik, s, e.notifier, e.ai, e.cfg, e.on_findings, tmp_path / "c",
+                              clock=e.clock, backlog=True)
+    e.pipe.start()
+    e.pipe.stop()
+    e.pipe = AnalysisPipeline(e.rik, s, e.notifier, e.ai, e.cfg, e.on_findings, tmp_path / "c",
+                              clock=e.clock)
+    e.drain()
+    assert e.status(old.url) == ("done", 1)
+
+
+def test_spend_cap_counts_only_this_election(tmp_path):
+    e = Env(tmp_path, resp(clean_report()), max_spend_usd=3.0)
+    e.store.save_failed_analysis("file:///x.pdf", "m", "v2", 50.0, "x", parent="eval")
+    e.publish(doc())
+    assert e.drain() == 1
 
 
 def test_analyze_local_pdf_json(tmp_path, monkeypatch, capsys):
@@ -463,6 +546,9 @@ def test_analyze_local_pdf_json(tmp_path, monkeypatch, capsys):
     ai = FakeAnthropic(resp(overwritten_report()))
     monkeypatch.setattr(cli, "_anthropic_client", lambda: (ai, None))
     assert cli.main(["analyze", str(pdf), "--json", "--db", str(tmp_path / "d.sqlite")]) == 0
+    s = Store(tmp_path / "d.sqlite")
+    assert s.total_spend("adhoc") == pytest.approx((1000 * 4 + 500 * 20) / 1e6)
+    s.close()
     out = json.loads(capsys.readouterr().out)
     assert out["report"]["numbers"]["voted"]["mark"] == "overwritten"
     assert [f["rule"] for f in out["findings"]] == ["V1"]
@@ -516,6 +602,9 @@ def test_analyze_url_of_known_document(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_anthropic_client", lambda: (FakeAnthropic(resp(report)), None))
     monkeypatch.setattr(cli, "fetch_pdf", fake_fetch)
     assert cli.main(["analyze", d.url, "--json", "--db", str(db)]) == 0
+    s = Store(db)
+    assert s.total_spend(P) == 0 and s.total_spend("adhoc") > 0  # never counts against the cap
+    s.close()
     assert seen == [(P, d.url)]
     assert [f["rule"] for f in json.loads(capsys.readouterr().out)["findings"]] == ["V9"]
 
@@ -769,6 +858,7 @@ def test_store_closed_before_worker_finishes_logs_cost(tmp_path, caplog):
     db = tmp_path / "w.sqlite"
     e.store = e.pipe.store = Store(db)
     e.store.upsert_election(ELECTION)
+    e.store.enable_analysis(P)
     d = doc()
     e.publish(d)
     e.pipe.start()
@@ -970,3 +1060,28 @@ def test_pdf_downloads_blocked_3_times_pause_workers(tmp_path):
     e.clock.now += 300
     assert e.drain() == 6
     assert alerts(e, "[rg2-watch] PDF downloads available again") == 1
+
+
+def test_requeue_skipped_cli(tmp_path, capsys):
+    from rg2watch.cli import main
+
+    db = tmp_path / "d.sqlite"
+    s = Store(db)
+    s.upsert_election(ELECTION)
+    d = doc()
+    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", d)])
+    s._db.execute("UPDATE documents SET analysis_status='skipped'")
+    s._db.commit()
+    s.close()
+    assert main(["requeue", "--db", str(db)]) == 0
+    assert "requeued 0" in capsys.readouterr().out
+    assert main(["requeue", "--db", str(db), "--skipped"]) == 0
+    assert "requeued 1" in capsys.readouterr().out
+
+
+def test_analyze_backlog_needs_analysis_on(tmp_path, monkeypatch, capsys):
+    from rg2watch import cli
+
+    db, made = _watch_env(tmp_path, monkeypatch, FakeAnthropic(None))
+    assert cli.main(["watch", "--parent", P, "--db", str(db), "--analyze-backlog"]) == 2
+    assert made == [] and "--analyze-backlog needs analysis on" in capsys.readouterr().err

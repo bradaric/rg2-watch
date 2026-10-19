@@ -168,14 +168,61 @@ def test_phase1a_db_migrates_analysis_queue(tmp_path):
             prompt_version TEXT, result_json TEXT, created_at TEXT, cost_usd REAL);
         INSERT INTO documents(parent, municipality, station_no, doc_type, label, url)
             VALUES('p', 'm', '1', 6, 'l', 'u6'), ('p', 'm', '1', 9, 'l', 'u9');
+        INSERT INTO analyses(document_id, cost_usd) VALUES(1, 0.25);
     """)
     con.commit()
     con.close()
     s = Store(db)
     rows = dict(s._db.execute("SELECT url, analysis_status FROM documents").fetchall())
-    assert rows == {"u6": "new", "u9": "skipped"}
+    assert rows == {"u6": "skipped", "u9": "skipped"}  # old rows are never analysed implicitly
+    assert s.next_for_analysis(5, now=0) == []
+    assert s.total_spend("p") == 0.25  # old analyses are attributed to their election
+    assert s.requeue_skipped("p") == 1  # explicit opt-in still possible
     assert [d.url for d in s.next_for_analysis(5, now=0)] == ["u6"]
     s.save_failed_analysis("u6", "m", "v1", 0.5, "refused")
-    assert s.total_spend() == 0.5
+    assert s.total_spend("p") == 0.75 and s.total_spend("other") == 0
     s.close()
     Store(db).close()  # second open: migration is idempotent
+
+
+def _seen(s, url, when):
+    s._db.execute("UPDATE documents SET first_seen_at=? WHERE url=?", (when, url))
+
+
+def _status(s, url):
+    return s._db.execute("SELECT analysis_status FROM documents WHERE url=?", (url,)).fetchone()[0]
+
+
+def test_enable_analysis_skips_documents_seen_before():
+    s = store()
+    old, failed, done, d9 = (doc("https://x/old.pdf"), doc("https://x/f.pdf", no="2"),
+                             doc("https://x/d.pdf", no="3"), doc("https://x/9.pdf", dt=9))
+    s.apply_events(P, s.start_sweep(P, "l"), [Event("added", x) for x in (old, failed, done, d9)])
+    for x in (old, failed, done, d9):
+        _seen(s, x.url, "2026-10-19T18:00:00Z")
+    s.mark_analysis(failed.url, "failed", "x", retry_at=5.0)
+    s.mark_analysis(done.url, "done")
+    enabled_at = s.enable_analysis(P)
+    assert {x.url: _status(s, x.url) for x in (old, failed, done, d9)} == {
+        old.url: "skipped", failed.url: "skipped", done.url: "done", d9.url: "skipped"}
+    assert s.analysis_backlog(P) == 2
+    new = doc("https://x/new.pdf", no="4")
+    s.apply_events(P, s.start_sweep(P, "l"), [Event("added", new)])  # seen after enabling
+    assert [d.url for d in s.next_for_analysis(5, parent=P, now=10)] == [new.url]
+    s.requeue_skipped(P)
+    _seen(s, new.url, "2026-10-19T18:00:00Z")
+    assert s.enable_analysis(P) == enabled_at  # kept: a later start does not re-skip
+    assert _status(s, old.url) == "new"
+    assert s.enable_analysis("other") != "" and _status(s, old.url) == "new"
+
+
+def test_spend_is_per_parent():
+    s = store()
+    a, b = doc("https://x/a.pdf"), doc("https://x/b.pdf", no="2")
+    s.apply_events(P, s.start_sweep(P, "l"), [Event("added", a)])
+    s.apply_events("eval", s.start_sweep("eval", "l"), [Event("added", b)])
+    s.save_failed_analysis(a.url, "m", "v2", 1.5, "x")
+    s.save_failed_analysis(b.url, "m", "v2", 2.0, "x")
+    s.save_failed_analysis("file:///tmp/x.pdf", "m", "v2", 0.5, "x", parent="adhoc")
+    assert (s.total_spend(P), s.total_spend("eval"), s.total_spend("adhoc")) == (1.5, 2.0, 0.5)
+    assert s.queued_for_analysis(P) == 1

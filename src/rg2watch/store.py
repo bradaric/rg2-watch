@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS documents(
 CREATE INDEX IF NOT EXISTS documents_parent ON documents(parent, active);
 CREATE TABLE IF NOT EXISTS analyses(
     id INTEGER PRIMARY KEY, document_id INTEGER, model TEXT, prompt_version TEXT,
-    result_json TEXT, created_at TEXT, cost_usd REAL, status TEXT, error TEXT);
+    result_json TEXT, created_at TEXT, cost_usd REAL, status TEXT, error TEXT, parent TEXT);
+CREATE TABLE IF NOT EXISTS analysis_state(parent TEXT PRIMARY KEY, enabled_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS findings(
     id INTEGER PRIMARY KEY, document_id INTEGER, parent TEXT, municipality TEXT,
     station_no TEXT, rule TEXT, severity TEXT, summary TEXT, details_json TEXT,
@@ -80,9 +81,12 @@ class Store:
                 self._db.execute("ALTER TABLE events ADD COLUMN previous_url TEXT")
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(analyses)")}
         with self._db:
-            for col in ("status", "error"):
+            for col in ("status", "error", "parent"):
                 if col not in cols:
                     self._db.execute(f"ALTER TABLE analyses ADD COLUMN {col} TEXT")
+            if "parent" not in cols:  # spend is capped per election
+                self._db.execute("UPDATE analyses SET parent=(SELECT parent FROM documents "
+                                 "WHERE documents.id=analyses.document_id)")
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(documents)")}
         if "analysis_status" not in cols:
             with self._db:
@@ -91,10 +95,9 @@ class Store:
                     "ALTER TABLE documents ADD COLUMN analysis_attempts INTEGER DEFAULT 0")
                 self._db.execute("ALTER TABLE documents ADD COLUMN analysis_next_at REAL")
                 self._db.execute("ALTER TABLE documents ADD COLUMN analysis_error TEXT")
-                # documents recorded before analysis existed: every RG-2 is analysed once
-                self._db.execute(
-                    "UPDATE documents SET analysis_status = CASE WHEN doc_type IN "
-                    f"({_ANALYSED}) THEN 'new' ELSE 'skipped' END")
+                # documents recorded before analysis existed are never analysed implicitly
+                # (`requeue --skipped` or `watch --analyze-backlog` opts them in)
+                self._db.execute("UPDATE documents SET analysis_status='skipped'")
 
     def close(self) -> None:
         with self._lock:
@@ -281,6 +284,47 @@ class Store:
                                    (url,)).fetchone()
         return row is not None and row["analysis_status"] == "new"
 
+    def enable_analysis(self, parent: str) -> str:
+        """Record when analysis was first enabled for `parent` (kept on later calls) and return it.
+        The first time, RG-2 forms seen before that moment and still pending are marked skipped:
+        analysis is opt-in and never bills for a backlog unless asked."""
+        now = _now()
+        with self._lock, self._db:
+            if self._db.execute("INSERT OR IGNORE INTO analysis_state(parent, enabled_at) "
+                                "VALUES(?,?)", (parent, now)).rowcount:
+                self._db.execute(
+                    "UPDATE documents SET analysis_status='skipped', analysis_next_at=NULL "
+                    "WHERE parent=? AND first_seen_at < ? AND (analysis_status='new' OR "
+                    "(analysis_status='failed' AND analysis_next_at IS NOT NULL))", (parent, now))
+            return self._db.execute("SELECT enabled_at FROM analysis_state WHERE parent=?",
+                                    (parent,)).fetchone()["enabled_at"]
+
+    def analysis_backlog(self, parent: str) -> int:
+        """Active RG-2 forms of `parent` that are not queued (seen before analysis was enabled)."""
+        with self._lock:
+            return self._db.execute(
+                f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
+                f"({_ANALYSED}) AND analysis_status='skipped'", (parent,)).fetchone()[0]
+
+    def queued_for_analysis(self, parent: str) -> int:
+        """Active RG-2 forms of `parent` waiting for (or retrying) analysis."""
+        with self._lock:
+            return self._db.execute(
+                f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
+                f"({_ANALYSED}) AND analysis_attempts < ? AND (analysis_status='new' OR "
+                "(analysis_status='failed' AND analysis_next_at IS NOT NULL))",
+                (parent, MAX_ANALYSIS_ATTEMPTS)).fetchone()[0]
+
+    def requeue_skipped(self, parent: str | None = None) -> int:
+        """Queue skipped RG-2 forms (the backlog from before analysis was enabled)."""
+        sql = (f"UPDATE documents SET analysis_status='new' WHERE analysis_status='skipped' "
+               f"AND doc_type IN ({_ANALYSED})")
+        args: list = []
+        if parent is not None:
+            sql += " AND parent=?"
+            args.append(parent)
+        return self._write(sql, args).rowcount
+
     def next_for_analysis(self, limit: int, parent: str | None = None,
                           now: float | None = None) -> list[Doc]:
         """Claim up to `limit` due documents (marked running, attempts+1), newest first.
@@ -346,23 +390,26 @@ class Store:
             args.append(parent)
         return self._write(sql, args).rowcount
 
-    def save_analysis(self, url: str, result: "AnalysisResult", prompt_version: str) -> None:
+    def save_analysis(self, url: str, result: "AnalysisResult", prompt_version: str,
+                      parent: str | None = None) -> None:
+        """`parent` defaults to the document's election (whose spend cap it counts against)."""
         self._insert_analysis(url, result.model, prompt_version, json.dumps(result.report),
-                              result.cost_usd, "done", None)
+                              result.cost_usd, "done", None, parent)
 
     def save_failed_analysis(self, url: str, model: str, prompt_version: str, cost_usd: float,
-                             error: str) -> None:
+                             error: str, parent: str | None = None) -> None:
         """Record a billed attempt that produced no usable report (keeps total_spend accurate)."""
-        self._insert_analysis(url, model, prompt_version, None, cost_usd, "failed", error)
+        self._insert_analysis(url, model, prompt_version, None, cost_usd, "failed", error, parent)
 
-    def _insert_analysis(self, url, model, prompt_version, result_json, cost_usd, status, error):
+    def _insert_analysis(self, url, model, prompt_version, result_json, cost_usd, status, error,
+                         parent):
         with self._lock, self._db:
-            row = self._db.execute("SELECT id FROM documents WHERE url=?", (url,)).fetchone()
+            row = self._db.execute("SELECT id, parent FROM documents WHERE url=?", (url,)).fetchone()
             self._db.execute(
                 "INSERT INTO analyses(document_id, model, prompt_version, result_json, created_at, "
-                "cost_usd, status, error) VALUES(?,?,?,?,?,?,?,?)",
+                "cost_usd, status, error, parent) VALUES(?,?,?,?,?,?,?,?,?)",
                 (row["id"] if row else None, model, prompt_version, result_json, _now(), cost_usd,
-                 status, error))
+                 status, error, parent if parent is not None else row["parent"] if row else None))
 
     def latest_report(self, url: str) -> dict | None:
         """Report of the newest successful analysis of a document, if any."""
@@ -373,7 +420,11 @@ class Store:
                 "ORDER BY a.id DESC LIMIT 1", (url,)).fetchone()
         return json.loads(row["result_json"]) if row else None
 
-    def total_spend(self) -> float:
+    def total_spend(self, parent: str | None = None) -> float:
+        """Recorded spend of one election (`parent`), or of everything when None."""
+        sql, args = "SELECT COALESCE(SUM(cost_usd), 0) AS s FROM analyses", ()
+        if parent is not None:
+            sql, args = sql + " WHERE parent=?", (parent,)
         with self._lock:
-            row = self._db.execute("SELECT COALESCE(SUM(cost_usd), 0) AS s FROM analyses").fetchone()
+            row = self._db.execute(sql, args).fetchone()
         return float(row["s"])

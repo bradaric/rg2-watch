@@ -93,6 +93,16 @@ def test_run_eval_stops_at_spend_cap(tmp_path):
     assert ai.calls == 1 and out["errors"]["b.pdf"] == "spend cap reached"
 
 
+def test_run_eval_cap_counts_only_eval_spend(tmp_path):
+    pdfs, _, entries, ai = env(tmp_path, resp(overwritten()))
+    store = Store(":memory:")
+    store.save_failed_analysis("file:///x.pdf", "m", "v2", 50.0, "x", parent="adhoc")
+    out = run_eval([entries[0]], pdfs, store, ai, Config(max_spend_usd=3.0), cached=False,
+                   out=io.StringIO())
+    assert ai.calls == 1 and out["errors"] == {}
+    assert store.total_spend("eval") == pytest.approx(out["cost_usd"])
+
+
 def cli_args(tmp_path, labels, pdfs, *extra):
     return ["eval", "--labels", str(labels), "--pdf-dir", str(pdfs),
             "--db", str(tmp_path / "db" / "x.sqlite"), *extra]

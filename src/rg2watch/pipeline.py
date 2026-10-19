@@ -67,11 +67,12 @@ def _hhmm(ts: float) -> str:
 class AnalysisPipeline:
     def __init__(self, client: RikClient, store: Store, notifier: Notifier, anthropic_client,
                  cfg: Config, on_findings: Callable[[list[Finding]], None], cache_dir: Path,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, backlog: bool = False):
         self.client, self.store, self.notifier = client, store, notifier
         self.anthropic, self.cfg = anthropic_client, cfg
         self.on_findings, self.cache_dir, self.clock = on_findings, cache_dir, clock
         self.parent = client.election.parent
+        self.backlog = backlog  # also analyse forms seen before analysis was enabled
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -102,9 +103,18 @@ class AnalysisPipeline:
             self._wake.set()
 
     def start(self) -> None:
+        self.store.enable_analysis(self.parent)
+        if self.backlog:
+            n = self.store.requeue_skipped(self.parent)
+            log.info("--analyze-backlog: %d form(s) seen before analysis was enabled queued", n)
         for doc in self.store.requeue_running(self.parent):
             self._emit([Finding("X2", "LOW", doc, f"analysis failed after {MAX_ANALYSIS_ATTEMPTS} "
                                 "attempts: interrupted every time (crash or shutdown)")])
+        log.info("analysis on for election %s: spend cap $%.2f, $%.2f spent so far on this election, "
+                 "%d form(s) queued, %d form(s) seen before analysis was enabled not analysed "
+                 "(--analyze-backlog to include)", self.parent, self.cfg.max_spend_usd,
+                 self.store.total_spend(self.parent), self.store.queued_for_analysis(self.parent),
+                 self.store.analysis_backlog(self.parent))
         for i in range(max(1, self.cfg.analysis_workers)):
             t = threading.Thread(target=self._loop, name=f"analysis-{i}", daemon=True)
             t.start()
@@ -161,14 +171,14 @@ class AnalysisPipeline:
                 or self.clock() < self._download_paused_until)
 
     def _over_cap(self) -> bool:
-        spent = self.store.total_spend()
+        spent = self.store.total_spend(self.parent)
         if spent < self.cfg.max_spend_usd:
             return False
         with self._state:
             first, self._cap_alerted = not self._cap_alerted, True
         if first:
-            log.warning("spend cap reached ($%.2f of $%.2f); analysis paused, watcher continues",
-                        spent, self.cfg.max_spend_usd)
+            log.warning("spend cap reached ($%.2f of $%.2f on election %s); analysis paused, "
+                        "watcher continues", spent, self.cfg.max_spend_usd, self.parent)
             self._status(SPEND_CAP_ALERT)
         return True
 

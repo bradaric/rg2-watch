@@ -30,7 +30,8 @@ class Config:
     model: str = "claude-opus-5-5"
     effort: str = "high"
     fallbacks: bool = True
-    max_spend_usd: float = 100.0
+    analysis_enabled: bool = False  # opt-in: `watch --analyze` also enables it
+    max_spend_usd: float = 20.0  # per election (parent)
     price_in_per_mtok: float = 4.0
     price_out_per_mtok: float = 20.0
     analysis_workers: int = 4

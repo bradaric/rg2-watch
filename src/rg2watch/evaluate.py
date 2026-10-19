@@ -110,7 +110,7 @@ def run_eval(labels: list[dict], pdf_dir: Path, store: Store, client, cfg: Confi
                 errors[name] = "no stored analysis (run without --cached)"
                 continue
             if report is None:
-                if store.total_spend() >= cfg.max_spend_usd:
+                if store.total_spend(PARENT) >= cfg.max_spend_usd:
                     errors[name] = "spend cap reached"
                     print(f"spend cap ${cfg.max_spend_usd:.2f} reached: stopping", file=out)
                     break

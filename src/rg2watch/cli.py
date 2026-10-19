@@ -17,7 +17,7 @@ from .fetch import fetch_pdf
 from .findings import findings_for
 from .models import Doc, Event, Finding
 from .notify import Notifier
-from .pipeline import AnalysisPipeline
+from .pipeline import PROMPT_VERSION, AnalysisPipeline
 from .render import RenderError, render_tiles
 from .replay import fetch_fixtures, make_replay_server
 from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, download_limiter_for
@@ -26,6 +26,7 @@ from .store import Store
 from .watcher import Watcher
 
 log = logging.getLogger("rg2watch.cli")
+ADHOC = "adhoc"  # parent that `analyze` records its spend under
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -49,8 +50,14 @@ def _parser() -> argparse.ArgumentParser:
                    help="bootstrap, run every lane once (full passes, no page budget), exit")
     s.add_argument("--baseline", action="store_true",
                    help="record what is already published silently on each lane's first full pass")
-    s.add_argument("--no-analyze", action="store_true",
-                   help="do not analyse new RG-2 forms with Claude (they stay queued in the DB)")
+    mode = s.add_mutually_exclusive_group()
+    mode.add_argument("--analyze", action="store_true",
+                      help="analyse new RG-2 forms with Claude (paid API; also config "
+                           "analysis_enabled = true)")
+    mode.add_argument("--no-analyze", action="store_true",
+                      help="do not analyse, even if the config enables it")
+    s.add_argument("--analyze-backlog", action="store_true",
+                   help="with analysis on, also analyse forms seen before analysis was enabled")
 
     s = sub.add_parser("analyze", parents=[common],
                        help="analyse one RG-2 PDF (local path or URL of a registered election)")
@@ -71,6 +78,9 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--parent", help="only this election")
     s.add_argument("--failed", action="store_true",
                    help="reset every failed document, also unreadable PDFs (D3) and refusals (X1)")
+    s.add_argument("--skipped", action="store_true",
+                   help="also queue RG-2 forms skipped because they were seen before analysis "
+                        "was enabled")
 
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
@@ -208,11 +218,17 @@ def _cmd_watch(args) -> int:
         notifier = Notifier(cfg, _notifier_http(), out=sys.stdout)
 
         pipeline = None
+        analyze = (args.analyze or cfg.analysis_enabled) and not args.no_analyze
+        if args.analyze_backlog and not analyze:
+            print("--analyze-backlog needs analysis on (--analyze or analysis_enabled = true)",
+                  file=sys.stderr)
+            return 2
         if args.once:
             log.info("watch --once is a one-shot diff check: analysis is off, new RG-2 forms "
                      "stay queued for the next live run")
-        elif args.no_analyze:
-            log.info("analysis off (--no-analyze); new RG-2 forms stay queued")
+        elif not analyze:
+            log.info("analysis off (opt in with --analyze or analysis_enabled = true): new RG-2 "
+                     "forms are recorded, not analysed")
         else:
             ai, why = _anthropic_client()
             if ai is None:
@@ -223,7 +239,7 @@ def _cmd_watch(args) -> int:
                         _store_finding(store, parent, f)
 
                 pipeline = AnalysisPipeline(client, store, notifier, ai, cfg, on_findings,
-                                            _cache_dir(cfg))
+                                            _cache_dir(cfg), backlog=args.analyze_backlog)
         on_events, deliver = _handlers(store, notifier, parent, pipeline)
         watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once,
                           on_status=notifier.status, baseline=args.baseline)
@@ -294,8 +310,13 @@ def _cmd_analyze(args) -> int:
         result = analyze_document(render_tiles(path), ai, cfg)
     except (RenderError, AnalysisError) as exc:
         cost = getattr(exc, "cost_usd", 0.0)
+        if cost:
+            _record_adhoc(cfg, doc.url, lambda s: s.save_failed_analysis(
+                doc.url, cfg.model, PROMPT_VERSION, cost, str(exc)[:200], parent=ADHOC))
         print(f"analysis failed: {exc}" + (f" (billed ${cost:.3f})" if cost else ""), file=sys.stderr)
         return 1
+    _record_adhoc(cfg, doc.url, lambda s: s.save_analysis(doc.url, result, PROMPT_VERSION,
+                                                          parent=ADHOC))
     findings = evaluate_report(result.report, doc, cfg)
     if args.json:
         print(json.dumps({
@@ -312,6 +333,18 @@ def _cmd_analyze(args) -> int:
     if not findings:
         print("no findings")
     return 0
+
+
+def _record_adhoc(cfg: Config, url: str, save) -> None:
+    """`analyze` spend is recorded under its own parent, never against an election's cap."""
+    try:
+        store = _open_store(cfg)
+        try:
+            save(store)
+        finally:
+            store.close()
+    except Exception:
+        log.error("spend of the analysis of %s could not be recorded", url, exc_info=True)
 
 
 def _cmd_eval(args) -> int:
@@ -367,6 +400,8 @@ def _cmd_requeue(args) -> int:
     store = _open_store(_config(args))
     try:
         n = store.requeue_failed(args.parent, all_failed=args.failed)
+        if args.skipped:
+            n += store.requeue_skipped(args.parent)
     finally:
         store.close()
     print(f"requeued {n} document(s) for analysis")
