@@ -1,0 +1,279 @@
+import json
+from pathlib import Path
+from urllib.parse import parse_qs
+
+import httpx
+import pytest
+
+from rg2watch.config import Config
+from rg2watch.models import Election, Filters
+from rg2watch.rik_client import AdaptiveLimiter, RikClient, RikError, RikUnavailable
+
+FIX = Path(__file__).parent / "fixtures"
+BASE = "https://www.rik.parlament.gov.rs"
+ELECTION = Election("662405", "660578", "3", "Test", BASE)
+
+
+class FakeTime:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.now += s
+
+
+def make(handler, max_rps=2.0):
+    t = FakeTime()
+    limiter = AdaptiveLimiter(max_rps, clock=t.clock, sleep=t.sleep)
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    return RikClient(ELECTION, limiter, http), limiter, t
+
+
+def page_payload(n_records, max_page):
+    rec = {"municipality": "M", "election_station_number": "1",
+           "election_station_name": "S", "extfiles": []}
+    pag = "".join(f'<li><a data-page="{i}">{i}</a></li>' for i in range(1, max_page + 1))
+    return {"records": [rec] * n_records, "pagination": pag}
+
+
+def form(request):
+    return {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+
+
+def test_listing_sends_expected_form_fields():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json=page_payload(1, 1))
+
+    client, _, _ = make(handler)
+    client.listing(Filters(doc_type=6), 3)
+    r = seen[0]
+    f = form(r)
+    assert r.method == "POST" and r.url.path == "/get-election"
+    assert f["filters[election_document_type]"] == "6"
+    assert "filters[municipality]" not in f
+    assert "filters[election_station_no]" not in f
+    assert f["page"] == "3"
+    assert f["data[type]"] == "1"
+    assert f["data[parent]"] == "662405"
+    assert f["data[election_round]"] == "660578"
+    assert f["data[property_election_type]"] == "3"
+    assert f["election_type"] == "3"
+    assert r.headers["X-Requested-With"] == "XMLHttpRequest"
+    assert r.headers["Referer"] == f"{BASE}/zapisnici/662405"
+
+
+def test_listing_sends_all_filters_when_set():
+    seen = []
+
+    def handler(request):
+        seen.append(form(request))
+        return httpx.Response(200, json=page_payload(0, 0))
+
+    client, _, _ = make(handler)
+    client.listing(Filters(6, "207", "99"), 1)
+    assert seen[0]["filters[municipality]"] == "207"
+    assert seen[0]["filters[election_station_no]"] == "99"
+
+
+def test_listing_parses_fixture():
+    payload = json.loads((FIX / "get_election_662405_rg2_p1.json").read_text(encoding="utf-8"))
+    client, _, _ = make(lambda r: httpx.Response(200, json=payload))
+    page = client.listing(Filters(), 1)
+    assert page.records == 10 and page.docs
+
+
+def test_count_two_requests():
+    pages = []
+
+    def handler(request):
+        p = int(form(request)["page"])
+        pages.append(p)
+        return httpx.Response(200, json=page_payload(10 if p == 1 else 3, 7))
+
+    client, _, _ = make(handler)
+    assert client.count(Filters(doc_type=6)) == 63
+    assert pages == [1, 7]
+
+
+def test_count_single_page():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(200, json=page_payload(4, 1))
+
+    client, _, _ = make(handler)
+    assert client.count(Filters()) == 4
+    assert len(calls) == 1
+
+
+def test_count_empty():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(200, json={"records": [], "pagination": ""})
+
+    client, _, _ = make(handler)
+    assert client.count(Filters()) == 0
+    assert len(calls) == 1
+
+
+def test_limiter_halves_on_overload_and_recovers():
+    t = FakeTime()
+    lim = AdaptiveLimiter(2.0, clock=t.clock, sleep=t.sleep)
+    assert lim.current_rps == 2.0
+    lim.on_overload()
+    assert lim.current_rps == 1.0
+    lim.on_overload()
+    assert lim.current_rps == 0.5
+    for _ in range(10):
+        lim.on_success(0.1)
+    assert lim.current_rps == pytest.approx(1.5)
+    for _ in range(20):
+        lim.on_success(0.1)
+    assert lim.current_rps == 2.0
+
+
+def test_limiter_floor_and_mid_latency():
+    lim = AdaptiveLimiter(2.0, min_rps=0.1)
+    for _ in range(10):
+        lim.on_overload()
+    assert lim.current_rps == 0.1
+    lim.on_success(3.0)
+    assert lim.current_rps == 0.1
+
+
+def test_limiter_acquire_spaces_requests():
+    t = FakeTime()
+    lim = AdaptiveLimiter(2.0, clock=t.clock, sleep=t.sleep)
+    lim.acquire()
+    lim.acquire()
+    lim.acquire()
+    assert t.now == pytest.approx(1.0)
+
+
+def test_slow_response_counts_as_overload():
+    t = FakeTime()
+
+    def handler(request):
+        t.now += 6.0
+        return httpx.Response(200, json=page_payload(0, 0))
+
+    limiter = AdaptiveLimiter(2.0, clock=t.clock, sleep=t.sleep)
+    client = RikClient(ELECTION, limiter, httpx.Client(transport=httpx.MockTransport(handler)))
+    client.listing(Filters(), 1)
+    assert limiter.current_rps == 1.0
+
+
+def test_retries_then_raises_unavailable():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(503)
+
+    client, limiter, t = make(handler)
+    with pytest.raises(RikUnavailable):
+        client.listing(Filters(), 1)
+    assert len(calls) == 4
+    assert limiter.current_rps < 2.0
+    backoffs = [s for s in t.sleeps if s >= 2]
+    assert len(backoffs) == 3
+    assert all(2 <= b < 70 for b in backoffs)
+
+
+def test_timeout_is_retried_then_succeeds():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) < 3:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json=page_payload(2, 1))
+
+    client, limiter, _ = make(handler)
+    assert client.listing(Filters(), 1).records == 2
+    assert len(calls) == 3
+    assert limiter.current_rps < 2.0
+
+
+def test_429_retried_and_4xx_raises_immediately():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(429 if len(calls) == 1 else 404)
+
+    client, _, _ = make(handler)
+    with pytest.raises(RikError) as e:
+        client.listing(Filters(), 1)
+    assert not isinstance(e.value, RikUnavailable)
+    assert len(calls) == 2
+
+
+def test_municipalities_union():
+    seen = []
+
+    def handler(request):
+        q = request.url.params["q"]
+        seen.append(q)
+        assert request.url.path == "/templates/election/getElectionStations.php"
+        assert request.url.params["electionId"] == "660578"
+        data = {
+            "a": [{"id": "1", "name": "A"}, {"id": "2", "name": "B"}],
+            "e": [{"id": "2", "name": "B"}, {"id": "3", "name": "C"}],
+            "i": [], "o": [{"id": "1", "name": "A"}], "u": [{"id": "4", "name": "D"}],
+        }[q]
+        return httpx.Response(200, json=data)
+
+    client, _, _ = make(handler)
+    assert client.municipalities() == {"1": "A", "2": "B", "3": "C", "4": "D"}
+    assert seen == list("aeiou")
+
+
+def test_stations_decodes_json_string_body_despite_html_content_type():
+    inner = {"number": '<option value="-1" selected>x</option><option value="207620">1</option>'
+                       '<option value="207621">2</option>', "name": "<option></option>"}
+
+    def handler(request):
+        f = form(request)
+        assert request.url.path == "/templates/election/ajaxSelectMunicipality.php"
+        assert f["method"] == "getelectionstation" and f["municipalityId"] == "207"
+        assert f["html"] == "1" and f["get_both"] == "1"
+        assert f["site_lang"] == "sr" and f["election_round"] == "660578"
+        assert request.headers["X-Requested-With"] == "XMLHttpRequest"
+        return httpx.Response(200, text=json.dumps(inner),
+                              headers={"Content-Type": "text/html; charset=UTF-8"})
+
+    client, _, _ = make(handler)
+    assert client.stations("207") == {"207620": "1", "207621": "2"}
+
+
+def test_from_url_uses_origin_or_override():
+    html = (FIX / "zapisnici_662405.html").read_text(encoding="utf-8")
+    hosts = []
+
+    def handler(request):
+        hosts.append(str(request.url))
+        return httpx.Response(200, text=html)
+
+    import rg2watch.rik_client as mod
+    orig = httpx.Client
+    mod.httpx.Client = lambda **kw: orig(transport=httpx.MockTransport(handler), **kw)
+    try:
+        c1 = RikClient.from_url(f"{BASE}/zapisnici/662405", Config())
+        c2 = RikClient.from_url(f"{BASE}/zapisnici/662405", Config(base_url="http://127.0.0.1:9"))
+    finally:
+        mod.httpx.Client = orig
+    assert hosts == [f"{BASE}/zapisnici/662405", "http://127.0.0.1:9/zapisnici/662405"]
+    assert c1.election.parent == "662405" and c1.election.base_url == BASE
+    assert c2.election.base_url == "http://127.0.0.1:9"
