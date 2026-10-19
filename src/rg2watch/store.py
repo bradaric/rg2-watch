@@ -92,6 +92,21 @@ class Store:
                     if ev.kind == "replaced" and ev.previous_url:
                         self._db.execute("UPDATE documents SET active=0 WHERE url=?",
                                          (ev.previous_url,))
+                    if d.doc_type is not None:
+                        self._db.execute(
+                            "UPDATE documents SET active=0 WHERE parent=? AND station_key=? "
+                            "AND doc_type=? AND url<>? AND active=1",
+                            (parent, d.station_key, d.doc_type, d.url))
+                    else:
+                        lbl = " ".join(d.label.split())
+                        rows = self._db.execute(
+                            "SELECT id, label FROM documents WHERE parent=? AND station_key=? "
+                            "AND doc_type IS NULL AND url<>? AND active=1",
+                            (parent, d.station_key, d.url)).fetchall()
+                        for r in rows:
+                            if " ".join((r["label"] or "").split()) == lbl:
+                                self._db.execute("UPDATE documents SET active=0 WHERE id=?",
+                                                 (r["id"],))
                     self._db.execute(
                         "INSERT INTO documents(parent, municipality, station_no, station_name, "
                         "station_key, doc_type, label, url, uploaded_at, first_seen_at) "

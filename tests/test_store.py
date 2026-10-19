@@ -112,3 +112,15 @@ def test_known_docs_keys_use_doc_key():
     got = s.known_docs(P, Scope())
     assert set(got) == {doc_key(known), doc_key(typed)}
     assert doc_key(known) == ("Сечањ|1", "label:Непознато лабел")
+
+
+def test_added_for_existing_key_leaves_one_active_row():
+    s = store()
+    a, b = doc("https://x/a"), doc("https://x/b")
+    u1 = Doc("Сечањ", "1", "ОШ", "Х", None, "https://x/u1", "2026-10-19T20:15")
+    u2 = Doc("Сечањ", "1", "ОШ", " Х ", None, "https://x/u2", "2026-10-19T20:15")
+    s.apply_events(P, s.start_sweep(P, "l"),
+                   [Event("added", a), Event("added", b), Event("added", u1), Event("added", u2)])
+    assert s.known_docs(P, Scope()) == {doc_key(b): b, doc_key(u2): u2}
+    n = s._db.execute("SELECT COUNT(*) FROM documents WHERE active=1").fetchone()[0]
+    assert n == 2

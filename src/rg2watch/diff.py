@@ -5,12 +5,13 @@ def diff(known: dict[tuple[str, int | str], Doc], observed: list[Doc],
          complete: bool) -> list[Event]:
     """Removed events are only candidates; the watcher confirms them before storing."""
     events: list[Event] = []
-    seen: dict[tuple[str, int | str], str] = {}
+    seen: dict[tuple[str, int | str], Doc] = {}
     for d in observed:
         key = doc_key(d)
-        if seen.get(key) == d.url:
-            continue
-        seen[key] = d.url
+        cur = seen.get(key)
+        if cur is None or (d.uploaded_at, d.url) > (cur.uploaded_at, cur.url):
+            seen[key] = d
+    for key, d in seen.items():
         old = known.get(key)
         if old is None:
             events.append(Event("added", d))
