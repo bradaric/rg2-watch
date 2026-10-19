@@ -95,3 +95,10 @@ class Finding:
     severity: Literal["HIGH", "MEDIUM", "LOW"]
     doc: Doc
     summary: str
+
+
+@dataclass(frozen=True)
+class Scope:
+    doc_type: int | None = None
+    municipality: str | None = None
+    station_key: str | None = None
