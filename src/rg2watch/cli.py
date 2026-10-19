@@ -326,8 +326,9 @@ def _cmd_analyze(args) -> int:
     except (RenderError, AnalysisError) as exc:
         cost = getattr(exc, "cost_usd", 0.0)
         if cost:
+            error = str(exc)[:200]
             _record_adhoc(cfg, doc.url, lambda s: s.save_failed_analysis(
-                doc.url, cfg.model, PROMPT_VERSION, cost, str(exc)[:200], parent=ADHOC))
+                doc.url, cfg.model, PROMPT_VERSION, cost, error, parent=ADHOC))
         print(f"analysis failed: {exc}" + (f" (billed ${cost:.3f})" if cost else ""), file=sys.stderr)
         return 1
     _record_adhoc(cfg, doc.url, lambda s: s.save_analysis(doc.url, result, PROMPT_VERSION,

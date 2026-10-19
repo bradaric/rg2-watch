@@ -1085,3 +1085,17 @@ def test_analyze_backlog_needs_analysis_on(tmp_path, monkeypatch, capsys):
     db, made = _watch_env(tmp_path, monkeypatch, FakeAnthropic(None))
     assert cli.main(["watch", "--parent", P, "--db", str(db), "--analyze-backlog"]) == 2
     assert made == [] and "--analyze-backlog needs analysis on" in capsys.readouterr().err
+
+
+def test_analyze_billed_failure_recorded_under_adhoc(tmp_path, monkeypatch, capsys):
+    from rg2watch import cli
+
+    pdf = make_pdf(tmp_path / "x.pdf")
+    monkeypatch.setattr(cli, "_anthropic_client",
+                        lambda: (FakeAnthropic(resp(clean_report(), stop="refusal")), None))
+    assert cli.main(["analyze", str(pdf), "--db", str(tmp_path / "d.sqlite")]) == 1
+    assert "billed $" in capsys.readouterr().err
+    s = Store(tmp_path / "d.sqlite")
+    row = s._db.execute("SELECT parent, status, cost_usd FROM analyses").fetchone()
+    s.close()
+    assert row[0] == "adhoc" and row[1] == "failed" and row[2] > 0
