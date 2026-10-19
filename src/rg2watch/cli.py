@@ -1,19 +1,26 @@
 import argparse
 import dataclasses
+import json
 import logging
 import signal
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
+from .analyze import AnalysisError, analyze_document
 from .config import Config, load_config
+from .fetch import fetch_pdf
 from .findings import findings_for
-from .models import Event, Finding
+from .models import Doc, Event, Finding
 from .notify import Notifier
+from .pipeline import AnalysisPipeline
+from .render import RenderError, render_tiles
 from .replay import fetch_fixtures, make_replay_server
 from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError
+from .rules import evaluate_report
 from .store import Store
 from .watcher import Watcher
 
@@ -41,6 +48,13 @@ def _parser() -> argparse.ArgumentParser:
                    help="bootstrap, run every lane once (full passes, no page budget), exit")
     s.add_argument("--baseline", action="store_true",
                    help="record what is already published silently on each lane's first full pass")
+    s.add_argument("--no-analyze", action="store_true",
+                   help="do not analyse new RG-2 forms with Claude (they stay queued in the DB)")
+
+    s = sub.add_parser("analyze", parents=[common],
+                       help="analyse one RG-2 PDF (local path or URL of a registered election)")
+    s.add_argument("source", help="local PDF path or document URL")
+    s.add_argument("--json", action="store_true", help="print report and findings as JSON")
 
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
@@ -95,7 +109,25 @@ def _notifier_http() -> httpx.Client:
     return httpx.Client(timeout=httpx.Timeout(10.0, connect=3.0), headers={"User-Agent": USER_AGENT})
 
 
-def _handlers(store: Store, notifier: Notifier, parent: str):
+def _anthropic_client():
+    """(client, None) when Anthropic credentials are available, else (None, reason)."""
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic()
+    except Exception as exc:
+        return None, f"cannot create Anthropic client: {exc}"
+    if client.api_key is None and client.auth_token is None and client.credentials is None:
+        return None, "no Anthropic credentials (set ANTHROPIC_API_KEY or configure an ant profile)"
+    return client, None
+
+
+def _cache_dir(cfg: Config) -> Path:
+    db = str(cfg.db_path)
+    return (Path("data") if db == ":memory:" else Path(db).parent) / "pdfs"
+
+
+def _handlers(store: Store, notifier: Notifier, parent: str, pipeline=None):
     def deliver() -> None:
         """Called once per tick by the watch loop."""
         try:
@@ -117,6 +149,11 @@ def _handlers(store: Store, notifier: Notifier, parent: str):
                               ev.doc.station_no, ev.doc.url, exc_info=True)
         for f in found:
             _store_finding(store, parent, f)
+        if pipeline is not None:
+            try:
+                pipeline.submit(events)
+            except Exception:
+                log.exception("analysis queueing failed for %d event(s)", len(events))
 
     return on_events, deliver
 
@@ -153,9 +190,25 @@ def _cmd_watch(args) -> int:
         parent = client.election.parent
         notifier = Notifier(cfg, _notifier_http(), out=sys.stdout)
 
-        on_events, deliver = _handlers(store, notifier, parent)
+        pipeline = None
+        if args.once or args.no_analyze:
+            log.info("analysis off for this run; new RG-2 forms stay queued")
+        else:
+            ai, why = _anthropic_client()
+            if ai is None:
+                log.warning("analysis disabled: %s", why)
+            else:
+                def on_findings(found: list[Finding]) -> None:
+                    for f in found:
+                        _store_finding(store, parent, f)
+
+                pipeline = AnalysisPipeline(client, store, notifier, ai, cfg, on_findings,
+                                            _cache_dir(cfg))
+        on_events, deliver = _handlers(store, notifier, parent, pipeline)
         watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once,
                           on_status=notifier.status, baseline=args.baseline)
+        if pipeline is not None:
+            pipeline.start()
         try:
             while True:
                 try:
@@ -171,9 +224,74 @@ def _cmd_watch(args) -> int:
                 time.sleep(1)
         except KeyboardInterrupt:
             log.info("interrupted, shutting down")
+        finally:
+            if pipeline is not None:
+                pipeline.stop()
         return 0
     finally:
         store.close()
+
+
+def _cmd_analyze(args) -> int:
+    cfg = _config(args)
+    ai, why = _anthropic_client()
+    if ai is None:
+        print(f"analysis unavailable: {why}", file=sys.stderr)
+        return 2
+    src = args.source
+    if urlsplit(src).scheme in ("http", "https"):
+        store = _open_store(cfg)
+        try:
+            found = store.find_document(src)
+            if found is not None:
+                election, doc = store.get_election(found[0]), found[1]
+            else:
+                host = urlsplit(src)[:2]
+                election = next((e for e in store.elections() if urlsplit(e.base_url)[:2] == host),
+                                None)
+                doc = Doc("", "", "", "", 6, src, "")
+        finally:
+            store.close()
+        if election is None:
+            print(f"refusing to download {src}: not on the host of a registered election "
+                  "(run `rg2watch add` first)", file=sys.stderr)
+            return 2
+        http = httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True)
+        client = RikClient(election, AdaptiveLimiter(cfg.max_rps), http, cfg.request_timeout_s,
+                           cfg.max_pdf_bytes)
+        try:
+            path = fetch_pdf(client, src, _cache_dir(cfg))
+        except RikError as exc:
+            print(f"download failed: {exc}", file=sys.stderr)
+            return 1
+    else:
+        path = Path(src)
+        if not path.is_file():
+            print(f"no such file: {src}", file=sys.stderr)
+            return 2
+        doc = Doc("", "", path.name, "", 6, str(path), "")
+    try:
+        result = analyze_document(render_tiles(path), ai, cfg)
+    except (RenderError, AnalysisError) as exc:
+        cost = getattr(exc, "cost_usd", 0.0)
+        print(f"analysis failed: {exc}" + (f" (billed ${cost:.3f})" if cost else ""), file=sys.stderr)
+        return 1
+    findings = evaluate_report(result.report, doc, cfg)
+    if args.json:
+        print(json.dumps({
+            "report": result.report, "model": result.model, "cost_usd": result.cost_usd,
+            "findings": [{"rule": f.rule, "severity": f.severity, "summary": f.summary}
+                         for f in findings]}, ensure_ascii=False, indent=2))
+        return 0
+    vis = result.report["visual"]
+    print(f"{doc.url}\nmodel {result.model}, {result.input_tokens} in / {result.output_tokens} out "
+          f"tokens, ${result.cost_usd:.3f}\nconfidence {result.report['confidence']}, "
+          f"page quality {vis['page_quality']}")
+    for f in findings:
+        print(f"[{f.severity}] {f.rule} {f.summary}")
+    if not findings:
+        print("no findings")
+    return 0
 
 
 def _fixture_root(path: Path) -> Path:
@@ -219,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr, format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True,
         level=logging.DEBUG if args.verbose else logging.INFO if args.cmd == "watch" else logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
-               "fixtures": _cmd_fixtures}[args.cmd]
+               "fixtures": _cmd_fixtures, "analyze": _cmd_analyze}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
         previous = signal.signal(signal.SIGTERM, _sigterm)

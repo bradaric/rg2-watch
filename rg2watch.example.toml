@@ -38,3 +38,26 @@ ntfy_url = "https://ntfy.sh"
 medium_digest_s = 600
 # Per-request timeout in seconds
 request_timeout_s = 20.0
+# Max size of a downloaded PDF in bytes
+max_pdf_bytes = 50000000
+
+# --- Claude vision analysis of RG-2 forms (needs ANTHROPIC_API_KEY or an ant profile) ---
+# Model and effort for the forensic check
+model = "claude-opus-5-5"
+effort = "high"
+# Server-side refusal fallback to another model
+fallbacks = true
+# Analysis pauses (one "[rg2-watch] spend cap reached" alert) once recorded spend reaches this (USD)
+max_spend_usd = 100.0
+# Prices used for spend tracking (USD per million tokens)
+price_in_per_mtok = 4.0
+price_out_per_mtok = 20.0
+# Background analysis worker threads
+analysis_workers = 4
+# Rule thresholds: turnout (A6), one list's share of valid votes (A7), assisted voters share (A8),
+# minimum registered/valid voters for ratio rules, named committee rows without signature (V4)
+turnout_high = 0.95
+leader_share_high = 0.90
+assisted_share = 0.05
+min_registered_for_ratio = 50
+unsigned_rows_threshold = 2

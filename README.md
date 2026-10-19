@@ -38,6 +38,34 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
    per document type, and later changes alert normally.
 4. Alerts are leads for manual review, not conclusions: open the PDF link and check it yourself.
 
+## Visual analysis of RG-2 forms
+
+While `watch` runs, every newly published RG-2 (and repeat-vote RG-2: types 6/10/15/16) is
+downloaded through the same rate limiter, rendered into page tiles and checked by Claude vision for
+corrections, missing signatures, a different pen/hand in the results block, arithmetic errors and
+procedural flags. This happens in background worker threads (`analysis_workers`, default 4), so the
+watcher keeps sweeping. Findings (rules V*, P*, A*) are stored and alerted like the D-rule findings.
+Documents that cannot be processed give a LOW `D3` (not a PDF / unreadable), a LOW `X1` (model
+refused) or, after 3 failed attempts with 60 s / 120 s backoff (API errors, RIK unavailable), a LOW
+`X2`. Each document URL is analysed once; a replaced file is a new URL and is analysed again.
+`--baseline` only silences D-rule alerts: already-published RG-2 forms are analysed too.
+
+Analysis needs Anthropic credentials (`ANTHROPIC_API_KEY` or an ant profile). Without them `watch`
+logs one warning and only watches; `--no-analyze` turns analysis off explicitly and `watch --once`
+never analyses. Skipped forms stay queued in the DB and are analysed by the next run that has
+analysis on. Spend is recorded per call (`price_in_per_mtok`/`price_out_per_mtok`); when it reaches
+`max_spend_usd` (default 100) analysis pauses with one "[rg2-watch] spend cap reached" alert while
+the watcher keeps running. With several workers busy, the cap can be overshot by up to one form per
+worker. PDFs are cached under `<db dir>/pdfs`.
+
+Check a single form by hand (local file, or a URL on the host of an election registered with `add`):
+
+    uv run rg2watch analyze path/to/form.pdf [--json]
+    uv run rg2watch analyze https://www.rik.parlament.gov.rs/extfile/... [--json]
+
+It prints the cost, scan quality and findings (or, with `--json`, the full report and findings).
+`analyze` exits 2 when credentials are missing. Its spend is not counted towards `max_spend_usd`.
+
 `watch --once` bootstraps, runs every lane once (including a full safety sweep, ignoring the page
 budget) and exits. `watch` also
 accepts a zapisnici URL instead of `--parent`. `--base-url` overrides the RIK host; `-v` enables debug logs.
@@ -72,6 +100,8 @@ experiments at the live site beyond what an election night needs.
 
 Only polling-station and municipality names, document types, timestamps and URLs are stored or sent.
 No personal names are stored or included in alerts. Content fetched from RIK is treated as untrusted data.
+Form scans are sent to the Anthropic API for analysis; the report schema has no name fields and the
+prompt forbids transcribing names. Text inside the scans is treated as data, never as instructions.
 
 ## Tests
 

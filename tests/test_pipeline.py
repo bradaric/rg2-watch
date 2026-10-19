@@ -1,0 +1,515 @@
+import io
+import json
+import threading
+import time
+from types import SimpleNamespace
+
+import anthropic
+import httpx
+import pytest
+from PIL import Image
+
+from rg2watch import render
+from rg2watch.config import Config
+from rg2watch.fake_rik import FakeRik
+from rg2watch.models import Doc, Election, Event
+from rg2watch.notify import Notifier
+from rg2watch.pipeline import PROMPT_VERSION, AnalysisPipeline
+from rg2watch.rik_client import AdaptiveLimiter, RikClient
+from rg2watch.store import Store
+from test_rules import clean_report, nf
+
+BASE = "https://www.rik.parlament.gov.rs"
+P = "662405"
+ELECTION = Election(P, "660578", "3", "Test", BASE)
+CAP_TITLE = "[rg2-watch] spend cap reached"
+
+
+@pytest.fixture(autouse=True)
+def no_osd(monkeypatch):
+    monkeypatch.setattr(render, "_osd_rotation", lambda img, timeout=10: 0)
+
+
+def make_pdf(path):
+    Image.new("RGB", (1653, 2338), (255, 255, 255)).save(path, "PDF", resolution=200)
+    return path
+
+
+def doc(name="a.pdf", dt=6, no="1"):
+    return Doc("Alpha", no, "School", "lbl", dt, f"{BASE}/extfile/{name}", "2026-10-19 20:00:00")
+
+
+def resp(report, stop="end_turn", tin=1000, tout=500):
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=json.dumps(report))],
+        usage=SimpleNamespace(input_tokens=tin, output_tokens=tout),
+        stop_reason=stop, model="claude-opus-5-5")
+
+
+class FakeAnthropic:
+    def __init__(self, reply):
+        self.reply = reply  # a response, an exception, or a callable
+        self.calls = 0
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+
+    def _create(self, **kw):
+        self.calls += 1
+        r = self.reply
+        if isinstance(r, BaseException):
+            raise r
+        return r
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1_000_000.0
+
+    def __call__(self):
+        return self.now
+
+
+class Env:
+    def __init__(self, tmp_path, reply, pdf_body=None, **cfg_kw):
+        pdf_dir = tmp_path / "pdfs"
+        pdf_dir.mkdir()
+        make_pdf(pdf_dir / "a.pdf")
+        make_pdf(pdf_dir / "b.pdf")
+        (pdf_dir / "html.pdf").write_bytes(b"<!doctype html><html><body>404 not found</body></html>")
+        (pdf_dir / "broken.pdf").write_bytes(b"%PDF-1.4 this is not really a pdf")
+        self.fake = FakeRik(ELECTION, [], {}, {}, pdf_dir=pdf_dir)
+        limiter = AdaptiveLimiter(100.0, sleep=lambda s: None)
+        self.rik = RikClient(ELECTION, limiter, httpx.Client(transport=httpx.MockTransport(self.fake.handle)))
+        self.store = Store(":memory:")
+        self.store.upsert_election(ELECTION)
+        self.out = io.StringIO()
+        self.cfg = Config(**cfg_kw)
+        self.notifier = Notifier(self.cfg, None, out=self.out)
+        self.ai = FakeAnthropic(reply)
+        self.clock = Clock()
+        self.findings = []
+        self.pipe = AnalysisPipeline(self.rik, self.store, self.notifier, self.ai, self.cfg,
+                                     self.on_findings, tmp_path / "cache", clock=self.clock)
+
+    def on_findings(self, found):
+        self.findings.extend(found)
+        for f in found:
+            self.store.add_finding(P, f, f.doc.url)
+
+    def publish(self, *docs, kind="added"):
+        events = [Event(kind, d) for d in docs]
+        self.store.apply_events(P, self.store.start_sweep(P, "t"), events)
+        self.pipe.submit(events)
+        return events
+
+    def drain(self, limit=20):
+        n = 0
+        while self.pipe.process_next() and n < limit:
+            n += 1
+        return n
+
+    def status(self, url):
+        r = self.store._db.execute(
+            "SELECT analysis_status, analysis_attempts FROM documents WHERE url=?", (url,)).fetchone()
+        return r[0], r[1]
+
+    def rules(self):
+        return sorted(f.rule for f in self.findings)
+
+    def pdf_requests(self):
+        return [r for r in self.fake.request_log if r["path"].startswith("/extfile/")]
+
+
+def overwritten_report():
+    r = clean_report()
+    r["numbers"]["voted"] = nf(800, mark="overwritten")
+    r["header"]["station_no"] = "1"
+    return r
+
+
+def test_added_rg2_analysed_and_findings_stored(tmp_path):
+    e = Env(tmp_path, resp(overwritten_report()))
+    d = doc()
+    e.publish(d)
+    assert e.drain() == 1
+    assert e.rules() == ["V1"]
+    stored = e.store.unalerted(P, {"HIGH", "MEDIUM", "LOW"})
+    assert [(f.rule, f.severity, f.doc.url) for _, f in stored] == [("V1", "HIGH", d.url)]
+    assert e.status(d.url) == ("done", 1)
+    row = e.store._db.execute("SELECT prompt_version, status, result_json, model FROM analyses").fetchone()
+    assert row[0] == PROMPT_VERSION == "v1" and row[1] == "done" and row[3] == "claude-opus-5-5"
+    assert json.loads(row[2])["numbers"]["voted"]["mark"] == "overwritten"
+    assert e.store.total_spend() == pytest.approx((1000 * 4 + 500 * 20) / 1e6)
+    assert e.out.getvalue() == ""  # workers never alert directly
+
+
+def test_duplicate_submit_analysed_once(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc()
+    evs = e.publish(d)
+    e.pipe.submit(evs)  # e.g. safety sweep re-reports it
+    e.store.apply_events(P, e.store.start_sweep(P, "t"), evs)  # re-seen: ON CONFLICT keeps status
+    e.pipe.submit(evs)
+    assert e.drain() == 1
+    e.pipe.submit(evs)
+    assert e.drain() == 0
+    assert e.ai.calls == 1 and len(e.pdf_requests()) == 1
+
+
+def test_replacement_is_analysed_as_new_url(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    old, new = doc("a.pdf"), doc("b.pdf")
+    e.publish(old)
+    e.drain()
+    e.store.apply_events(P, e.store.start_sweep(P, "t"), [Event("replaced", new, previous_url=old.url)])
+    e.pipe.submit([Event("replaced", new, previous_url=old.url)])
+    assert e.drain() == 1
+    assert e.ai.calls == 2
+
+
+def test_spend_cap_pauses_and_alerts_once(tmp_path):
+    e = Env(tmp_path, resp(clean_report(), tin=1_000_000, tout=0), max_spend_usd=3.0)
+    e.publish(doc("a.pdf", no="1"))
+    assert e.drain() == 1  # spends $4 >= cap
+    e.publish(doc("b.pdf", no="2"))
+    for _ in range(3):
+        assert e.pipe.process_next() is False
+    assert e.ai.calls == 1
+    assert e.status(doc("b.pdf").url) == ("new", 0)  # left queued, not claimed
+    assert e.out.getvalue().count(CAP_TITLE) == 1
+
+
+def test_api_error_retried_then_failed_after_3(tmp_path):
+    err = anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com"))
+    e = Env(tmp_path, err)
+    d = doc()
+    e.publish(d)
+    assert e.drain() == 1
+    assert e.status(d.url) == ("failed", 1)
+    assert e.drain() == 0  # not due yet (60 s backoff)
+    e.clock.now += 60
+    assert e.drain() == 1
+    assert e.status(d.url) == ("failed", 2)
+    e.clock.now += 119
+    assert e.drain() == 0  # second backoff is 120 s
+    e.clock.now += 1
+    assert e.drain() == 1
+    assert e.status(d.url) == ("failed", 3)
+    assert e.rules() == ["X2"]
+    assert "after 3 attempts" in e.findings[0].summary and e.findings[0].severity == "LOW"
+    e.clock.now += 10_000
+    assert e.drain() == 0
+    assert e.ai.calls == 3
+    assert len(e.pdf_requests()) == 1  # PDF cached across retries
+
+
+def test_bad_pdf_gives_d3(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    html, broken = doc("html.pdf", no="1"), doc("broken.pdf", no="2")
+    e.publish(html, broken)
+    assert e.drain() == 2
+    assert e.rules() == ["D3", "D3"]
+    assert all(f.severity == "LOW" for f in e.findings)
+    assert e.status(html.url) == ("failed", 1) and e.status(broken.url) == ("failed", 1)
+    e.clock.now += 10_000
+    assert e.drain() == 0  # permanent: never retried
+    assert e.ai.calls == 0
+
+
+def test_non_rg2_not_analysed(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    e.publish(doc("a.pdf", dt=9), doc("b.pdf", dt=7, no="2"))
+    assert e.drain() == 0
+    assert e.ai.calls == 0 and e.pdf_requests() == []
+    assert e.status(doc("a.pdf").url) == ("skipped", 0)
+
+
+def test_repeat_vote_rg2_types_analysed(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    e.publish(doc("a.pdf", dt=10), doc("b.pdf", dt=15, no="2"))
+    assert e.drain() == 2
+
+
+def test_removed_event_not_analysed(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc()
+    e.store.apply_events(P, e.store.start_sweep(P, "t"), [Event("added", d), Event("removed", d)])
+    e.pipe.submit([Event("removed", d)])
+    assert e.drain() == 0
+
+
+def test_refusal_gives_x1_and_records_cost(tmp_path):
+    e = Env(tmp_path, resp(clean_report(), stop="refusal"))
+    d = doc()
+    e.publish(d)
+    assert e.drain() == 1
+    assert e.rules() == ["X1"] and e.findings[0].severity == "LOW"
+    assert e.status(d.url) == ("failed", 1)
+    row = e.store._db.execute("SELECT status, cost_usd, result_json FROM analyses").fetchone()
+    assert row[0] == "failed" and row[1] > 0 and row[2] is None
+    assert e.store.total_spend() == pytest.approx(row[1])
+    e.clock.now += 10_000
+    assert e.drain() == 0
+
+
+def test_illegible_report_only_v8_v10(tmp_path):
+    r = clean_report()
+    for k in ("registered", "first_voter_number", "voted", "ballots_in_box", "invalid", "valid",
+              "assisted", "outside_voted", "outside_confirmations"):
+        r["numbers"][k] = nf(None, legible=False, mark="empty")
+    r["numbers"]["list_votes"] = [{"row": i, "field": nf(None, legible=False, mark="empty")}
+                                  for i in (1, 2)]
+    r["yesno"] = {k: {"answer": "unclear"} for k in r["yesno"]}
+    r["times"] = {"open_time": None, "close_time": None, "completed_at": None}
+    r["header"].update(station_no=None, sections_present=[], pages_match_same_form=False)
+    r["signatures"].update(president_signed=False, signatures_look_same_hand=True)
+    r["visual"].update(page_quality="unreadable", pasted_or_patched_area=True)
+    r["confidence"] = "low"
+    e = Env(tmp_path, resp(r))
+    e.publish(doc())
+    e.drain()
+    assert e.rules() == ["V10", "V8"]
+
+
+def test_unexpected_exception_retried_worker_survives(tmp_path, monkeypatch):
+    e = Env(tmp_path, resp(clean_report()))
+    from rg2watch import pipeline
+    real, calls = pipeline.render_tiles, []
+
+    def flaky(path):
+        calls.append(1)
+        if len(calls) == 1:
+            raise MemoryError("boom")
+        return real(path)
+
+    monkeypatch.setattr(pipeline, "render_tiles", flaky)
+    d = doc()
+    e.publish(d)
+    assert e.drain() == 1
+    assert e.status(d.url) == ("failed", 1)
+    e.clock.now += 60
+    assert e.drain() == 1
+    assert e.status(d.url) == ("done", 2)
+
+
+def test_restart_requeues_running(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc()
+    e.publish(d)
+    assert [x.url for x in e.store.next_for_analysis(5)] == [d.url]  # claimed, then "crash"
+    assert e.status(d.url) == ("running", 1)
+    assert e.drain() == 0
+    pipe2 = AnalysisPipeline(e.rik, e.store, e.notifier, e.ai, e.cfg, e.on_findings,
+                             tmp_path / "cache", clock=e.clock)
+    pipe2.start()
+    pipe2.stop()
+    assert e.status(d.url)[0] in ("new", "done")
+    while pipe2.process_next():
+        pass
+    assert e.status(d.url) == ("done", 2)
+
+
+def test_other_election_docs_ignored(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    other = doc("a.pdf")
+    e.store.apply_events("999", e.store.start_sweep("999", "t"), [Event("added", other)])
+    assert e.drain() == 0
+
+
+def test_threads_process_and_stop(tmp_path):
+    e = Env(tmp_path, resp(clean_report()), analysis_workers=2)
+    e.pipe.start()
+    try:
+        e.publish(doc("a.pdf", no="1"), doc("b.pdf", no="2"))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and e.ai.calls < 2:
+            time.sleep(0.01)
+        while time.monotonic() < deadline and e.status(doc("b.pdf").url)[0] != "done":
+            time.sleep(0.01)
+    finally:
+        e.pipe.stop()
+    assert e.ai.calls == 2
+    assert not any(t.is_alive() for t in e.pipe._threads)
+    assert e.status(doc("a.pdf").url)[0] == "done" and e.status(doc("b.pdf").url)[0] == "done"
+
+
+def test_notifier_status_is_thread_safe():
+    out = io.StringIO()
+    n = Notifier(Config(), None, out=out)
+    threads = [threading.Thread(target=lambda: [n.status("x") for _ in range(200)]) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert out.getvalue() == "x\n\n" * 800
+
+
+# CLI ---------------------------------------------------------------------------
+
+def test_anthropic_client_detects_missing_credentials(monkeypatch):
+    from rg2watch import cli
+
+    monkeypatch.undo()  # drop the conftest stub to test the real factory
+
+    class NoCreds:
+        api_key = auth_token = credentials = None
+
+    class WithKey(NoCreds):
+        api_key = "k"
+
+    def boom():
+        raise RuntimeError("bad profile")
+
+    monkeypatch.setattr(anthropic, "Anthropic", NoCreds)
+    client, why = cli._anthropic_client()
+    assert client is None and "ANTHROPIC_API_KEY" in why
+    monkeypatch.setattr(anthropic, "Anthropic", boom)
+    client, why = cli._anthropic_client()
+    assert client is None and "bad profile" in why
+    monkeypatch.setattr(anthropic, "Anthropic", WithKey)
+    client, why = cli._anthropic_client()
+    assert isinstance(client, WithKey) and why is None
+
+
+def test_handlers_submit_to_pipeline_guarded(caplog):
+    from rg2watch.cli import _handlers
+
+    class Boom:
+        def submit(self, events):
+            raise RuntimeError("queue broke")
+
+    store = Store(":memory:")
+    d = doc(dt=9)
+    evs = [Event("added", d)]
+    store.apply_events(P, store.start_sweep(P, "t"), evs)
+    on_events, _ = _handlers(store, Notifier(Config(), None, out=io.StringIO()), P, Boom())
+    on_events(evs)  # must not raise
+    assert [f.rule for _, f in store.unalerted(P, {"HIGH", "MEDIUM", "LOW"})] == ["D1"]
+    assert "queue broke" in caplog.text
+
+
+def _watch_env(tmp_path, monkeypatch, ai):
+    from rg2watch import cli
+    from rg2watch.watcher import Watcher
+
+    db = tmp_path / "w.sqlite"
+    s = Store(db)
+    s.upsert_election(Election(P, "660578", "3", "Test", "http://127.0.0.1:9"))
+    s.close()
+    made, sleeps = [], []
+
+    class FakePipeline:
+        def __init__(self, *a, **kw):
+            self.args, self.started, self.stopped = a, False, False
+            made.append(self)
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            self.stopped = True
+
+        def submit(self, events):
+            pass
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_anthropic_client", lambda: (ai, None if ai else "no credentials"))
+    monkeypatch.setattr(cli, "AnalysisPipeline", FakePipeline)
+    monkeypatch.setattr(Watcher, "run_once", lambda self: None)
+    monkeypatch.setattr(cli.time, "sleep", fake_sleep)
+    return db, made
+
+
+def test_watch_starts_and_stops_pipeline(tmp_path, monkeypatch):
+    from rg2watch.cli import main
+
+    ai = FakeAnthropic(None)
+    db, made = _watch_env(tmp_path, monkeypatch, ai)
+    assert main(["watch", "--parent", P, "--db", str(db)]) == 0
+    assert len(made) == 1 and made[0].started and made[0].stopped
+    assert made[0].args[3] is ai
+
+
+def test_watch_without_credentials_warns_and_watches(tmp_path, monkeypatch, capsys):
+    from rg2watch.cli import main
+
+    db, made = _watch_env(tmp_path, monkeypatch, None)
+    assert main(["watch", "--parent", P, "--db", str(db)]) == 0
+    assert made == []
+    err = capsys.readouterr().err
+    assert err.count("WARNING rg2watch.cli: analysis disabled: no credentials") == 1
+
+
+def test_watch_no_analyze_skips_credentials(tmp_path, monkeypatch):
+    from rg2watch import cli
+
+    db, made = _watch_env(tmp_path, monkeypatch, FakeAnthropic(None))
+    monkeypatch.setattr(cli, "_anthropic_client", lambda: pytest.fail("must not build a client"))
+    assert cli.main(["watch", "--parent", P, "--db", str(db), "--no-analyze"]) == 0
+    assert made == []
+
+
+def test_analyze_local_pdf_json(tmp_path, monkeypatch, capsys):
+    from rg2watch import cli
+
+    pdf = make_pdf(tmp_path / "x.pdf")
+    ai = FakeAnthropic(resp(overwritten_report()))
+    monkeypatch.setattr(cli, "_anthropic_client", lambda: (ai, None))
+    assert cli.main(["analyze", str(pdf), "--json", "--db", str(tmp_path / "d.sqlite")]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["report"]["numbers"]["voted"]["mark"] == "overwritten"
+    assert [f["rule"] for f in out["findings"]] == ["V1"]
+    assert out["cost_usd"] > 0 and out["model"] == "claude-opus-5-5"
+
+
+def test_analyze_human_summary(tmp_path, monkeypatch, capsys):
+    from rg2watch import cli
+
+    pdf = make_pdf(tmp_path / "x.pdf")
+    monkeypatch.setattr(cli, "_anthropic_client", lambda: (FakeAnthropic(resp(overwritten_report())), None))
+    assert cli.main(["analyze", str(pdf), "--db", str(tmp_path / "d.sqlite")]) == 0
+    out = capsys.readouterr().out
+    assert "[HIGH] V1" in out and "confidence high" in out
+
+
+def test_analyze_without_credentials_exits_2(tmp_path, monkeypatch, capsys):
+    from rg2watch import cli
+
+    monkeypatch.setattr(cli, "_anthropic_client", lambda: (None, "no credentials"))
+    assert cli.main(["analyze", str(make_pdf(tmp_path / "x.pdf"))]) == 2
+    assert "no credentials" in capsys.readouterr().err
+
+
+def test_analyze_url_of_unregistered_host_refused(tmp_path, monkeypatch, capsys):
+    from rg2watch import cli
+
+    ai = FakeAnthropic(resp(clean_report()))
+    monkeypatch.setattr(cli, "_anthropic_client", lambda: (ai, None))
+    monkeypatch.setattr(cli, "fetch_pdf", lambda *a: pytest.fail("must not download"))
+    assert cli.main(["analyze", "https://evil.example/x.pdf", "--db", str(tmp_path / "d.sqlite")]) == 2
+    assert "registered election" in capsys.readouterr().err and ai.calls == 0
+
+
+def test_analyze_url_of_known_document(tmp_path, monkeypatch, capsys):
+    from rg2watch import cli
+
+    db = tmp_path / "d.sqlite"
+    s = Store(db)
+    s.upsert_election(ELECTION)
+    d = doc(no="7")
+    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", d)])
+    s.close()
+    pdf, seen = make_pdf(tmp_path / "x.pdf"), []
+
+    def fake_fetch(client, url, cache_dir):
+        seen.append((client.election.parent, url))
+        return pdf
+
+    report = clean_report()  # station 0012 on the form vs 7 in the listing -> V9
+    monkeypatch.setattr(cli, "_anthropic_client", lambda: (FakeAnthropic(resp(report)), None))
+    monkeypatch.setattr(cli, "fetch_pdf", fake_fetch)
+    assert cli.main(["analyze", d.url, "--json", "--db", str(db)]) == 0
+    assert seen == [(P, d.url)]
+    assert [f["rule"] for f in json.loads(capsys.readouterr().out)["findings"]] == ["V9"]

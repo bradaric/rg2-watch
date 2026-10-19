@@ -1,5 +1,6 @@
 import re
 import sys
+import threading
 import time
 from datetime import datetime
 from urllib.parse import quote
@@ -60,6 +61,7 @@ class Notifier:
         self._status: list[str] = []
         self._backoff = 0.0
         self._backoff_until = 0.0
+        self._lock = threading.RLock()  # status() is called from analysis worker threads
 
     def _post(self, title: str, body: str, priority: str, tags: str, click: str | None = None) -> bool:
         """Push one message; after a failure, skip pushes until the backoff window ends."""
@@ -91,16 +93,21 @@ class Notifier:
 
     def status(self, text: str) -> None:
         """Self-alert about the watcher itself (HIGH, not stored): printed now, pushed until delivered."""
-        print(f"{text}\n", file=self.out, flush=True)
-        if self.cfg.ntfy_topic:
-            self._status.append(text)
-            self._flush_status()
+        with self._lock:
+            print(f"{text}\n", file=self.out, flush=True)
+            if self.cfg.ntfy_topic:
+                self._status.append(text)
+                self._flush_status()
 
     def _flush_status(self) -> None:
         while self._status and self._post(self._status[0], self._status[0], "high", "warning"):
             self._status.pop(0)
 
     def send(self, findings_with_ids: list[tuple[int, Finding]]) -> list[int]:
+        with self._lock:
+            return self._send(findings_with_ids)
+
+    def _send(self, findings_with_ids: list[tuple[int, Finding]]) -> list[int]:
         delivered: list[int] = []
         push = bool(self.cfg.ntfy_topic)
         self._flush_status()

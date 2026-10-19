@@ -152,3 +152,30 @@ def test_old_events_table_is_migrated(tmp_path):
     assert s._db.execute("SELECT previous_url FROM events").fetchone()[0] == "https://x/0.pdf"
     s.close()
     Store(path).close()  # re-opening an already migrated DB is fine
+
+
+def test_phase1a_db_migrates_analysis_queue(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "old.sqlite"
+    con = sqlite3.connect(db)
+    con.executescript("""
+        CREATE TABLE documents(id INTEGER PRIMARY KEY, parent TEXT NOT NULL, municipality TEXT,
+            station_no TEXT, station_name TEXT, station_key TEXT, doc_type INTEGER, label TEXT,
+            url TEXT NOT NULL UNIQUE, uploaded_at TEXT, first_seen_at TEXT, sha256 TEXT,
+            status TEXT DEFAULT 'new', active INTEGER DEFAULT 1);
+        CREATE TABLE analyses(id INTEGER PRIMARY KEY, document_id INTEGER, model TEXT,
+            prompt_version TEXT, result_json TEXT, created_at TEXT, cost_usd REAL);
+        INSERT INTO documents(parent, municipality, station_no, doc_type, label, url)
+            VALUES('p', 'm', '1', 6, 'l', 'u6'), ('p', 'm', '1', 9, 'l', 'u9');
+    """)
+    con.commit()
+    con.close()
+    s = Store(db)
+    rows = dict(s._db.execute("SELECT url, analysis_status FROM documents").fetchall())
+    assert rows == {"u6": "new", "u9": "skipped"}
+    assert [d.url for d in s.next_for_analysis(5, now=0)] == ["u6"]
+    s.save_failed_analysis("u6", "m", "v1", 0.5, "refused")
+    assert s.total_spend() == 0.5
+    s.close()
+    Store(db).close()  # second open: migration is idempotent

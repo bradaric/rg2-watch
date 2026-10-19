@@ -1,10 +1,19 @@
 import json
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rg2watch.models import Doc, Election, Event, Finding, Scope, doc_key
+
+if TYPE_CHECKING:
+    from rg2watch.analyze import AnalysisResult
+
+ANALYSED_TYPES = (6, 10, 15, 16)  # RG-2 and repeat-vote RG-2
+MAX_ANALYSIS_ATTEMPTS = 3
+_ANALYSED = ",".join(map(str, ANALYSED_TYPES))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS elections(
@@ -13,11 +22,13 @@ CREATE TABLE IF NOT EXISTS documents(
     id INTEGER PRIMARY KEY, parent TEXT NOT NULL, municipality TEXT, station_no TEXT,
     station_name TEXT, station_key TEXT, doc_type INTEGER, label TEXT,
     url TEXT NOT NULL UNIQUE, uploaded_at TEXT, first_seen_at TEXT,
-    sha256 TEXT, status TEXT DEFAULT 'new', active INTEGER DEFAULT 1);
+    sha256 TEXT, status TEXT DEFAULT 'new', active INTEGER DEFAULT 1,
+    analysis_status TEXT, analysis_attempts INTEGER DEFAULT 0, analysis_next_at REAL,
+    analysis_error TEXT);
 CREATE INDEX IF NOT EXISTS documents_parent ON documents(parent, active);
 CREATE TABLE IF NOT EXISTS analyses(
     id INTEGER PRIMARY KEY, document_id INTEGER, model TEXT, prompt_version TEXT,
-    result_json TEXT, created_at TEXT, cost_usd REAL);
+    result_json TEXT, created_at TEXT, cost_usd REAL, status TEXT, error TEXT);
 CREATE TABLE IF NOT EXISTS findings(
     id INTEGER PRIMARY KEY, document_id INTEGER, parent TEXT, municipality TEXT,
     station_no TEXT, rule TEXT, severity TEXT, summary TEXT, details_json TEXT,
@@ -67,6 +78,23 @@ class Store:
         if "previous_url" not in cols:
             with self._db:
                 self._db.execute("ALTER TABLE events ADD COLUMN previous_url TEXT")
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(analyses)")}
+        with self._db:
+            for col in ("status", "error"):
+                if col not in cols:
+                    self._db.execute(f"ALTER TABLE analyses ADD COLUMN {col} TEXT")
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(documents)")}
+        if "analysis_status" not in cols:
+            with self._db:
+                self._db.execute("ALTER TABLE documents ADD COLUMN analysis_status TEXT")
+                self._db.execute(
+                    "ALTER TABLE documents ADD COLUMN analysis_attempts INTEGER DEFAULT 0")
+                self._db.execute("ALTER TABLE documents ADD COLUMN analysis_next_at REAL")
+                self._db.execute("ALTER TABLE documents ADD COLUMN analysis_error TEXT")
+                # documents recorded before analysis existed: every RG-2 is analysed once
+                self._db.execute(
+                    "UPDATE documents SET analysis_status = CASE WHEN doc_type IN "
+                    f"({_ANALYSED}) THEN 'new' ELSE 'skipped' END")
 
     def close(self) -> None:
         with self._lock:
@@ -87,6 +115,17 @@ class Store:
         with self._lock:
             r = self._db.execute("SELECT * FROM elections WHERE parent=?", (parent,)).fetchone()
         return Election(r["parent"], r["round"], r["election_type"], r["title"], r["url"]) if r else None
+
+    def elections(self) -> list[Election]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM elections ORDER BY parent").fetchall()
+        return [Election(r["parent"], r["round"], r["election_type"], r["title"], r["url"]) for r in rows]
+
+    def find_document(self, url: str) -> tuple[str, Doc] | None:
+        """(parent, doc) for a stored document URL."""
+        with self._lock:
+            r = self._db.execute("SELECT * FROM documents WHERE url=?", (url,)).fetchone()
+        return (r["parent"], _doc(r)) if r else None
 
     def known_docs(self, parent: str, scope: Scope) -> dict[tuple[str, int | str], Doc]:
         sql, args = "SELECT * FROM documents WHERE parent=? AND active=1", [parent]
@@ -131,10 +170,12 @@ class Store:
                                                  (r["id"],))
                     self._db.execute(
                         "INSERT INTO documents(parent, municipality, station_no, station_name, "
-                        "station_key, doc_type, label, url, uploaded_at, first_seen_at) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET active=1",
+                        "station_key, doc_type, label, url, uploaded_at, first_seen_at, "
+                        "analysis_status) VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(url) DO UPDATE SET active=1",
                         (parent, d.municipality, d.station_no, d.station_name, d.station_key,
-                         d.doc_type, d.label, d.url, d.uploaded_at, now))
+                         d.doc_type, d.label, d.url, d.uploaded_at, now,
+                         "new" if d.doc_type in ANALYSED_TYPES else "skipped"))
                 row = self._db.execute("SELECT id FROM documents WHERE url=?", (d.url,)).fetchone()
                 self._db.execute(
                     "INSERT INTO events(sweep_id, parent, kind, document_id, station_key, "
@@ -227,3 +268,79 @@ class Store:
         with self._lock, self._db:
             self._db.executemany("UPDATE findings SET alerted_at=? WHERE id=?",
                                  [(_now(), i) for i in ids])
+
+    # analysis queue --------------------------------------------------------
+    def queue_analysis(self, url: str) -> bool:
+        """Queue an RG-2 document that is not queued yet; returns True when it is pending."""
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE documents SET analysis_status='new' WHERE url=? AND "
+                f"(analysis_status IS NULL OR analysis_status='skipped') AND doc_type IN ({_ANALYSED})",
+                (url,))
+            row = self._db.execute("SELECT analysis_status FROM documents WHERE url=?",
+                                   (url,)).fetchone()
+        return row is not None and row["analysis_status"] == "new"
+
+    def next_for_analysis(self, limit: int, parent: str | None = None,
+                          now: float | None = None) -> list[Doc]:
+        """Claim up to `limit` due documents (marked running, attempts+1), newest first.
+
+        Due: active RG-2 types, attempts < 3, status new, or failed with a retry time
+        that has passed (permanent failures have no retry time).
+        """
+        now = time.time() if now is None else now
+        sql = (f"SELECT * FROM documents WHERE active=1 AND doc_type IN ({_ANALYSED}) "
+               "AND analysis_attempts < ? AND (analysis_status='new' OR (analysis_status='failed' "
+               "AND analysis_next_at IS NOT NULL AND analysis_next_at <= ?))")
+        args: list = [MAX_ANALYSIS_ATTEMPTS, now]
+        if parent is not None:
+            sql += " AND parent=?"
+            args.append(parent)
+        with self._lock, self._db:
+            rows = self._db.execute(sql + " ORDER BY id DESC LIMIT ?", [*args, limit]).fetchall()
+            self._db.executemany(
+                "UPDATE documents SET analysis_status='running', "
+                "analysis_attempts=analysis_attempts+1, analysis_next_at=NULL WHERE id=?",
+                [(r["id"],) for r in rows])
+        return [_doc(r) for r in rows]
+
+    def analysis_attempts(self, url: str) -> int:
+        with self._lock:
+            row = self._db.execute("SELECT analysis_attempts FROM documents WHERE url=?",
+                                   (url,)).fetchone()
+        return row["analysis_attempts"] if row else 0
+
+    def mark_analysis(self, url: str, status: str, error: str | None = None,
+                      retry_at: float | None = None) -> None:
+        """status done|failed; a failed document is retried at `retry_at` (None = never)."""
+        self._write(
+            "UPDATE documents SET analysis_status=?, analysis_next_at=?, analysis_error=? WHERE url=?",
+            (status, retry_at if status == "failed" else None, error, url))
+
+    def requeue_running(self) -> int:
+        """Documents left running by a previous process go back to new."""
+        return self._write("UPDATE documents SET analysis_status='new' "
+                           "WHERE analysis_status='running'").rowcount
+
+    def save_analysis(self, url: str, result: "AnalysisResult", prompt_version: str) -> None:
+        self._insert_analysis(url, result.model, prompt_version, json.dumps(result.report),
+                              result.cost_usd, "done", None)
+
+    def save_failed_analysis(self, url: str, model: str, prompt_version: str, cost_usd: float,
+                             error: str) -> None:
+        """Record a billed attempt that produced no usable report (keeps total_spend accurate)."""
+        self._insert_analysis(url, model, prompt_version, None, cost_usd, "failed", error)
+
+    def _insert_analysis(self, url, model, prompt_version, result_json, cost_usd, status, error):
+        with self._lock, self._db:
+            row = self._db.execute("SELECT id FROM documents WHERE url=?", (url,)).fetchone()
+            self._db.execute(
+                "INSERT INTO analyses(document_id, model, prompt_version, result_json, created_at, "
+                "cost_usd, status, error) VALUES(?,?,?,?,?,?,?,?)",
+                (row["id"] if row else None, model, prompt_version, result_json, _now(), cost_usd,
+                 status, error))
+
+    def total_spend(self) -> float:
+        with self._lock:
+            row = self._db.execute("SELECT COALESCE(SUM(cost_usd), 0) AS s FROM analyses").fetchone()
+        return float(row["s"])
