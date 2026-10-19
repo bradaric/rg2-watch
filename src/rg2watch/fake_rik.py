@@ -16,13 +16,15 @@ PAGE_SIZE = 10
 class FakeRik:
     def __init__(self, election: Election, records: list[dict], municipalities: dict[str, str],
                  stations: dict[str, dict[str, str]], clock: Callable[[], str] | None = None,
-                 pdf_dir: Path | None = None):
+                 pdf_dir: Path | None = None,
+                 listing_names: dict[str, str] | None = None):
         self.election = election
         self.records = records
         self.municipalities = municipalities  # id -> name
         self.stations = stations  # municipality id -> {station option id: station no}
         self.clock = clock
         self.pdf_dir = pdf_dir
+        self.listing_names = listing_names or {}  # id -> name shown in listing records
         self.request_log: list[dict] = []
         self.fail_status: int | None = None
         self.hidden_in_sweeps: set[str] = set()
@@ -92,6 +94,8 @@ class FakeRik:
         out = []
         for rec, docs in matched[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]:
             item = {k: v for k, v in rec.items() if not k.startswith("_")}
+            if rec.get("_municipality_id") in self.listing_names:
+                item["municipality"] = self.listing_names[rec["_municipality_id"]]
             item["extfiles"] = [{"extfile": self._extfile(docs), "uid": "u", "date": "", "file_type": ""}]
             out.append(item)
         pagination = ""

@@ -11,8 +11,9 @@ class Config:
     max_rps: float = 2.0
     probe_interval_s: int = 30
     rare_interval_s: int = 60
-    safety_sweep_interval_s: int = 1800
+    safety_sweep_interval_s: int = 900
     missing_station_threshold: int = 50
+    missing_max_per_tick: int = 10
     probe_cost_guard: bool = True
     watchlist: list[str] = field(default_factory=list)
     ntfy_url: str = "https://ntfy.sh"

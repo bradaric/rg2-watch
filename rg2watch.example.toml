@@ -9,9 +9,11 @@ probe_interval_s = 30
 # Seconds between sweeps of rare document types
 rare_interval_s = 60
 # Seconds between full safety sweeps
-safety_sweep_interval_s = 1800
+safety_sweep_interval_s = 900
 # Stations missing from a sweep before it is treated as suspicious
 missing_station_threshold = 50
+# Max per-station re-queries per tick for stations still without an RG-2
+missing_max_per_tick = 10
 # Do a full RG-2 sweep instead of per-municipality probes when probing would cost as much
 probe_cost_guard = true
 # Municipalities/stations to flag with priority

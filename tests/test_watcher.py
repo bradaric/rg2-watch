@@ -43,13 +43,14 @@ class FakeTime:
         self.now += s
 
 
-def env(guard=False, records=None, watchlist=()):
+def env(guard=False, records=None, watchlist=(), munis=None, listing_names=None, **cfg_kw):
     t = FakeTime()
-    fake = FakeRik(ELECTION, records or make_records(), MUNIS, STATIONS)
+    fake = FakeRik(ELECTION, records or make_records(), munis or MUNIS, STATIONS,
+                   listing_names=listing_names)
     limiter = AdaptiveLimiter(2.0, clock=t.clock, sleep=t.sleep)
     client = RikClient(ELECTION, limiter, httpx.Client(transport=httpx.MockTransport(fake.handle)))
     store = Store(":memory:")
-    cfg = Config(probe_cost_guard=guard, watchlist=list(watchlist))
+    cfg = Config(probe_cost_guard=guard, watchlist=list(watchlist), **cfg_kw)
     batches: list[list] = []
     w = Watcher(client, store, cfg, batches.append, clock=t.clock, sleep=t.sleep)
     return w, fake, store, t, batches, limiter
@@ -122,20 +123,23 @@ def test_replacement_detected_by_safety_sweep():
     batches.clear()
     old = store.known_docs(P, Scope(doc_type=6))[("Beta|2", 6)].url
     fake.replace_doc("Beta|2", 6, "/extfile/102/2/rg2_v2.pdf")
-    t.now += 1800
+    t.now += 900
     w.run_once()
     ev = events(batches)
     assert [(e.kind, e.previous_url) for e in ev] == [("replaced", old)]
     assert ev[0].doc.url.endswith("rg2_v2.pdf")
 
 
-def test_removed_requires_confirmation():
+def test_removed_confirmed_by_direct_station_query():
+    # Count drops, so the probe lane's per-municipality sweep of Alpha finds the candidate.
     w, fake, store, t, batches, _ = env()
     w.run_once()
     batches.clear()
     fake.remove_doc("Alpha|4", 6)
-    t.now += 1800
+    t.now += 60
+    fake.request_log.clear()
     w.run_once()
+    assert listing_reqs(fake, **{"filters[election_station_no]": "10104"})
     assert [(e.kind, e.doc.station_key) for e in events(batches)] == [("removed", "Alpha|4")]
     assert ("Alpha|4", 6) not in store.known_docs(P, Scope(doc_type=6))
 
@@ -145,7 +149,7 @@ def test_shifted_page_does_not_emit_removed():
     w.run_once()
     batches.clear()
     fake.hide_from_sweeps("Alpha|4")
-    t.now += 1800
+    t.now += 900
     fake.request_log.clear()
     w.run_once()
     assert events(batches) == []
@@ -185,3 +189,60 @@ def test_malformed_record_does_not_crash_watcher():
     ev = events(batches)
     assert len([e for e in ev if e.doc.doc_type == 6]) == 33
     assert [e.doc.doc_type for e in ev if e.doc.doc_type != 6] == [28]
+
+
+def test_missing_threshold_exceeded_queries_nothing():
+    w, fake, *_ = env(missing_station_threshold=2)  # 3 stations lack RG-2
+    w.run_once()
+    assert listing_reqs_station(fake) == []
+
+
+def test_missing_per_tick_budget_prefers_never_queried():
+    w, fake, store, t, batches, _ = env(missing_max_per_tick=2)
+    w.run_once()
+    assert len(listing_reqs_station(fake)) == 2
+    fake.request_log.clear()
+    t.now += 30
+    w.run_once()
+    got = listing_reqs_station(fake)
+    assert len(got) == 2 and ("103", "10312") in got  # never-queried station goes first
+
+
+def test_missing_backoff_doubles():
+    w, fake, store, t, batches, _ = env()
+    fake.add_doc("Gamma|12", doc(6, "/extfile/103/12/rg2_v1.pdf"))  # 2 stations missing
+    counts = []
+    for _ in range(4):
+        fake.request_log.clear()
+        w.run_once()
+        counts.append(len(listing_reqs_station(fake)))
+        t.now += 30
+    assert counts == [2, 2, 0, 2]  # queried at +0, +30, next due +90
+
+
+def test_incomplete_municipality_list_falls_back_to_full_sweep(caplog):
+    w, fake, store, t, batches, _ = env(munis={"101": "Alpha", "102": "Beta"})
+    w.run_once()
+    assert len(events(batches)) == 33  # Gamma docs found via the full sweep
+    batches.clear()
+    fake.add_doc("Gamma|12", doc(6, "/extfile/103/12/rg2_v1.pdf"))
+    t.now += 60
+    w.run_once()
+    assert [(e.kind, e.doc.station_key) for e in events(batches)] == [("added", "Gamma|12")]
+    assert store.get_count(P, "rg2") is None
+    fake.request_log.clear()
+    t.now += 700
+    w.run_once()
+    assert any(r["path"].endswith("getElectionStations.php") for r in fake.request_log)
+
+
+def test_unknown_listing_name_warns_once_and_is_not_re_added(caplog):
+    w, fake, store, t, batches, _ = env(listing_names={"103": "Gamma-L"})
+    with caplog.at_level("WARNING", logger="rg2watch.watcher"):
+        for _ in range(3):
+            w.run_once()
+            t.now += 60
+    gamma = [e for e in events(batches) if e.doc.municipality == "Gamma-L"]
+    assert len(gamma) == 11 and all(e.kind == "added" for e in gamma)
+    assert len(events(batches)) == 33
+    assert len([r for r in caplog.records if "Gamma-L" in r.getMessage()]) == 1

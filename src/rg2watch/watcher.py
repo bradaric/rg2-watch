@@ -11,6 +11,8 @@ from .rik_client import PAGE_SIZE, RikClient, RikUnavailable
 from .store import Store
 
 log = logging.getLogger("rg2watch.watcher")
+REFRESH_MIN_S = 600
+MISSING_BACKOFF_CAP_S = 600
 
 
 class Watcher:
@@ -22,6 +24,11 @@ class Watcher:
         self._bootstrapped = False
         self._abort = False
         self._stats: dict[str, int] = {}
+        self._refresh_wanted = False
+        self._last_bootstrap: float | None = None
+        self._warned: set[str] = set()
+        self._unknown_seen = False
+        self._missing_state: dict[str, tuple[float, float]] = {}  # station key -> (next_at, delay)
         # The safety sweep first fires one interval after start; other lanes fire immediately.
         self._last: dict[str, float] = {"safety": clock()}
         self._lanes = [
@@ -32,15 +39,17 @@ class Watcher:
             ("safety", cfg.safety_sweep_interval_s, self._safety),
         ]
 
-    def bootstrap(self) -> None:
+    def bootstrap(self, refresh: bool = False) -> None:
         self.store.upsert_election(self.client.election)
-        if not self.store.municipality_ids(self.parent):
+        if refresh or not self.store.municipality_ids(self.parent):
             self.store.save_municipalities(self.parent, self.client.municipalities())
         for mid in self.store.municipality_ids(self.parent).values():
             if not self.store.station_ids(self.parent, mid):
                 options = self.client.stations(mid)  # station id -> station no
                 self.store.save_stations(self.parent, mid, {no: sid for sid, no in options.items()})
         self._bootstrapped = True
+        self._refresh_wanted = False
+        self._last_bootstrap = self.clock()
 
     def run_once(self) -> None:
         self._abort = False
@@ -50,6 +59,12 @@ class Watcher:
             except Exception as exc:
                 log.warning("bootstrap failed: %r", exc)
                 self._abort = True
+        elif self._refresh_wanted and self.clock() - (self._last_bootstrap or 0) >= REFRESH_MIN_S:
+            try:
+                self.bootstrap(refresh=True)
+            except Exception as exc:
+                log.warning("municipality refresh failed: %r", exc)
+                self._abort = isinstance(exc, RikUnavailable)
         for name, interval, fn in self._lanes:
             if self._abort:
                 break
@@ -113,15 +128,26 @@ class Watcher:
                 ok = False
         if doc_type is not None:
             docs = [d for d in docs if d.doc_type == doc_type]
+        known_names = self.store.municipality_ids(self.parent)
+        for name in {d.municipality for d in docs} - set(known_names):
+            self._unknown_seen = True
+            self._refresh_wanted = True
+            if name not in self._warned:
+                self._warned.add(name)
+                log.warning("listing municipality %r is not among stored municipalities", name)
+        if scope.municipality is not None:
+            # Docs under another name cannot be diffed in this scope; the probe falls back to a full sweep.
+            docs = [d for d in docs if d.municipality == scope.municipality]
         events = diff(self.store.known_docs(self.parent, scope), docs, complete and ok)
-        self._emit(sweep_id, self._confirm_removed(events))
-        return ok, docs
+        events, confirmed = self._confirm_removed(events)
+        self._emit(sweep_id, events)
+        return ok and confirmed, docs
 
-    def _confirm_removed(self, events: list[Event]) -> list[Event]:
+    def _confirm_removed(self, events: list[Event]) -> tuple[list[Event], bool]:
         """Drop removal candidates unless a direct per-station query also lacks the document."""
         names = self.store.municipality_ids(self.parent)
         direct: dict[str, set] = {}
-        out = []
+        out, ok = [], True
         for ev in events:
             if ev.kind != "removed":
                 out.append(ev)
@@ -136,15 +162,16 @@ class Watcher:
                 try:
                     page = self._listing(Filters(municipality_id=mid, station_no_id=sid), 1)
                 except RikUnavailable:
-                    self._abort = True
+                    self._abort, ok = True, False
                     break
                 except Exception:
                     log.exception("removal re-check failed for %s", d.station_key)
+                    ok = False
                     continue
                 direct[d.station_key] = {doc_key(x) for x in page.docs}
             if doc_key(d) not in direct[d.station_key]:
                 out.append(ev)
-        return out
+        return out, ok
 
     def _emit(self, sweep_id: int, events: list[Event]) -> None:
         if not events:
@@ -199,7 +226,8 @@ class Watcher:
                     self.store.set_count(self.parent, f"rg2:m:{mid}", per.get(name, 0))
                 self.store.set_count(self.parent, "rg2", total)
             return
-        all_ok = True
+        # Count-neutral changes (one add + one removal) are caught by the safety sweep.
+        all_ok, counts, self._unknown_seen = True, 0, False
         for name, mid in names.items():
             if self._abort:
                 return
@@ -213,12 +241,18 @@ class Watcher:
                         all_ok = False
                         continue
                 self.store.set_count(self.parent, key, n)
+                counts += n
             except RikUnavailable:
                 raise
             except Exception:
                 log.exception("probe: municipality %s failed", name)
                 all_ok = False
-        if all_ok:
+        if all_ok and (counts != total or self._unknown_seen):
+            # Stored municipality list is incomplete or names disagree: sweep everything,
+            # leave the global count unstored so the next tick probes again, refresh municipalities.
+            self._refresh_wanted = True
+            self._sweep(sweep_id, full, Scope(doc_type=6), complete=False, doc_type=6)
+        elif all_ok:
             self.store.set_count(self.parent, "rg2", total)
 
     def _missing(self, sweep_id: int) -> None:
@@ -230,9 +264,16 @@ class Watcher:
                     missing.append((f"{name}|{no}", mid, sid))
         if not missing or len(missing) > self.cfg.missing_station_threshold:
             return
-        for key, mid, sid in missing:
+        now = self.clock()
+        due = sorted((self._missing_state.get(m[0], (0.0, 0.0))[0], i) for i, m in enumerate(missing)
+                     if self._missing_state.get(m[0], (0.0, 0.0))[0] <= now)
+        for _, i in due[:self.cfg.missing_max_per_tick]:
+            key, mid, sid = missing[i]
             if self._abort:
                 break
+            delay = self._missing_state.get(key, (0.0, self.cfg.probe_interval_s / 2))[1]
+            delay = min(MISSING_BACKOFF_CAP_S, delay * 2)
+            self._missing_state[key] = (now + delay, delay)
             try:
                 page = self._listing(Filters(municipality_id=mid, station_no_id=sid), 1)
                 docs = [d for d in page.docs if d.station_key == key]
