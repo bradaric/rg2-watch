@@ -23,13 +23,23 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
 
        RG2W_NTFY_TOPIC=<topic> uv run rg2watch watch --parent <parent> --config rg2watch.toml
 
-   HIGH findings (RG-8/RG-9 published, RG-2 replaced) are pushed immediately, MEDIUM in digests, LOW
-   only printed. Every finding is also printed to stdout. If ntfy is unreachable, findings stay
-   un-alerted and are retried every tick. Ctrl-C stops cleanly; state is kept in the SQLite DB
+   HIGH findings (RG-8/RG-9 published, RG-2 replaced, with the old URL as "was: ...") are pushed
+   immediately, MEDIUM in digests, LOW only printed. Every finding is also printed (and flushed) to
+   stdout. If ntfy is unreachable, findings stay un-alerted and pushes back off (5 s doubling to
+   60 s) before being retried. Ctrl-C or SIGTERM stops cleanly; state is kept in the SQLite DB
    (`data/rg2watch.sqlite` by default, `--db` to change), so a restart resumes without re-alerting.
+
+   If RIK answers 401/403 repeatedly, all lanes pause for `blocked_pause_s`. After `blind_alert_s`
+   without a successful request you get one HIGH "[rg2-watch] RIK unreachable/blocking since HH:MM"
+   push, and "[rg2-watch] RIK reachable again" on recovery.
+
+   Starting mid-night on an empty DB? Add `--baseline`: each lane's first full pass records what is
+   already published without alerting, prints one `[baseline] <type>: N document(s) recorded` line
+   per document type, and later changes alert normally.
 4. Alerts are leads for manual review, not conclusions: open the PDF link and check it yourself.
 
-`watch --once` bootstraps, runs every lane once (including the safety sweep) and exits. `watch` also
+`watch --once` bootstraps, runs every lane once (including a full safety sweep, ignoring the page
+budget) and exits. `watch` also
 accepts a zapisnici URL instead of `--parent`. `--base-url` overrides the RIK host; `-v` enables debug logs.
 
 ## Replay (rehearsal without RIK)
@@ -48,7 +58,9 @@ Re-enact it locally with a fake RIK server (documents appear along their origina
 ## Politeness
 
 All lanes share one rate limiter (default 2 requests/s, `max_rps`) that halves on timeouts and 5xx
-and recovers slowly. The watcher keeps running when RIK is overloaded. Never point `replay`, tests or
+and recovers slowly. The watcher keeps running when RIK is overloaded. Full RG-2 sweeps are spread
+over ticks (`sweep_pages_per_tick`, default 20 pages) so the rare-type and count checks are never
+held up by a long sweep. Never point `replay`, tests or
 experiments at the live site beyond what an election night needs.
 
 ## Privacy

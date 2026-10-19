@@ -8,8 +8,14 @@ max_rps = 2.0
 probe_interval_s = 30
 # Seconds between sweeps of rare document types
 rare_interval_s = 60
-# Seconds between full safety sweeps
-safety_sweep_interval_s = 900
+# Seconds between the starts of full safety sweeps (a long sweep is followed straight by the next)
+safety_sweep_interval_s = 300
+# Max listing pages per tick for full RG-2 sweeps (safety, probe fallback), so other lanes keep running
+sweep_pages_per_tick = 20
+# Pause all lanes this long after repeated 401/403 answers from RIK
+blocked_pause_s = 300
+# Push one "[rg2-watch] RIK unreachable/blocking" alert after this long without a successful request
+blind_alert_s = 300
 # Stations missing from a sweep before it is treated as suspicious
 missing_station_threshold = 50
 # Max per-station re-queries per tick for stations still without an RG-2
