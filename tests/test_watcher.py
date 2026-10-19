@@ -323,44 +323,49 @@ def big_env(**kw):
              "election_station_name": f"School {n}", "number": f"{n}.", "_municipality_id": mid,
              "_docs": [doc(6, f"/extfile/{mid}/{n}/rg2_v1.pdf")]}
             for mid, name in BIG_MUNIS.items() for n in range(1, 21)]
-    return env(guard=True, records=recs, munis=BIG_MUNIS, stations=BIG_STATIONS,
-               sweep_pages_per_tick=5, **kw)
+    kw.setdefault("tick_request_budget", 5)
+    return env(guard=True, records=recs, munis=BIG_MUNIS, stations=BIG_STATIONS, **kw)
 
 
 def tick_budget_ok(fake, budget=5):
-    """Listing requests in a tick: rare-lane requests + 2 probe count requests + the page budget
-    (per-station queries of the missing lane are bounded separately by missing_max_per_tick)."""
-    reqs = [f for f in listing_reqs(fake) if "filters[election_station_no]" not in f]
-    rare = [f for f in reqs if f.get("filters[election_document_type]") in {str(x) for x in RARE_TYPES}]
-    return len(reqs) <= len(rare) + 2 + budget
+    """Listing requests in a tick: at most one count request per rare type + the request budget."""
+    return len(listing_reqs(fake)) <= len(RARE_TYPES) + budget
+
+
+def populate(w, store, t, max_ticks=30):
+    for _ in range(max_ticks):
+        w.run_once()
+        t.now += 60
+        if store.get_count(P, "rg2") == 600:
+            return
+    raise AssertionError("initial population did not finish")
 
 
 def test_probe_full_pass_is_budgeted_and_emits_per_batch():
     # missing lane off: it would add RG-2s of not-yet-swept stations out of order
     w, fake, store, t, batches, _ = big_env(safety_sweep_interval_s=100_000, missing_station_threshold=0)
     seen = []
-    for _ in range(12):
+    while store.get_count(P, "rg2") != 600:
+        assert len(seen) < 30
         fake.request_log.clear()
         w.run_once()
         assert tick_budget_ok(fake)
         seen.append(len(events(batches)))
         t.now += 60
-    assert seen == [50 * (i + 1) for i in range(12)]  # 5 pages x 10 records per tick
-    assert store.get_count(P, "rg2") == 600
+    # tick 1: probe count (2 requests) + 3 pages; then 5 pages x 10 records per tick
+    assert seen[0] == 30 and all(b - a == 50 for a, b in zip(seen, seen[1:-1]))
+    assert seen[-1] == 600 and len(seen) == 13
 
 
 def test_long_safety_pass_does_not_block_rare_lane():
     w, fake, store, t, batches, _ = big_env(safety_sweep_interval_s=100_000)
-    for _ in range(12):
-        w.run_once()
-        t.now += 60
-    assert store.get_count(P, "rg2") == 600
+    populate(w, store, t)
     batches.clear()
     t.now += 100_000
     fake.request_log.clear()
-    w.run_once()  # safety pass starts: pages 1-5
+    w.run_once()  # safety pass starts
     assert tick_budget_ok(fake)
-    assert events(batches) == []
+    assert events(batches) == [] and w._safety_job is not None
     old = store.known_docs(P, Scope(doc_type=6))[("M29|20", 6)].url
     fake.add_doc("M00|3", doc(9, "/extfile/200/3/rg9.pdf"))
     fake.replace_doc("M29|20", 6, "/extfile/229/20/rg2_v2.pdf")  # last page, count-neutral
@@ -371,24 +376,25 @@ def test_long_safety_pass_does_not_block_rare_lane():
     assert [(e.kind, e.doc.doc_type, e.doc.station_key) for e in events(batches)] == [
         ("added", 9, "M00|3")]
     batches.clear()
-    for i in range(10):  # pages 11-60
+    for _ in range(40):
         t.now += 60
         fake.request_log.clear()
         w.run_once()
         assert tick_budget_ok(fake)
-        if i < 9:
-            assert events(batches) == []
+        if w._safety_job is None:
+            break
+        assert events(batches) == []  # nothing before the pass completes
+    assert w._safety_job is None
     assert [(e.kind, e.doc.station_key, e.previous_url) for e in events(batches)] == [
         ("replaced", "M29|20", old)]
 
 
 def test_safety_pass_ignores_keys_updated_by_other_lanes_meanwhile():
     w, fake, store, t, batches, _ = big_env(safety_sweep_interval_s=100_000)
-    for _ in range(12):
-        w.run_once()
-        t.now += 60
+    populate(w, store, t)
     t.now += 100_000
     w.run_once()  # safety pass has fetched page 1 (M00|1 with v1)
+    assert w._safety_job is not None and w._safety_job.next_page > 1
     fake.replace_doc("M00|1", 6, "/extfile/200/1/rg2_v2.pdf")
     # another lane learns about the replacement before the safety pass completes
     from rg2watch.models import Doc, Event
@@ -397,9 +403,12 @@ def test_safety_pass_ignores_keys_updated_by_other_lanes_meanwhile():
                 BASE + "/extfile/200/1/rg2_v2.pdf", known.uploaded_at)
     w._emit(store.start_sweep(P, "t"), [Event("replaced", newer, previous_url=known.url)])
     batches.clear()
-    for _ in range(12):
+    for _ in range(40):
         t.now += 60
         w.run_once()
+        if w._safety_job is None:
+            break
+    assert w._safety_job is None
     # page 1 was observed before the change: no stale "replaced" back to v1 for M00|1
     assert [(e.kind, e.doc.station_key) for e in events(batches)] == []
 
@@ -489,14 +498,117 @@ def test_baseline_records_silently_then_alerts(capsys):
 
 
 def test_baseline_waits_for_budgeted_pass_to_complete(capsys):
-    # Probe pass (3 pages/tick while the safety pass shares the budget) ends at tick 20,
-    # the safety pass (2, then 5 pages/tick) at tick 24.
+    # Strict priority: the probe's full pass takes the budget first, then the safety pass.
     w, fake, store, t, batches, _ = big_env(watcher_kw={"baseline": True})
-    shown = []
-    for i in range(1, 31):
+    shown, safety_done = [], None
+    for i in range(1, 41):
         w.run_once()
         t.now += 60
+        if safety_done is None and w._safety_job is None:
+            safety_done = i
         if "[baseline]" in capsys.readouterr().out:
             shown.append(i)
-    assert shown == [24]
+    assert safety_done is not None and safety_done > 13  # after the probe pass (13 ticks)
+    assert shown == [safety_done]
     assert batches == []
+
+
+# --- unified request budget at parliamentary scale ------------------------------------------
+
+PARL_MUNIS = {str(1000 + i): f"P{i:03d}" for i in range(170)}
+PARL_STATIONS = {mid: {f"{mid}{n:02d}": str(n) for n in range(1, 51)} for mid in PARL_MUNIS}
+
+
+def parl_env(**kw):
+    """170 municipalities x 50 stations, all with RG-2 except P169|50; store already in sync."""
+    from rg2watch.models import Doc, Event
+    recs, docs = [], []
+    for mid, name in PARL_MUNIS.items():
+        for n in range(1, 51):
+            href = f"/extfile/{mid}/{n}/rg2_v1.pdf"
+            has = not (name == "P169" and n == 50)
+            recs.append({"municipality": name, "election_station_number": str(n),
+                         "election_station_name": f"School {n}", "number": f"{n}.",
+                         "_municipality_id": mid, "_docs": [doc(6, href)] if has else []})
+            if has:
+                docs.append(Doc(name, str(n), f"School {n}", LABEL[6], 6, BASE + href,
+                                "2026-10-19T20:00"))
+    w, fake, store, t, batches, limiter = env(records=recs, munis=PARL_MUNIS, stations=PARL_STATIONS,
+                                              **kw)
+    store.upsert_election(ELECTION)
+    store.save_municipalities(P, PARL_MUNIS)
+    for mid, st in PARL_STATIONS.items():
+        store.save_stations(P, mid, {no: sid for sid, no in st.items()})
+    store.apply_events(P, store.start_sweep(P, "seed"), [Event("added", d) for d in docs])
+    for mid, name in PARL_MUNIS.items():
+        store.set_count(P, f"rg2:m:{mid}", 49 if name == "P169" else 50)
+    store.set_count(P, "rg2", len(docs))
+    for rt in RARE_TYPES:
+        store.set_count(P, f"type:{rt}", 0)
+    return w, fake, store, t, batches, limiter
+
+
+def test_parliament_scale_rg9_emitted_while_probe_round_is_midway():
+    w, fake, store, t, batches, _ = parl_env(missing_station_threshold=0)
+    fake.add_doc("P169|50", doc(6, "/extfile/1169/50/rg2_v1.pdf"))  # starts a long probe round
+    found = None
+    for i in range(12):
+        if i == 3:
+            assert w._round is not None  # round still in progress
+            fake.add_doc("P010|5", doc(9, "/extfile/1010/5/rg9.pdf"))
+        fake.request_log.clear()
+        w.run_once()
+        assert len(listing_reqs(fake)) <= len(RARE_TYPES) + 40
+        if found is None and any(e.doc.doc_type == 9 for e in events(batches)):
+            found = i
+        t.now += 60
+    assert found is not None and found - 3 <= 1  # within 2 ticks
+
+
+def test_parliament_scale_probe_round_over_several_ticks_finds_last_municipality():
+    w, fake, store, t, batches, _ = parl_env(missing_station_threshold=0)
+    fake.add_doc("P169|50", doc(6, "/extfile/1169/50/rg2_v1.pdf"))
+    found = None
+    for i in range(20):
+        w.run_once()
+        t.now += 60
+        if any(e.doc.station_key == "P169|50" for e in events(batches)):
+            found = i
+            break
+    assert found is not None and found >= 5  # 170 municipality counts need several ticks
+    assert [(e.kind, e.doc.station_key) for e in events(batches)] == [("added", "P169|50")]
+    for _ in range(3):
+        w.run_once()
+        t.now += 60
+    assert store.get_count(P, "rg2") == 8500  # stored at round completion
+
+
+def test_rare_resweep_detects_count_neutral_rg7_replacement():
+    recs = make_records()
+    recs[2]["_docs"].append(doc(7, "/extfile/101/3/rg7_v1.pdf"))
+    w, fake, store, t, batches, _ = env(records=recs)
+    start = t.now
+    w.run_once()
+    assert ("Alpha|3", 7) in store.known_docs(P, Scope())
+    batches.clear()
+    fake.replace_doc("Alpha|3", 7, "/extfile/101/3/rg7_v2.pdf")
+    detected = None
+    while t.now < start + 300 + 4 * 60:
+        t.now += 60
+        w.run_once()
+        if events(batches):
+            detected = t.now
+            break
+    assert detected is not None
+    assert start + 300 <= detected <= start + 300 + 2 * 60 + 30
+    assert [(e.kind, e.doc.doc_type) for e in events(batches)] == [("replaced", 7)]
+
+
+def test_budget_clamped_to_at_least_5():
+    w, fake, store, t, batches, _ = big_env(tick_request_budget=1, missing_station_threshold=0,
+                                            safety_sweep_interval_s=100_000)
+    w.run_once()
+    t.now += 60
+    fake.request_log.clear()
+    w.run_once()
+    assert len(listing_reqs(fake)) == len(RARE_TYPES) + 5

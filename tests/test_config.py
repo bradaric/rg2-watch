@@ -12,7 +12,8 @@ def test_defaults_without_file(monkeypatch):
     assert c.probe_interval_s == 30
     assert c.rare_interval_s == 60
     assert c.safety_sweep_interval_s == 300
-    assert c.sweep_pages_per_tick == 20
+    assert c.tick_request_budget == 40
+    assert c.rare_resweep_interval_s == 300
     assert c.blocked_pause_s == 300
     assert c.blind_alert_s == 300
     assert c.missing_station_threshold == 50
@@ -40,3 +41,9 @@ def test_env_overrides_topic(tmp_path, monkeypatch):
     monkeypatch.setenv("RG2W_NTFY_TOPIC", "from-env")
     assert load_config(p).ntfy_topic == "from-env"
     assert load_config(None).ntfy_topic == "from-env"
+
+
+def test_sweep_pages_per_tick_is_alias_for_budget(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text("sweep_pages_per_tick = 7\n", encoding="utf-8")
+    assert load_config(p).tick_request_budget == 7

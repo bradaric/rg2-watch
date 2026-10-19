@@ -132,7 +132,7 @@ def _store_finding(store: Store, parent: str, f: Finding) -> None:
 def _cmd_watch(args) -> int:
     cfg = _config(args)
     if args.once:
-        cfg.sweep_pages_per_tick = 10**9  # a single tick must finish every pass
+        cfg.tick_request_budget = 10**9  # a single tick must finish every pass
     store = _open_store(cfg)
     try:
         if args.url:

@@ -76,12 +76,12 @@ class FakeRik:
         station = form.get("filters[election_station_no]")
         matched = []
         for rec in self.records:
+            if muni is not None and rec.get("_municipality_id") != muni:
+                continue
             docs = self._visible(rec)
             if doc_type is not None and not any(str(d["type"]) == doc_type for d in docs):
                 continue
             if not docs:
-                continue
-            if muni is not None and rec.get("_municipality_id") != muni:
                 continue
             if station is not None:
                 if self.stations.get(rec.get("_municipality_id"), {}).get(station) != \

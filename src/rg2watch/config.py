@@ -12,7 +12,8 @@ class Config:
     probe_interval_s: int = 30
     rare_interval_s: int = 60
     safety_sweep_interval_s: int = 300
-    sweep_pages_per_tick: int = 20
+    tick_request_budget: int = 40
+    rare_resweep_interval_s: int = 300
     blocked_pause_s: int = 300
     blind_alert_s: int = 300
     missing_station_threshold: int = 50
@@ -30,6 +31,9 @@ def load_config(path: Path | None) -> Config:
     if path is not None:
         with open(path, "rb") as f:
             data = tomllib.load(f)
+    if "sweep_pages_per_tick" in data:  # older name of the per-tick budget
+        data.setdefault("tick_request_budget", data["sweep_pages_per_tick"])
+        del data["sweep_pages_per_tick"]
     known = {f.name for f in fields(Config)}
     unknown = set(data) - known
     if unknown:
