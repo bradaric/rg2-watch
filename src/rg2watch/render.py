@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 from typing import NamedTuple
 
@@ -21,6 +22,8 @@ MAX_PAGE_PIXELS = 40_000_000
 MAX_TILE_PIXELS = 3_750_000  # the model downsizes larger images; send what it will see
 OSD_PAGE_TIMEOUT_S = 10
 OSD_BUDGET_S = 20
+HEADER_FRACTION = 0.22
+SERBIAN_MARKERS = ("JEGYZOKONYV", "PROCES-VERBAL", "PROCES VERBAL", "ZAPISNICA", "ZAPISNIK")
 Image.MAX_IMAGE_PIXELS = 200_000_000
 
 
@@ -74,6 +77,65 @@ def _osd_rotation(img: Image.Image, timeout: float = OSD_PAGE_TIMEOUT_S) -> int:
         return 0
 
 
+def _ocr_header(img: Image.Image, timeout: float) -> str | None:
+    """English-model OCR of a header strip; None when tesseract is missing or fails."""
+    if not shutil.which("tesseract"):
+        return None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            png = Path(tmp) / "header.png"
+            img.save(png)
+            out = subprocess.run(["tesseract", str(png), "-", "-l", "eng", "--psm", "6"],
+                                 capture_output=True, text=True, timeout=timeout)
+        if out.returncode != 0:
+            return None
+        return out.stdout
+    except Exception:
+        return None
+
+
+def _fold(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text.upper())
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _serbian_count(pdf, dpi: int, budget_s: float) -> int | None:
+    n = len(pdf)
+    if n <= 2:
+        return None
+    spent = 0.0
+    try:
+        for i in range(1, n):
+            remaining = budget_s - spent
+            if remaining <= 0:
+                return None
+            t0 = time.monotonic()
+            img = pdf[i].render(scale=dpi / 72).to_pil().convert("RGB")
+            strip = img.crop((0, 0, img.width, max(1, round(img.height * HEADER_FRACTION))))
+            text = _ocr_header(strip, min(OSD_PAGE_TIMEOUT_S, remaining))
+            spent += time.monotonic() - t0
+            if text is None:
+                return None
+            folded = _fold(text)
+            if any(m in folded for m in SERBIAN_MARKERS):
+                return i
+    except Exception:
+        return None
+    return None
+
+
+def serbian_page_count(pdf_path: Path, dpi: int = 150, budget_s: float = 20.0) -> int | None:
+    """Pages in the leading Serbian copy of a multilingual form, or None to keep all pages."""
+    try:
+        pdf = _open(pdf_path)
+    except RenderError:
+        return None
+    try:
+        return _serbian_count(pdf, dpi, budget_s)
+    finally:
+        pdf.close()
+
+
 def _jpeg(img: Image.Image, max_edge: int) -> bytes:
     k = min(1.0, max_edge / max(img.size), (MAX_TILE_PIXELS / (img.width * img.height)) ** 0.5)
     if k < 1.0:
@@ -93,15 +155,22 @@ def _halves(img: Image.Image) -> list[Image.Image]:
     return [img.crop((0, 0, w, cut)), img.crop((0, h - cut, w, h))]
 
 
-def _plan(pdf, pdf_path: Path, max_edge: int, max_tiles: int, dpi: int):
+def _plan(pdf, pdf_path: Path, max_edge: int, max_tiles: int, dpi: int,
+          serbian_only: bool = False):
     """(pages to render as (index, effective dpi, long edge), split) - reads no pixels."""
     n = len(pdf)
     if n == 0:
         raise RenderError(f"PDF has no pages: {pdf_path}")
     if n > MAX_PAGES:
         raise RenderError(f"PDF has {n} pages (max {MAX_PAGES}): {pdf_path}")
+    pages = n
+    if serbian_only:
+        k = _serbian_count(pdf, 150, 20.0)
+        if k:
+            log.info("kept Serbian copy: pages 1-%d of %d", k, n)
+            pages = k
     plan = []
-    for i in range(n):
+    for i in range(pages):
         page = pdf[i]
         eff = min(MAX_DPI, max(dpi, _embedded_dpi(page)))
         w, h = page.get_width() * eff / 72, page.get_height() * eff / 72
@@ -111,18 +180,19 @@ def _plan(pdf, pdf_path: Path, max_edge: int, max_tiles: int, dpi: int):
 
     split = sum(2 if edge > max_edge else 1 for _, _, edge in plan) <= max_tiles
     keep = plan
-    if not split and n > max_tiles:
-        log.warning("%s has %d pages; keeping first %d and last", pdf_path, n, max_tiles - 1)
+    if not split and pages > max_tiles:
+        log.warning("%s has %d pages; keeping first %d and last", pdf_path, pages, max_tiles - 1)
         keep = plan[:max_tiles - 1] + plan[-1:]
     return keep, split
 
 
-def count_tiles(pdf_path: Path, max_edge: int = 2576, max_tiles: int = 16, dpi: int = 200) -> int:
+def count_tiles(pdf_path: Path, max_edge: int = 2576, max_tiles: int = 16, dpi: int = 200,
+               serbian_only: bool = True) -> int:
     """Number of tiles render_tiles would produce, without rendering any pixels."""
     pdf = _open(pdf_path)
     try:
         try:
-            keep, split = _plan(pdf, pdf_path, max_edge, max_tiles, dpi)
+            keep, split = _plan(pdf, pdf_path, max_edge, max_tiles, dpi, serbian_only)
         except RenderError:
             raise
         except Exception as exc:
@@ -133,11 +203,11 @@ def count_tiles(pdf_path: Path, max_edge: int = 2576, max_tiles: int = 16, dpi: 
 
 
 def render_tiles(pdf_path: Path, max_edge: int = 2576, max_tiles: int = 16,
-                 dpi: int = 200) -> list[Tile]:
+                 dpi: int = 200, serbian_only: bool = True) -> list[Tile]:
     pdf = _open(pdf_path)
     try:
         try:
-            keep, split = _plan(pdf, pdf_path, max_edge, max_tiles, dpi)
+            keep, split = _plan(pdf, pdf_path, max_edge, max_tiles, dpi, serbian_only)
             tiles: list[Tile] = []
             osd_spent = 0.0
             for i, eff, _ in keep:

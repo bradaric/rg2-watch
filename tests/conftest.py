@@ -19,3 +19,11 @@ def _restore_root_logging():
     yield
     root.handlers[:] = handlers
     root.setLevel(level)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_header_ocr(monkeypatch):
+    """No tesseract by default: header OCR finds nothing, so every page is kept."""
+    from rg2watch import render
+
+    monkeypatch.setattr(render, "_ocr_header", lambda img, timeout=10: None)

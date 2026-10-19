@@ -9,6 +9,7 @@ from rg2watch import render
 from rg2watch.render import RenderError, page_count, render_tiles
 
 FIX = Path(__file__).parent / "fixtures"
+REAL_OCR_HEADER = render._ocr_header  # conftest stubs the module attribute per test
 
 
 def make_pdf(path: Path, size: tuple[int, int], pages: int, dpi: int = 200) -> Path:
@@ -186,7 +187,101 @@ def test_tiles_clamped_to_model_pixel_limits(tmp_path, size, pages):
                                             ((827, 1169), 20, 100), ((3306, 2338), 10, 200)])
 def test_count_tiles_matches_render_without_rendering(tmp_path, monkeypatch, size, pages, dpi):
     pdf = make_pdf(tmp_path / "a.pdf", size, pages, dpi=dpi)
-    expected = len(render_tiles(pdf))
+    expected = len(render_tiles(pdf, serbian_only=False))
     monkeypatch.setattr(render.pdfium.PdfPage, "render",
                         lambda *a, **kw: pytest.fail("count_tiles must not render pixels"))
-    assert render.count_tiles(pdf) == expected
+    assert render.count_tiles(pdf, serbian_only=False) == expected  # header OCR renders pages
+
+
+def stub_ocr(monkeypatch, texts):
+    """texts[i] is the header OCR for page i+1 (page 1 is never OCRed); an Exception is raised."""
+    calls = []
+
+    def fake(img, timeout=10):
+        calls.append(img.size)
+        t = texts[len(calls)]
+        if isinstance(t, Exception):
+            raise t
+        return t
+
+    monkeypatch.setattr(render, "_ocr_header", fake)
+    return calls
+
+
+def test_serbian_marker_on_page_5_keeps_four(tmp_path, monkeypatch, caplog):
+    calls = stub_ocr(monkeypatch, ["", "a", "b", "c", "JEGYZOKONYV", "PROCES-VERBAL"] + [""] * 5)
+    pdf = make_pdf(tmp_path / "a.pdf", (827, 1169), 11, dpi=100)
+    assert render.serbian_page_count(pdf) == 4
+    assert len(calls) == 4  # stops at the first marker
+    calls.clear()
+    with caplog.at_level("INFO", logger="rg2watch.render"):
+        assert [t.name for t in render_tiles(pdf, dpi=100)] == ["p1", "p2", "p3", "p4"]
+    assert "kept Serbian copy: pages 1-4 of 11" in caplog.text
+    calls.clear()
+    assert render.count_tiles(pdf, dpi=100) == 4
+    assert render.count_tiles(pdf, dpi=100, serbian_only=False) == 11
+
+
+def test_serbian_diacritics_detected(tmp_path, monkeypatch):
+    stub_ocr(monkeypatch, ["", "", "JEGYZŐKÖNYV", ""])
+    pdf = make_pdf(tmp_path / "a.pdf", (827, 1169), 4, dpi=100)
+    assert render.serbian_page_count(pdf) == 2
+
+
+def test_serbian_no_marker_keeps_all(tmp_path, monkeypatch):
+    stub_ocr(monkeypatch, ["", "ZAPISNICI?", "nothing", "here"])  # ZAPISNICI is not a marker
+    pdf = make_pdf(tmp_path / "a.pdf", (827, 1169), 4, dpi=100)
+    assert render.serbian_page_count(pdf) is None
+    assert len(render_tiles(pdf, dpi=100)) == 4
+
+
+@pytest.mark.parametrize("failure", ["none", "raise"])
+def test_serbian_ocr_error_keeps_all(tmp_path, monkeypatch, failure):
+    bad = None if failure == "none" else RuntimeError("boom")
+    calls = stub_ocr(monkeypatch, ["", bad, "PROCES-VERBAL", ""])
+    pdf = make_pdf(tmp_path / "a.pdf", (827, 1169), 4, dpi=100)
+    assert render.serbian_page_count(pdf) is None
+    calls.clear()
+    assert len(render_tiles(pdf, dpi=100)) == 4
+
+
+def test_serbian_budget_exhausted_keeps_all(tmp_path, monkeypatch):
+    stub_ocr(monkeypatch, ["", "", "", "PROCES-VERBAL"])
+    pdf = make_pdf(tmp_path / "a.pdf", (827, 1169), 4, dpi=100)
+    assert render.serbian_page_count(pdf, budget_s=0) is None
+
+
+def test_serbian_two_page_pdf_no_ocr(tmp_path, monkeypatch):
+    calls = stub_ocr(monkeypatch, ["", "PROCES-VERBAL"])
+    pdf = make_pdf(tmp_path / "a.pdf", (827, 1169), 2, dpi=100)
+    assert render.serbian_page_count(pdf) is None
+    assert calls == []
+
+
+def test_serbian_only_false_skips_ocr(tmp_path, monkeypatch):
+    calls = stub_ocr(monkeypatch, ["", "", "PROCES-VERBAL", ""])
+    pdf = make_pdf(tmp_path / "a.pdf", (827, 1169), 4, dpi=100)
+    assert len(render_tiles(pdf, dpi=100, serbian_only=False)) == 4
+    assert calls == []
+
+
+def test_serbian_header_strip_is_top_22_percent(tmp_path, monkeypatch):
+    calls = stub_ocr(monkeypatch, ["", "", "", ""])
+    pdf = make_pdf(tmp_path / "a.pdf", (800, 1000), 3, dpi=150)
+    render.serbian_page_count(pdf, dpi=150)
+    assert calls and all(abs(h - 0.22 * 1000) <= 2 for _, h in calls)
+
+
+@pytest.mark.real_osd
+def test_real_tesseract_reads_title_marker(tmp_path, monkeypatch):
+    if not shutil.which("tesseract"):
+        pytest.skip("tesseract not installed")
+    from PIL import ImageDraw, ImageFont
+
+    monkeypatch.setattr(render, "_ocr_header", REAL_OCR_HEADER)
+    imgs = [Image.new("RGB", (1240, 1754), "white") for _ in range(3)]
+    font = ImageFont.load_default(size=90)
+    ImageDraw.Draw(imgs[2]).text((100, 120), "PROCES-VERBAL", fill="black", font=font)
+    pdf = tmp_path / "m.pdf"
+    imgs[0].save(pdf, "PDF", save_all=True, append_images=imgs[1:], resolution=150)
+    assert render.serbian_page_count(pdf) == 2
