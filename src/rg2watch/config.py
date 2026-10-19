@@ -34,6 +34,11 @@ class Config:
     price_in_per_mtok: float = 4.0
     price_out_per_mtok: float = 20.0
     analysis_workers: int = 4
+    turnout_high: float = 0.95
+    leader_share_high: float = 0.90
+    assisted_share: float = 0.05
+    min_registered_for_ratio: int = 50
+    unsigned_rows_threshold: int = 2
 
 
 def load_config(path: Path | None) -> Config:
