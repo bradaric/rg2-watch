@@ -90,6 +90,36 @@ It prints the cost, scan quality and findings (or, with `--json`, the full repor
 budget) and exits. `watch` also
 accepts a zapisnici URL instead of `--parent`. `--base-url` overrides the RIK host; `-v` enables debug logs.
 
+## Evaluation
+
+`rg2watch eval` analyses a set of hand-labelled local PDFs and reports, per rule, how often it fires
+correctly (precision) and how many real problems it catches (recall).
+
+Labels live in `tests/golden/labels.jsonl`, one JSON object per line (a scaffold for 70 forms,
+every `expect` empty). For each form you have checked by eye:
+
+1. Open the PDF named in `file` and look at it yourself.
+2. Fill `expect` with the rule ids you can judge, each `true` (the problem is really there, so the
+   rule should fire) or `false` (it is not there, so the rule should stay quiet), for example
+   `"expect": {"V1": true, "V3": false, "A1": false}`. Rule ids are the V*, P* and A* rules of
+   the findings. A rule left out of `expect` is not scored for that form. Forms with an empty
+   `expect` are analysed but not scored.
+3. Set `"verified": true` once you are sure of every value you entered. Unverified entries are
+   still scored, but the run prints how many scored forms are not verified.
+
+Run it (the PDFs are looked up by `file` name inside `--pdf-dir`):
+
+    uv run rg2watch eval --labels tests/golden/labels.jsonl --pdf-dir data/raw662405 [--limit N]
+
+This calls the Anthropic API, so it first prints an estimated cost (up to two tiles per page x ~4.8k
+input tokens plus ~3k output tokens per form) and refuses to run without `--yes`. It needs
+credentials like `analyze` (exit 2 without). Each analysis is recorded in the DB under the
+`eval` election, so its spend counts towards `max_spend_usd`; the run stops when the cap is reached.
+`--cached` re-scores from analyses already stored in the DB and never calls the API, which is
+how you re-check after changing a rule. The table and per-form findings are also written to
+`data/eval/<timestamp>.json` (next to the DB). With no filled-in `expect` it prints
+"no verified labels yet - fill tests/golden/labels.jsonl".
+
 ## Replay (rehearsal without RIK)
 
 Download a past election once (polite default 1 request/s; PDFs optional):

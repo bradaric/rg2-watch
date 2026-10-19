@@ -364,6 +364,15 @@ class Store:
                 (row["id"] if row else None, model, prompt_version, result_json, _now(), cost_usd,
                  status, error))
 
+    def latest_report(self, url: str) -> dict | None:
+        """Report of the newest successful analysis of a document, if any."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT a.result_json FROM analyses a JOIN documents d ON d.id=a.document_id "
+                "WHERE d.url=? AND a.status='done' AND a.result_json IS NOT NULL "
+                "ORDER BY a.id DESC LIMIT 1", (url,)).fetchone()
+        return json.loads(row["result_json"]) if row else None
+
     def total_spend(self) -> float:
         with self._lock:
             row = self._db.execute("SELECT COALESCE(SUM(cost_usd), 0) AS s FROM analyses").fetchone()

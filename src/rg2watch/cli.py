@@ -12,6 +12,7 @@ import httpx
 
 from .analyze import AnalysisError, analyze_document
 from .config import Config, load_config
+from .evaluate import estimate_cost, format_table, load_labels, run_eval
 from .fetch import fetch_pdf
 from .findings import findings_for
 from .models import Doc, Event, Finding
@@ -55,6 +56,15 @@ def _parser() -> argparse.ArgumentParser:
                        help="analyse one RG-2 PDF (local path or URL of a registered election)")
     s.add_argument("source", help="local PDF path or document URL")
     s.add_argument("--json", action="store_true", help="print report and findings as JSON")
+
+    s = sub.add_parser("eval", parents=[common],
+                       help="score the rules against hand labels on local PDFs")
+    s.add_argument("--labels", type=Path, required=True, help="labels JSONL (tests/golden/labels.jsonl)")
+    s.add_argument("--pdf-dir", type=Path, required=True, help="directory holding the labelled PDFs")
+    s.add_argument("--limit", type=int, help="only the first N labelled forms")
+    s.add_argument("--cached", action="store_true",
+                   help="use stored analyses only; never calls the API")
+    s.add_argument("--yes", action="store_true", help="confirm the estimated API spend")
 
     s = sub.add_parser("requeue", parents=[common],
                        help="reset documents whose analysis failed after all attempts to new")
@@ -304,6 +314,55 @@ def _cmd_analyze(args) -> int:
     return 0
 
 
+def _cmd_eval(args) -> int:
+    cfg = _config(args)
+    try:
+        labels = load_labels(args.labels)
+    except (OSError, ValueError) as exc:
+        print(f"cannot read labels: {exc}", file=sys.stderr)
+        return 2
+    if args.limit:
+        labels = labels[:args.limit]
+    ai = None
+    if not args.cached:
+        ai, why = _anthropic_client()
+        if ai is None:
+            print(f"evaluation unavailable: {why}", file=sys.stderr)
+            return 2
+        forms, tiles, usd = estimate_cost(labels, args.pdf_dir, cfg)
+        print(f"{forms} form(s), up to {tiles} tiles: estimated cost up to ${usd:.2f} "
+              f"({cfg.model}, tiles x ~4.8k tokens in + ~3k tokens out per form)")
+        if not args.yes:
+            print("refusing to call the API without --yes", file=sys.stderr)
+            return 2
+    store = _open_store(cfg)
+    try:
+        result = run_eval(labels, args.pdf_dir, store, ai, cfg, cached=args.cached, out=sys.stdout)
+    finally:
+        store.close()
+    scored = [e for e in labels if e.get("expect") and e["file"] in result["files"]]
+    if result["score"]:
+        print(format_table(result["score"]))
+        unverified = sum(1 for e in scored if not e.get("verified"))
+        if unverified:
+            print(f"{unverified} of {len(scored)} scored form(s) are not marked verified")
+    elif not any(e.get("expect") for e in labels):
+        print("no verified labels yet - fill tests/golden/labels.jsonl")
+    else:
+        print("no labelled form was analysed: nothing to score")
+    for name, why in result["errors"].items():
+        print(f"{name}: {why}", file=sys.stderr)
+    print(f"{len(result['files'])} analysed, {len(result['errors'])} failed, "
+          f"${result['cost_usd']:.3f} spent")
+    out_dir = _cache_dir(cfg).parent / "eval"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / (time.strftime("%Y%m%dT%H%M%S") + ".json")
+    out.write_text(json.dumps({**result, "cached": args.cached, "model": cfg.model},
+                              ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"written {out}")
+    return 1 if result["errors"] else 0
+
+
 def _cmd_requeue(args) -> int:
     store = _open_store(_config(args))
     try:
@@ -357,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr, format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True,
         level=logging.DEBUG if args.verbose else logging.INFO if args.cmd == "watch" else logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
-               "fixtures": _cmd_fixtures, "analyze": _cmd_analyze,
+               "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
                "requeue": _cmd_requeue}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
