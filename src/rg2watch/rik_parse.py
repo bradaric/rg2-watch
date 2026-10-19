@@ -1,5 +1,6 @@
 import html as _html
 import json
+import logging
 import re
 from datetime import datetime
 from urllib.parse import urljoin
@@ -9,9 +10,19 @@ from .models import LABEL_TO_TYPE, Doc, Election, ListingPage
 _ADDITIONAL = re.compile(r"additionalData = (\{.*?\});", re.S)
 _H1 = re.compile(r"<h1[^>]*>(.*?)</h1>", re.S)
 _LABEL = re.compile(r"<div class=''>\s*<span>(.*?)</span>", re.S)
-_LINK = re.compile(r"<a\s[^>]*href=(['\"])(.*?)\1[^>]*>.*?</a>\s*<span>(.*?)</span>", re.S)
+_LINK = re.compile(r"<a\s[^>]*href=(['\"])([^'\"<>]*)\1[^>]*>(?:(?!</a>).)*</a>\s*<span>(.*?)</span>", re.S)
 _PAGE = re.compile(r'data-page="(\d+)"')
 _OPTION = re.compile(r'<option\s+value="([^"]*)"[^>]*>(.*?)</option>', re.S)
+_HREF = re.compile(r"<a\s[^>]*href=", re.S)
+
+log = logging.getLogger("rg2watch.rik_parse")
+_warned: set = set()
+
+
+def _warn_once(key, msg: str, *args) -> None:
+    if key not in _warned:
+        _warned.add(key)
+        log.warning(msg, *args)
 
 
 def _norm(text: str) -> str:
@@ -31,12 +42,23 @@ def parse_election_page(html: str, base_url: str) -> Election:
 
 
 def _iso(stamp: str) -> str:
-    return datetime.strptime(_norm(stamp), "%d-%m-%Y %H:%Mh").strftime("%Y-%m-%dT%H:%M")
+    raw = _norm(stamp)
+    try:
+        return datetime.strptime(raw, "%d-%m-%Y %H:%Mh").strftime("%Y-%m-%dT%H:%M")
+    except ValueError:
+        _warn_once(("stamp", raw), "unparseable upload timestamp %r kept as-is", raw)
+        return raw
 
 
 def _parse_extfile(blob: str, municipality: str, station_no: str, station_name: str, base_url: str):
     labels = [(m.start(), _norm(m.group(1))) for m in _LABEL.finditer(blob)]
-    for m in _LINK.finditer(blob):
+    links = list(_LINK.finditer(blob))
+    hrefs = len(_HREF.findall(blob))
+    if hrefs != len(links):
+        _warn_once(("links", municipality, station_no, hrefs, len(links)),
+                   "%s BM %s: %d links in extfile but %d document(s) parsed",
+                   municipality, station_no, hrefs, len(links))
+    for m in links:
         preceding = [lbl for pos, lbl in labels if pos < m.start()]
         label = preceding[-1] if preceding else ""
         yield Doc(

@@ -86,3 +86,32 @@ def test_parse_municipalities():
 def test_parse_station_options():
     s = '<option value="-1">x</option><option value="207620">1</option>'
     assert parse_station_options(s) == {"207620": "1"}
+
+
+def _one(stamp_span: str) -> dict:
+    return {"records": [{
+        "municipality": "M", "election_station_number": "5", "election_station_name": "S",
+        "extfiles": [{"extfile": "<div class=''><span>Записник о раду бирачког одбора (Образац РГ-2)</span></div>"
+                      f"<div class='table-file'><a href='/x/a.pdf'>a</a>{stamp_span}</div>"
+                      "<div class=''><span>Записник о посматрачима (Образац РГ-11/НП)</span></div>"
+                      "<div class='table-file'><a href='/x/b.pdf'>b</a><span>01-02-2025 03:04h</span></div>"}],
+    }], "pagination": ""}
+
+
+def test_malformed_timestamps_keep_docs_and_warn_once(caplog):
+    with caplog.at_level("WARNING", logger="rg2watch.rik_parse"):
+        empty = parse_listing(_one("<span></span>"), BASE)
+        odd = parse_listing(_one("<span> 8.6.2025 23:29 </span>"), BASE)
+        parse_listing(_one("<span> 8.6.2025 23:29 </span>"), BASE)
+    assert [d.uploaded_at for d in empty.docs] == ["", "2025-02-01T03:04"]
+    assert [d.uploaded_at for d in odd.docs] == ["8.6.2025 23:29", "2025-02-01T03:04"]
+    assert [d.doc_type for d in odd.docs] == [6, 12]
+    msgs = [r.getMessage() for r in caplog.records]
+    assert len([m for m in msgs if "8.6.2025 23:29" in m]) == 1
+
+
+def test_link_without_timestamp_logs_count_mismatch(caplog):
+    with caplog.at_level("WARNING", logger="rg2watch.rik_parse"):
+        page = parse_listing(_one(""), BASE)
+    assert [(d.url, d.doc_type) for d in page.docs] == [(BASE + "/x/b.pdf", 12)]
+    assert any("2 links" in r.getMessage() and "1 document" in r.getMessage() for r in caplog.records)
