@@ -2,17 +2,17 @@ import argparse
 import dataclasses
 import logging
 import sys
-import threading
+import time
 from pathlib import Path
 
 import httpx
 
 from .config import Config, load_config
 from .findings import findings_for
-from .models import Event
+from .models import Event, Finding
 from .notify import Notifier
 from .replay import fetch_fixtures, make_replay_server
-from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient
+from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError
 from .store import Store
 from .watcher import Watcher
 
@@ -72,7 +72,11 @@ def _open_store(cfg: Config) -> Store:
 
 def _cmd_add(args) -> int:
     cfg = _config(args)
-    client = RikClient.from_url(args.url, cfg)
+    try:
+        client = RikClient.from_url(args.url, cfg)
+    except (RikError, httpx.HTTPError) as exc:
+        print(f"cannot reach {args.url}: {exc}", file=sys.stderr)
+        return 1
     store = _open_store(cfg)
     try:
         store.upsert_election(client.election)
@@ -81,6 +85,42 @@ def _cmd_add(args) -> int:
     e = client.election
     print(f"parent={e.parent} round={e.round} title={e.title}")
     return 0
+
+
+def _handlers(store: Store, notifier: Notifier, parent: str):
+    def deliver() -> None:
+        try:
+            pending = store.unalerted(parent, {"HIGH", "MEDIUM", "LOW"})
+            if pending:
+                store.mark_alerted(notifier.send(pending))
+        except Exception:
+            log.exception("alert delivery failed; retrying next tick")
+
+    def on_events(events: list[Event]) -> None:
+        try:
+            found = findings_for(events)
+        except Exception:
+            log.exception("findings_for failed for %d event(s)", len(events))
+            found = []
+            for ev in events:  # one bad event must not drop the rest
+                try:
+                    found.extend(findings_for([ev]))
+                except Exception:
+                    log.error("finding lost: %s %s BM %s %s", ev.kind, ev.doc.municipality,
+                              ev.doc.station_no, ev.doc.url, exc_info=True)
+        for f in found:
+            _store_finding(store, parent, f)
+        deliver()
+
+    return on_events, deliver
+
+
+def _store_finding(store: Store, parent: str, f: Finding) -> None:
+    try:
+        store.add_finding(parent, f, f.doc.url)
+    except Exception:
+        log.error("finding not stored: %s %s %s BM %s %s", f.rule, f.severity, f.doc.municipality,
+                  f.doc.station_no, f.doc.url, exc_info=True)
 
 
 def _cmd_watch(args) -> int:
@@ -106,24 +146,18 @@ def _cmd_watch(args) -> int:
         notifier = Notifier(cfg, httpx.Client(timeout=10.0, headers={"User-Agent": USER_AGENT}),
                             out=sys.stdout)
 
-        def deliver() -> None:
-            pending = store.unalerted(parent, {"HIGH", "MEDIUM", "LOW"})
-            if pending:
-                store.mark_alerted(notifier.send(pending))
-
-        def on_events(events: list[Event]) -> None:
-            for f in findings_for(events):
-                store.add_finding(parent, f, f.doc.url)
-            deliver()
-
+        on_events, deliver = _handlers(store, notifier, parent)
         watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once)
-        stop = threading.Event()
         try:
             while True:
-                watcher.run_once()
-                deliver()
-                if args.once or stop.wait(1):
+                try:
+                    watcher.run_once()
+                    deliver()
+                except Exception:
+                    log.exception("tick failed; retrying next tick")
+                if args.once:
                     break
+                time.sleep(1)
         except KeyboardInterrupt:
             log.info("interrupted, shutting down")
         return 0

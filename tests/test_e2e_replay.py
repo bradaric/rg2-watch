@@ -52,3 +52,76 @@ def test_e2e_replay_watch_once_alerts_on_faulted_rg9(tmp_path, capsys):
 
 def test_watch_unknown_parent_exits_2(tmp_path):
     assert main(["watch", "--parent", "nope", "--once", "--db", str(tmp_path / "x.sqlite")]) == 2
+
+
+def _doc(n):
+    from rg2watch.models import Doc
+    return Doc("M", str(n), "School", "label", 9, f"http://x/{n}.pdf", "2025-06-08T23:00")
+
+
+def test_on_events_survives_one_bad_finding(caplog):
+    import io
+    import logging
+
+    from rg2watch.cli import _handlers
+    from rg2watch.config import Config
+    from rg2watch.models import Election, Event
+    from rg2watch.notify import Notifier
+    from rg2watch.store import Store
+
+    store = Store(":memory:")
+    docs = [_doc(1), _doc(2), _doc(3)]
+    evs = [Event("added", d) for d in docs]
+    store.apply_events("p", store.start_sweep("p", "t"), [evs[0], evs[2]])  # doc 2 unknown to store
+    out = io.StringIO()
+    on_events, _ = _handlers(store, Notifier(Config(), None, out=out), "p")
+    with caplog.at_level(logging.ERROR, logger="rg2watch.cli"):
+        on_events(evs)
+    assert out.getvalue().count("[HIGH] D1") == 2
+    assert "http://x/2.pdf" in caplog.text and "D1" in caplog.text
+
+
+def test_watch_loop_survives_tick_failure(tmp_path, monkeypatch, capsys):
+    import rg2watch.cli as cli
+    from rg2watch.store import Store
+
+    root = make_fixture_dir(tmp_path)
+    server = make_replay_server(root, port=0, speed=1e9, faults=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    real, calls, sleeps = Store.unalerted, [], []
+
+    def flaky(self, *a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        return real(self, *a, **k)
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        if len(sleeps) >= 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(Store, "unalerted", flaky)
+    monkeypatch.setattr(cli.time, "sleep", fake_sleep)
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        cfg = tmp_path / "c.toml"
+        cfg.write_text("max_rps = 1000.0\n")
+        common = ["--db", str(tmp_path / "w.sqlite"), "--config", str(cfg)]
+        assert main(["add", f"{base}/zapisnici/662405", *common]) == 0
+        assert main(["watch", "--parent", "662405", "--base-url", base, *common]) == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert "[HIGH] D1" in capsys.readouterr().out
+    assert len(sleeps) == 2
+
+
+def test_add_unreachable_exits_1(tmp_path, capsys, monkeypatch):
+    from rg2watch.rik_client import AdaptiveLimiter
+    init = AdaptiveLimiter.__init__
+    monkeypatch.setattr(AdaptiveLimiter, "__init__",
+                        lambda self, rps: init(self, rps, sleep=lambda s: None))
+    rc = main(["add", "http://127.0.0.1:9/zapisnici/1", "--db", str(tmp_path / "a.sqlite")])
+    assert rc == 1
+    assert "cannot reach" in capsys.readouterr().err
