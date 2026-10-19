@@ -20,7 +20,7 @@ from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, Store
 
 log = logging.getLogger("rg2watch.pipeline")
 
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v6"
 RETRY_STEP_S = 60
 RIK_RETRY_S = 120
 IDLE_POLL_S = 5.0
