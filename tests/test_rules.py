@@ -237,10 +237,59 @@ def test_poor_quality_caps_physical_rules_at_medium():
                                     r["header"].update(station_no="99"))))["V9"].severity == "HIGH"
 
 
-def test_v1_not_fired_for_unreadable_field():
+def test_v1_fires_for_corrected_unreadable_field():
     r = mutated(lambda r: r["numbers"]["voted"].update(mark="overwritten", value=None, legible=False))
     found = rules(r)
-    assert "V1" not in found and "V8" in found
+    assert found["V1"].severity == "HIGH" and "V8" in found
+    assert "10.1 voted overwritten (value unreadable)" in found["V1"].summary
+    r = mutated(lambda r: r["numbers"]["assisted"].update(mark="correction_fluid", value=None,
+                                                          legible=False))
+    assert "11 assisted correction_fluid (value unreadable)" in rules(r)["V2"].summary
+
+
+def test_v1_v2_capped_at_medium_on_unreliable_scan():
+    def fn(r):
+        r["visual"]["page_quality"] = "unreadable"
+        r["numbers"]["voted"].update(mark="overwritten", value=None, legible=False)
+        r["numbers"]["registered"].update(mark="crossed_out")
+    found = rules(mutated(fn))
+    assert found["V1"].severity == "MEDIUM" and found["V2"].severity == "MEDIUM"
+
+
+def test_dash_means_zero():
+    def fn(r):
+        r["numbers"]["invalid"].update(value=None, legible=False, mark="dash")
+        r["numbers"]["valid"].update(value=800)
+        r["numbers"]["list_votes"][1]["field"].update(value=None, legible=False, mark="dash")
+        r["numbers"]["list_votes"][0]["field"].update(value=800)
+        r["numbers"]["outside_voted"].update(value=None, legible=True, mark="dash")
+        r["numbers"]["outside_confirmations"].update(value=0)
+        r["numbers"]["assisted"].update(value=None, legible=False, mark="dash")
+    found = rules(mutated(fn))
+    # dash is a legible 0: no V8, A2/A3/A5 hold with 0, A7 sees one list at 100%
+    assert "V8" not in found and "V1" not in found
+    assert not {"A2", "A3", "A5"} & set(found)
+    assert "A7" in found
+    # a dash used as 0 still feeds the arithmetic rules
+    found = rules(mutated(lambda r: r["numbers"]["invalid"].update(value=None, mark="dash")))
+    assert "invalid 0 + valid 780 != ballots in box 800" in found["A2"].summary
+
+
+def test_v11_none_on_follow_up_not_anomalous_when_parent_is_ne():
+    def fn(r):
+        r["yesno"]["control_sheet_found"]["answer"] = "NE"
+        r["yesno"]["control_sheet_signed"]["answer"] = "none"
+        r["yesno"]["observers_present"]["answer"] = "NE"
+        r["yesno"]["observer_form_filled"]["answer"] = "none"
+    assert "V11" not in rules(mutated(fn))
+    found = rules(mutated(lambda r: r["yesno"]["control_sheet_signed"].update(answer="none")))
+    assert "9.1 control_sheet_signed none" in found["V11"].summary
+    found = rules(mutated(lambda r: r["yesno"]["observer_form_filled"].update(answer="none")))
+    assert "13.1 observer_form_filled none" in found["V11"].summary
+    def both(r):
+        r["yesno"]["observers_present"]["answer"] = "NE"
+        r["yesno"]["observer_form_filled"]["answer"] = "both"
+    assert "V11" in rules(mutated(both))
 
 
 @pytest.mark.parametrize("close,done,fires", [

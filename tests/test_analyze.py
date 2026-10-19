@@ -247,3 +247,12 @@ def test_no_non_streamed_call_above_sdk_limit():
         analyze_document(TILES, c, Config())
     assert len(c.calls) == 2
     assert all(k["max_tokens"] <= 21000 for k in c.create_calls)
+
+
+def test_prompt_v2_dash_paragraph_before_names():
+    para = ('A dash or slash written in a numeric field means 0: report value 0 with mark "dash". '
+            "A lone slash or dash in item 15 means no remarks (remarks_text_present=false).")
+    assert para in analyze.PROMPT
+    assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
+    from rg2watch.pipeline import PROMPT_VERSION
+    assert PROMPT_VERSION == "v2"

@@ -18,6 +18,11 @@ _YESNO_LABELS = {
 }
 
 
+def _dash_zero(f: dict) -> dict:
+    """A dash/slash in a numeric field means 0: a legible zero."""
+    return {**f, "value": 0, "legible": True} if f["mark"] == "dash" else f
+
+
 def _ok(f: dict) -> bool:
     return bool(f["legible"]) and f["value"] is not None
 
@@ -48,30 +53,33 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
         text = parts if isinstance(parts, str) else "; ".join(parts)
         hits.append((rule, sev, text))
 
-    hdr, nums, yn = report["header"], report["numbers"], report["yesno"]
+    hdr, yn = report["header"], report["yesno"]
     times, sig, vis = report["times"], report["signatures"], report["visual"]
-    lists = nums["list_votes"]
+    lists = [{**r, "field": _dash_zero(r["field"])} for r in report["numbers"]["list_votes"]]
+    nums = {k: _dash_zero(f) for k, f in report["numbers"].items() if k != "list_votes"}
 
-    # V1 / V2
-    def marked(f: dict) -> bool:
-        return f["mark"] in _BAD_MARKS and (bool(f["legible"]) or f["value"] is not None)
-
-    v1 = [f"{_LABELS[k]} {k} {nums[k]['mark']} ({nums[k]['value']})"
-          for k in _RESULT_FIELDS if marked(nums[k])]
-    v1 += [f"list row {r['row']} {r['field']['mark']} ({r['field']['value']})"
-           for r in lists if marked(r["field"])]
-    if v1:
-        add("V1", "HIGH", v1)
-    v2 = [f"{_LABELS[k]} {k} {nums[k]['mark']} ({nums[k]['value']})"
-          for k in _OTHER_FIELDS if marked(nums[k])]
-    if v2:
-        add("V2", "MEDIUM", v2)
-
-    # V3-V7: unreliable reads must not produce false HIGH
+    # unreliable reads must not produce false HIGH
     illegible_core = sum(1 for k in _CORE if not nums[k]["legible"])
     unreliable = vis["page_quality"] == "unreadable" or illegible_core * 2 > len(_CORE)
     poor = vis["page_quality"] == "poor"
     phys = "MEDIUM" if poor else "HIGH"
+
+    # V1 / V2: a visible correction counts even when the corrected value cannot be read
+    def mark_text(f: dict) -> str:
+        return f"{f['mark']} ({f['value'] if _ok(f) else 'value unreadable'})"
+
+    v1 = [f"{_LABELS[k]} {k} {mark_text(nums[k])}" for k in _RESULT_FIELDS
+          if nums[k]["mark"] in _BAD_MARKS]
+    v1 += [f"list row {r['row']} {mark_text(r['field'])}" for r in lists
+           if r["field"]["mark"] in _BAD_MARKS]
+    if v1:
+        add("V1", "MEDIUM" if unreliable else "HIGH", v1)
+    v2 = [f"{_LABELS[k]} {k} {mark_text(nums[k])}" for k in _OTHER_FIELDS
+          if nums[k]["mark"] in _BAD_MARKS]
+    if v2:
+        add("V2", "MEDIUM", v2)
+
+    # V3-V7
 
     def add_phys(rule: str, text: str) -> None:
         if not unreliable:
@@ -116,8 +124,12 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
 
     if vis["page_quality"] in ("poor", "unreadable"):
         add("V10", "LOW", f"page quality {vis['page_quality']}")
+    # "none" on a follow-up question is expected when its parent question is NE
+    not_asked = {follow for parent, follow in (("control_sheet_found", "control_sheet_signed"),
+                                               ("observers_present", "observer_form_filled"))
+                 if yn[parent]["answer"] == "NE"}
     v11 = [f"{_YESNO_LABELS[k]} {k} {yn[k]['answer']}" for k in _YESNO_LABELS
-           if yn[k]["answer"] in ("both", "none")]
+           if yn[k]["answer"] == "both" or (yn[k]["answer"] == "none" and k not in not_asked)]
     if v11:
         add("V11", "MEDIUM", v11)
 
@@ -145,7 +157,7 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
         add("P4", "MEDIUM", p4)
 
     # A1-A8 (legible, non-null values only)
-    n = {k: nums[k]["value"] for k in nums if k != "list_votes" and _ok(nums[k])}
+    n = {k: nums[k]["value"] for k in nums if _ok(nums[k])}
     if "ballots_in_box" in n and "voted" in n and n["ballots_in_box"] > n["voted"]:
         add("A1", "HIGH", f"ballots in box {n['ballots_in_box']} > voted {n['voted']}")
     if all(k in n for k in ("invalid", "valid", "ballots_in_box")) \
