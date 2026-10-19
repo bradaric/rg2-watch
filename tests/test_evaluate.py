@@ -8,7 +8,7 @@ from test_rules import clean_report
 from rg2watch import cli, render
 from rg2watch.cli import main
 from rg2watch.config import Config
-from rg2watch.evaluate import run_eval, score
+from rg2watch.evaluate import estimate_cost, load_labels, run_eval, score
 from rg2watch.store import Store
 
 
@@ -139,3 +139,49 @@ def test_cli_cached_with_empty_expectations(tmp_path, capsys):
     assert main(cli_args(tmp_path, labels, pdfs, "--cached")) == 1
     out = capsys.readouterr().out
     assert "no verified labels yet - fill tests/golden/labels.jsonl" in out
+
+
+@pytest.mark.parametrize("limit", ["0", "-1"])
+def test_cli_limit_must_be_positive(tmp_path, capsys, limit):
+    pdfs, labels, _, _ = env(tmp_path, None)
+    with pytest.raises(SystemExit) as ei:
+        main(cli_args(tmp_path, labels, pdfs, "--cached", "--limit", limit))
+    assert ei.value.code == 2 and "--limit" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("expect", ['{"V1": "yes"}', '{"V1": 1}', '["V1"]', 'null'])
+def test_load_labels_rejects_non_bool_expect(tmp_path, expect):
+    p = tmp_path / "l.jsonl"
+    p.write_text('{"file": "a.pdf", "expect": {}}\n{"file": "b.pdf", "expect": %s}\n' % expect)
+    with pytest.raises(ValueError, match=r"l\.jsonl:2: .*expect"):
+        load_labels(p)
+
+
+def test_estimate_uses_planned_tiles_and_10k_output(tmp_path):
+    from PIL import Image
+
+    pdfs = tmp_path / "pdfs"
+    pdfs.mkdir()
+    a3 = [Image.new("RGB", (3306, 2338), "white") for _ in range(2)]  # 2 pages -> 4 tiles
+    a3[0].save(pdfs / "a3.pdf", "PDF", save_all=True, append_images=a3[1:], resolution=200)
+    make_pdf(pdfs / "a4.pdf")  # 1 page -> 1 tile
+    forms, tiles, usd = estimate_cost([{"file": "a3.pdf"}, {"file": "a4.pdf"}, {"file": "x.pdf"}],
+                                      pdfs, Config())
+    assert (forms, tiles) == (2, 5)
+    assert usd == pytest.approx((5 * 5000 * 4 + 2 * 10_000 * 20) / 1e6)
+
+
+def test_cli_estimate_over_remaining_cap_refused_without_force(tmp_path, monkeypatch, capsys):
+    pdfs, labels, _, ai = env(tmp_path, resp(overwritten()))
+    monkeypatch.setattr(cli, "_anthropic_client", lambda: (ai, None))
+    db = tmp_path / "db" / "x.sqlite"
+    db.parent.mkdir()
+    s = Store(db)
+    s.save_failed_analysis("file:///x.pdf", "m", "v2", 19.9, "x", parent="eval")
+    s.close()
+    assert main(cli_args(tmp_path, labels, pdfs, "--yes")) == 2
+    cap = capsys.readouterr()
+    assert "estimate, actual may differ" in cap.out
+    assert "remaining cap $0.10" in cap.out and "--force-over-cap" in cap.err and ai.calls == 0
+    assert main(cli_args(tmp_path, labels, pdfs, "--yes", "--force-over-cap")) == 1
+    assert ai.calls == 2  # forced: runs (and would still stop once the cap is reached)

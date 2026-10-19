@@ -12,7 +12,9 @@ import httpx
 
 from .analyze import AnalysisError, analyze_document
 from .config import Config, load_config
-from .evaluate import estimate_cost, format_table, load_labels, run_eval
+from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
+from .evaluate import PARENT as EVAL_PARENT
+from .evaluate import run_eval
 from .fetch import fetch_pdf
 from .findings import findings_for
 from .models import Doc, Event, Finding
@@ -27,6 +29,16 @@ from .watcher import Watcher
 
 log = logging.getLogger("rg2watch.cli")
 ADHOC = "adhoc"  # parent that `analyze` records its spend under
+
+
+def _positive_int(text: str) -> int:
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text}") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1: {text}")
+    return n
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -68,10 +80,13 @@ def _parser() -> argparse.ArgumentParser:
                        help="score the rules against hand labels on local PDFs")
     s.add_argument("--labels", type=Path, required=True, help="labels JSONL (tests/golden/labels.jsonl)")
     s.add_argument("--pdf-dir", type=Path, required=True, help="directory holding the labelled PDFs")
-    s.add_argument("--limit", type=int, help="only the first N labelled forms")
+    s.add_argument("--limit", type=_positive_int, help="only the first N labelled forms (N >= 1)")
     s.add_argument("--cached", action="store_true",
                    help="use stored analyses only; never calls the API")
     s.add_argument("--yes", action="store_true", help="confirm the estimated API spend")
+    s.add_argument("--force-over-cap", action="store_true",
+                   help="run even though the estimate exceeds what is left of max_spend_usd "
+                        "(the run still stops at the cap)")
 
     s = sub.add_parser("requeue", parents=[common],
                        help="reset documents whose analysis failed after all attempts to new")
@@ -362,14 +377,24 @@ def _cmd_eval(args) -> int:
         if ai is None:
             print(f"evaluation unavailable: {why}", file=sys.stderr)
             return 2
-        forms, tiles, usd = estimate_cost(labels, args.pdf_dir, cfg)
-        print(f"{forms} form(s), up to {tiles} tiles: estimated cost up to ${usd:.2f} "
-              f"({cfg.model}, tiles x ~4.8k tokens in + ~3k tokens out per form)")
-        if not args.yes:
-            print("refusing to call the API without --yes", file=sys.stderr)
-            return 2
     store = _open_store(cfg)
     try:
+        if not args.cached:
+            forms, tiles, usd = estimate_cost(labels, args.pdf_dir, cfg)
+            remaining = max(0.0, cfg.max_spend_usd - store.total_spend(EVAL_PARENT))
+            print(f"{forms} form(s), {tiles} tiles: estimated cost ${usd:.2f} (estimate, actual "
+                  f"may differ; {cfg.model}, ~{TOKENS_PER_TILE // 1000}k tokens in per tile + "
+                  f"~{OUTPUT_TOKENS // 1000}k tokens out per form)")
+            print(f"remaining cap ${remaining:.2f} (max_spend_usd ${cfg.max_spend_usd:.2f} for "
+                  f"eval runs in this DB)")
+            if not args.yes:
+                print("refusing to call the API without --yes", file=sys.stderr)
+                return 2
+            if usd > remaining and not args.force_over_cap:
+                print(f"the estimate ${usd:.2f} exceeds the remaining cap ${remaining:.2f}: the run "
+                      "would stop at the cap. Run again with --yes --force-over-cap to go ahead, "
+                      "or raise max_spend_usd / use --limit", file=sys.stderr)
+                return 2
         result = run_eval(labels, args.pdf_dir, store, ai, cfg, cached=args.cached, out=sys.stdout)
     finally:
         store.close()

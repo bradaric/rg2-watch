@@ -9,16 +9,15 @@ from .analyze import AnalysisError, analyze_document
 from .config import Config
 from .models import Doc, Event
 from .pipeline import GLOBAL_ERRORS, PROMPT_VERSION
-from .render import RenderError, page_count, render_tiles
+from .render import RenderError, count_tiles, render_tiles
 from .rules import evaluate_report
 from .store import Store
 
 log = logging.getLogger("rg2watch.evaluate")
 
 PARENT = "eval"
-TOKENS_PER_TILE = 4800
-OUTPUT_TOKENS = 3000
-MAX_TILES = 16
+TOKENS_PER_TILE = 5000  # tiles are at most 3.75 MP; ~750 px per image token
+OUTPUT_TOKENS = 10_000  # adaptive thinking is billed as output
 
 
 def load_labels(path: Path) -> list[dict]:
@@ -31,6 +30,12 @@ def load_labels(path: Path) -> list[dict]:
             entry["file"], entry.setdefault("expect", {})
         except (ValueError, KeyError, TypeError) as exc:
             raise ValueError(f"{path}:{n}: bad label line ({exc})") from exc
+        expect = entry["expect"]
+        if not isinstance(expect, dict):
+            raise ValueError(f"{path}:{n}: expect must be an object of rule -> true/false")
+        bad = sorted(rule for rule, v in expect.items() if not isinstance(v, bool))
+        if bad:
+            raise ValueError(f"{path}:{n}: expect values must be true or false: {', '.join(bad)}")
         labels.append(entry)
     return labels
 
@@ -68,12 +73,13 @@ def format_table(table: dict[str, dict]) -> str:
 
 
 def estimate_cost(labels: list[dict], pdf_dir: Path, cfg: Config) -> tuple[int, int, float]:
-    """(forms, tiles, usd) upper bound: up to two tiles per page, capped at MAX_TILES."""
+    """(forms, tiles, usd) estimate from the planned tiles of each readable PDF (no pixels
+    rendered), TOKENS_PER_TILE input and OUTPUT_TOKENS output per form; actual cost may differ."""
     forms = tiles = 0
     for entry in labels:
         path = Path(pdf_dir) / entry["file"]
         try:
-            n = min(2 * page_count(path), MAX_TILES)
+            n = count_tiles(path)
         except (RenderError, OSError):
             continue
         forms += 1
