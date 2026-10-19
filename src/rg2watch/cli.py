@@ -160,9 +160,12 @@ def _cmd_watch(args) -> int:
             while True:
                 try:
                     watcher.run_once()
-                    deliver()
                 except Exception:
                     log.exception("tick failed; retrying next tick")
+                try:
+                    deliver()
+                except Exception:
+                    log.exception("delivery failed; retrying next tick")
                 if args.once:
                     break
                 time.sleep(1)

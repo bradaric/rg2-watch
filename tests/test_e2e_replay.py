@@ -192,7 +192,7 @@ def test_watch_once_baseline_records_silently(tmp_path, capsys):
         base = f"http://127.0.0.1:{server.server_address[1]}"
         db = tmp_path / "w.sqlite"
         cfg = tmp_path / "rg2watch.toml"
-        cfg.write_text("max_rps = 1000.0\nsweep_pages_per_tick = 1\n")
+        cfg.write_text("max_rps = 1000.0\ntick_request_budget = 5\n")
         common = ["--db", str(db), "--config", str(cfg)]
         assert main(["add", f"{base}/zapisnici/662405", *common]) == 0
         assert main(["watch", "--parent", "662405", "--once", "--baseline", "--base-url", base,
@@ -206,3 +206,35 @@ def test_watch_once_baseline_records_silently(tmp_path, capsys):
     con = sqlite3.connect(db)
     assert con.execute("SELECT COUNT(*) FROM findings").fetchone()[0] == 0
     assert con.execute("SELECT COUNT(*) FROM documents WHERE doc_type=9").fetchone()[0] == 1
+
+
+def test_deliver_runs_when_run_once_raises(tmp_path, monkeypatch):
+    import rg2watch.cli as cli
+    from rg2watch.models import Election
+    from rg2watch.store import Store
+    from rg2watch.watcher import Watcher
+
+    db = tmp_path / "w.sqlite"
+    s = Store(db)
+    s.upsert_election(Election("662405", "660578", "3", "Test", "http://127.0.0.1:9"))
+    s.close()
+    delivered, sleeps = [], []
+    real = cli._handlers
+
+    def handlers(*a):
+        on_events, _ = real(*a)
+        return on_events, lambda: delivered.append(1)
+
+    def boom(self):
+        raise RuntimeError("tick blew up")
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        if len(sleeps) >= 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_handlers", handlers)
+    monkeypatch.setattr(Watcher, "run_once", boom)
+    monkeypatch.setattr(cli.time, "sleep", fake_sleep)
+    assert main(["watch", "--parent", "662405", "--db", str(db)]) == 0
+    assert len(delivered) == 2
