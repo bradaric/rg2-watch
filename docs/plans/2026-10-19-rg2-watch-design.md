@@ -221,7 +221,20 @@ Cross-station (stats.py, per municipality, run every N new forms and at end):
 - Phase 2: stats S1/S2, HTML report, Telegram, second-opinion pass, parallel municipality sweeps.
 - Phase 3: cross-check vs RIK tabulated per-station results (`/get_results/`), PDF metadata/scan forensics (JPEG ELA, producer/creation-time anomalies), observer forms (RG-11) parsing.
 
+## 10a. Builder decisions (from design review) **[call]**
+
+- Scope order: build 1a to completion (tested via replay) before starting 1b; both on `feature/mvp`.
+- Rate limiting: one global token bucket (default 2 req/s) shared by all lanes, strict lane priority when contended: rare-document lanes > watchlist > RG-2 change probe > RG-2 full sweep. Latency targets are best-effort under the cap; the cap wins. Each sweep logs its duration so the real latency is visible.
+- D4 "removed": before raising, re-query that station directly (`filters[municipality]` + `filters[election_station_no]`, no doc-type filter); raise only if the document is still absent. Paging shifts during a sweep therefore cannot cause D4.
+- Crops: fixed relative boxes = left/right halves of each page (the whole of section III sits in page 1 right half regardless of list count). Boxes live in config; calibrated on the 662405 sample and checked on a parliamentary-format sample in fixtures if one exists.
+- Model: `claude-opus-5-5` per current API reference; implementer verifies image limits and structured-output params from the claude-api skill docs before coding. Config `max_spend_usd` (default 100): when cumulative estimated spend reaches it, analysis pauses and a self-alert is sent; the watcher keeps diffing.
+- Second-opinion pass: out of 1b (Phase 2). `analyses` already allows multiple rows per document.
+- Positives for testing: fixtures include a real RG-9 (Сечањ, 662405) and Примедба documents; visual-rule positives are synthesised for unit tests (fake integrity reports); real overwrite examples to be supplied by the user when available.
+
 ## 11. Open questions for the user
+
+0. Date of the next live election to target, and whether a dry run on a smaller live election (local/referendum) is possible before it.
+0b. Any known-irregular RG-2 examples (URLs) for the golden set.
 
 1. Model/cost: default Opus 5.5 (~$0.03-0.05/form). OK, or prefer cheaper after calibration?
 2. Notification channel: ntfy OK? Self-hosted or ntfy.sh?
