@@ -305,8 +305,8 @@ def test_restart_requeues_running(tmp_path):
     pipe2.start()
     pipe2.stop()
     assert e.status(d.url)[0] in ("new", "done")
-    while pipe2.process_next():
-        pass
+    assert pipe2.process_next() is False  # stopped
+    e.drain()
     assert e.status(d.url) == ("done", 2)
 
 
@@ -538,21 +538,21 @@ def test_bad_key_pauses_alerts_once_no_attempts_and_recovers(tmp_path):
         assert e.pipe.process_next() is False  # paused: nothing claimed
     assert e.ai.calls == 1
     e.clock.now += 600
-    assert e.pipe.process_next() is True  # one probe, still failing
+    assert e.pipe.process_next() is True  # one probe, still failing: it pays its attempt
+    assert e.status(b.url) == ("failed", 1) and e.status(a.url) == ("new", 0)
     assert e.pipe.process_next() is False  # paused again
     assert e.ai.calls == 2
     assert alerts(e, "[rg2-watch] analysis paused: AuthenticationError") == 1
     e.ai.reply = resp(clean_report())
     e.clock.now += 600
     assert e.drain() == 2
-    assert e.status(a.url) == ("done", 1) and e.status(b.url) == ("done", 1)
+    assert e.status(a.url) == ("done", 1) and e.status(b.url) == ("done", 2)
     assert alerts(e, "[rg2-watch] analysis resumed") == 1
     assert [f.rule for f in e.findings if f.rule.startswith("X")] == []
 
 
 @pytest.mark.parametrize("cls,status", [(anthropic.PermissionDeniedError, 403),
-                                        (anthropic.NotFoundError, 404),
-                                        (anthropic.BadRequestError, 400)])
+                                        (anthropic.NotFoundError, 404)])
 def test_other_global_errors_pause(tmp_path, cls, status):
     e = Env(tmp_path, api_error(cls, status))
     d = doc()
@@ -789,3 +789,114 @@ def test_watch_once_keeps_analysis_off(tmp_path, monkeypatch, capsys):
     assert main(["watch", "--parent", P, "--db", str(db), "--once"]) == 0
     assert made == []
     assert capsys.readouterr().err.count("INFO rg2watch.cli: watch --once is a one-shot diff check") == 1
+
+
+# fix round 2 -------------------------------------------------------------------
+
+def test_poison_bad_request_doc_goes_x2_others_analysed(tmp_path):
+    poison = doc("b.pdf", no="2")  # newest
+    good = doc("a.pdf", no="1")
+    e = Env(tmp_path, None)
+
+    def reply():  # the document being analysed is the one marked running
+        running = e.store._db.execute(
+            "SELECT url FROM documents WHERE analysis_status='running'").fetchone()[0]
+        return api_error(anthropic.BadRequestError, 400) if running == poison.url else resp(clean_report())
+
+    e.ai.reply = reply
+    e.publish(good)
+    e.store.apply_events(P, e.store.start_sweep(P, "t"), [Event("added", poison)])
+    e.pipe.submit([Event("added", poison)])
+    assert e.drain() == 2  # poison fails once, good doc analysed anyway
+    assert e.status(good.url) == ("done", 1) and e.status(poison.url) == ("failed", 1)
+    for _ in range(2):
+        e.clock.now += 200
+        e.drain()
+    assert e.status(poison.url) == ("failed", 3)
+    assert [f.rule for f in e.findings if f.doc.url == poison.url] == ["X2"]
+    assert "analysis paused" not in e.out.getvalue()
+
+
+def test_three_distinct_bad_requests_pause_globally(tmp_path):
+    e = Env(tmp_path, api_error(anthropic.BadRequestError, 400))
+    docs = [doc(f"{n}.pdf", no=str(n)) for n in (1, 2, 3, 4)]
+    pdf_dir = tmp_path / "pdfs"
+    for n in (1, 2, 3, 4):
+        make_pdf(pdf_dir / f"{n}.pdf")
+    e.publish(*docs)
+    e.drain()
+    assert e.ai.calls == 3
+    assert alerts(e, "[rg2-watch] analysis paused: BadRequestError") == 1
+    # first two used an attempt, the third (account-wide) was refunded, the fourth never claimed
+    assert [e.status(d.url) for d in reversed(docs)] == [("failed", 1), ("failed", 1), ("new", 0), ("new", 0)]
+    e.clock.now += 600
+    assert e.pipe.process_next() is True  # probe: still 400 -> paused again, pays its attempt
+    assert e.pipe.process_next() is False
+    assert e.ai.calls == 4 and alerts(e, "analysis paused") == 1
+    assert e.status(docs[3].url) == ("failed", 2)  # newest due one (retry time passed)
+
+
+def test_bad_request_streak_reset_by_success(tmp_path):
+    e = Env(tmp_path, None)
+    replies = [api_error(anthropic.BadRequestError, 400), api_error(anthropic.BadRequestError, 400),
+               resp(clean_report()), api_error(anthropic.BadRequestError, 400)]
+    e.ai.reply = lambda: replies.pop(0)
+    pdf_dir = tmp_path / "pdfs"
+    for n in (1, 2, 3, 4):
+        make_pdf(pdf_dir / f"{n}.pdf")
+    e.publish(*[doc(f"{n}.pdf", no=str(n)) for n in (1, 2, 3, 4)])
+    e.drain()
+    assert e.ai.calls == 4 and "analysis paused" not in e.out.getvalue()
+
+
+def test_extended_pause_realerts_hourly(tmp_path):
+    e = Env(tmp_path, api_error(anthropic.AuthenticationError, 401), analysis_pause_s=600)
+    pdf_dir = tmp_path / "pdfs"
+    docs = [doc(f"{n}.pdf", no=str(n)) for n in range(1, 13)]
+    for n in range(1, 13):
+        make_pdf(pdf_dir / f"{n}.pdf")
+    e.publish(*docs)
+    e.pipe.process_next()
+    for _ in range(12):  # 12 failed probes = 2 hours
+        e.clock.now += 600
+        e.pipe.process_next()
+    assert alerts(e, "[rg2-watch] analysis paused: AuthenticationError") == 1
+    assert alerts(e, "[rg2-watch] analysis still paused since ") == 2
+
+
+def test_stop_before_api_call_refunds(tmp_path, monkeypatch):
+    e = Env(tmp_path, resp(clean_report()))
+    from rg2watch import pipeline
+    real = pipeline.render_tiles
+
+    def render_then_stop(path):
+        out = real(path)
+        e.pipe._stop.set()
+        return out
+
+    monkeypatch.setattr(pipeline, "render_tiles", render_then_stop)
+    d = doc()
+    e.publish(d)
+    assert e.pipe.process_next() is True
+    assert e.ai.calls == 0 and e.status(d.url) == ("new", 0)
+
+
+def test_pdf_download_blocked_alert_and_recovery(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    pdf_dir = tmp_path / "pdfs"
+    docs = [doc(f"{n}.pdf", no=str(n)) for n in range(1, 13)]
+    for n in range(1, 13):
+        make_pdf(pdf_dir / f"{n}.pdf")
+    e.publish(*docs)
+    e.fake.fail_status = 403
+    for _ in range(9):
+        e.pipe.process_next()
+    assert "PDF downloads" not in e.out.getvalue()
+    for _ in range(5):
+        e.pipe.process_next()
+    assert alerts(e, "[rg2-watch] PDF downloads blocked/unavailable since ") == 1
+    e.fake.fail_status = None
+    e.clock.now += 121
+    e.drain()
+    assert alerts(e, "[rg2-watch] PDF downloads available again") == 1
+    assert e.rik.blocked_streak == 0

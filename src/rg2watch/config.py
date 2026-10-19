@@ -36,7 +36,7 @@ class Config:
     analysis_workers: int = 4
     download_max_rps: float = 0.5
     analysis_pause_s: int = 600
-    stop_wait_s: int = 120
+    stop_wait_s: int = 80
     turnout_high: float = 0.95
     leader_share_high: float = 0.90
     assisted_share: float = 0.05

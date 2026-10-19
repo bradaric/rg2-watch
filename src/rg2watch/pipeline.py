@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import anthropic
@@ -25,10 +26,15 @@ RIK_RETRY_S = 120
 IDLE_POLL_S = 5.0
 SPEND_CAP_ALERT = "[rg2-watch] spend cap reached"
 RESUMED_ALERT = "[rg2-watch] analysis resumed"
-# Errors that fail every form alike (bad key, no access, unknown model, invalid request):
-# pause all analysis instead of burning each document's attempts.
+REALERT_S = 3600  # while a global pause keeps being extended
+# Errors that fail every form alike (bad key, no access, unknown model): pause all analysis
+# instead of burning each document's attempts.
 GLOBAL_ERRORS = (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
-                 anthropic.NotFoundError, anthropic.BadRequestError)
+                 anthropic.NotFoundError)
+# BadRequest is per document, unless this many different documents in a row hit it
+# (e.g. no credit, an invalid parameter): then it is treated as global.
+BAD_REQUEST_GLOBAL = 3
+DOWNLOAD_ALERT_AFTER = 10  # consecutive download deferrals before a status alert
 _MAX_ERROR = 200
 _RENDER_LOCK = threading.Lock()  # PDFium is not thread-safe
 
@@ -36,6 +42,10 @@ _RENDER_LOCK = threading.Lock()  # PDFium is not thread-safe
 def _short(exc: BaseException, limit: int = _MAX_ERROR) -> str:
     text = " ".join(f"{type(exc).__name__}: {exc}".split())
     return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _hhmm(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%H:%M")
 
 
 class AnalysisPipeline:
@@ -54,6 +64,12 @@ class AnalysisPipeline:
         self._paused = False  # global failure episode (bad key etc.)
         self._pause_until = float("-inf")
         self._probing = False
+        self._paused_since = 0.0
+        self._pause_alerted_at = 0.0
+        self._bad_requests: set[str] = set()  # distinct docs hitting 400 since the last success
+        self._deferrals = 0  # consecutive download deferrals (RIK busy/blocking)
+        self._deferred_since = 0.0
+        self._download_alerted = False
 
     # control ----------------------------------------------------------------
     def submit(self, events: list[Event]) -> None:
@@ -101,7 +117,7 @@ class AnalysisPipeline:
     def process_next(self) -> bool:
         """Analyse one due document; False when there is nothing to do or analysis is paused
         (spend cap, RIK blocked pause, global API failure)."""
-        if self._over_cap() or self._rik_paused():
+        if self._stop.is_set() or self._over_cap() or self._rik_paused():
             return False
         with self._state:
             probe = self._paused
@@ -114,7 +130,7 @@ class AnalysisPipeline:
             docs = self.store.next_for_analysis(1, parent=self.parent, now=self.clock())
             if not docs:
                 return False
-            outcome = self._process(docs[0])
+            outcome = self._process(docs[0], probe)
             return True
         finally:
             if probe:
@@ -141,11 +157,11 @@ class AnalysisPipeline:
         except Exception:
             log.exception("status alert failed: %s", text)
 
-    def _process(self, doc: Doc) -> str | None:
+    def _process(self, doc: Doc, probe: bool = False) -> str | None:
         """Returns "api" when the Anthropic API answered usably, "global" on a global failure,
         None when no API call was made."""
         try:
-            return self._run(doc)
+            return self._run(doc, probe)
         except Exception as exc:  # a store write failed (e.g. closed at shutdown) or a bug
             if not self._stop.is_set():
                 log.exception("analysis of %s failed unexpectedly", doc.url)
@@ -156,18 +172,22 @@ class AnalysisPipeline:
                           doc.url)
             return None
 
-    def _run(self, doc: Doc) -> str | None:
+    def _run(self, doc: Doc, probe: bool) -> str | None:
         if self._rik_paused():  # watcher's blocked pause began after the claim
             self.store.mark_analysis(doc.url, "new", refund=True)
             return None
         try:
+            before = self.client.download_last_ok
             path = fetch_pdf(self.client, doc.url, self.cache_dir)
+            if self.client.download_last_ok != before:
+                self._download_ok()
             with _RENDER_LOCK:
                 tiles = render_tiles(path)
         except RikUnavailable as exc:  # RIK busy/blocking is not the document's fault
             log.warning("download of %s deferred %d s: %s", doc.url, RIK_RETRY_S, _short(exc))
             self.store.mark_analysis(doc.url, "failed", _short(exc),
                                      retry_at=self.clock() + RIK_RETRY_S, refund=True)
+            self._download_deferred()
             return None
         except (RenderError, RikError) as exc:
             self._permanent(doc, "D3", f"document could not be processed: {_short(exc)}", exc)
@@ -176,21 +196,38 @@ class AnalysisPipeline:
             self._transient(doc, exc)
             return None
 
+        if self._stop.is_set():  # shutting down: do not start a billed call
+            self.store.mark_analysis(doc.url, "new", refund=True)
+            return None
         try:
             result = analyze_document(tiles, self.anthropic, self.cfg)
+        except anthropic.BadRequestError as exc:
+            self._record_cost(doc, exc)
+            with self._state:
+                self._bad_requests.add(doc.url)
+                # during a global pause the probe's 400 counts as still account-wide
+                account_wide = probe or len(self._bad_requests) >= BAD_REQUEST_GLOBAL
+                if account_wide:
+                    self._bad_requests.clear()
+            if account_wide:
+                return self._global_failure(doc, exc, probe)
+            self._transient(doc, exc)
+            return None
         except GLOBAL_ERRORS as exc:
             self._record_cost(doc, exc)
-            self.store.mark_analysis(doc.url, "new", _short(exc), refund=True)
-            self._global_pause(exc)
-            return "global"
+            return self._global_failure(doc, exc, probe)
         except AnalysisRefused as exc:
             self._record_cost(doc, exc)
+            self._api_ok()
             self._permanent(doc, "X1", f"analysis failed: {_short(exc)}", exc)
             return "api"
         except Exception as exc:  # 429/5xx/overloaded/connection after SDK retries, bad output
             self._record_cost(doc, exc)
             self._transient(doc, exc)
+            if isinstance(exc, AnalysisError):
+                self._api_ok()
             return "api" if isinstance(exc, (AnalysisError, anthropic.APIStatusError)) else None
+        self._api_ok()
         try:  # first write after a billed call: never lose its cost
             self.store.save_analysis(doc.url, result, PROMPT_VERSION)
         except Exception:
@@ -210,16 +247,57 @@ class AnalysisPipeline:
         return "api"
 
     # global pause -----------------------------------------------------------
+    def _api_ok(self) -> None:
+        with self._state:
+            self._bad_requests.clear()
+
+    def _global_failure(self, doc: Doc, exc: BaseException, probe: bool) -> str:
+        if probe:  # the probe pays its attempt, so a poison document ends in X2
+            self._transient(doc, exc)
+        else:
+            self.store.mark_analysis(doc.url, "new", _short(exc), refund=True)
+        self._global_pause(exc)
+        return "global"
+
     def _global_pause(self, exc: BaseException) -> None:
+        now = self.clock()
         with self._state:
             first, self._paused = not self._paused, True
-            self._pause_until = self.clock() + self.cfg.analysis_pause_s
+            self._pause_until = now + self.cfg.analysis_pause_s
+            if first:
+                self._paused_since = self._pause_alerted_at = now
+            realert = not first and now - self._pause_alerted_at >= REALERT_S
+            if realert:
+                self._pause_alerted_at = now
         if first:
             log.error("analysis paused for %d s: %s", self.cfg.analysis_pause_s, _short(exc))
             self._status(f"[rg2-watch] analysis paused: {_short(exc, 120)}")
-        else:
-            log.warning("analysis still failing, paused another %d s: %s",
-                        self.cfg.analysis_pause_s, _short(exc))
+            return
+        log.warning("analysis still failing, paused another %d s: %s",
+                    self.cfg.analysis_pause_s, _short(exc))
+        if realert:
+            self._status(f"[rg2-watch] analysis still paused since {_hhmm(self._paused_since)}: "
+                         f"{type(exc).__name__}")
+
+    # download health --------------------------------------------------------
+    def _download_deferred(self) -> None:
+        with self._state:
+            if self._deferrals == 0:
+                self._deferred_since = self.clock()
+            self._deferrals += 1
+            alert = self._deferrals >= DOWNLOAD_ALERT_AFTER and not self._download_alerted
+            if alert:
+                self._download_alerted = True
+        if alert:
+            self._status("[rg2-watch] PDF downloads blocked/unavailable since "
+                         f"{_hhmm(self._deferred_since)}")
+
+    def _download_ok(self) -> None:
+        with self._state:
+            recovered, self._download_alerted = self._download_alerted, False
+            self._deferrals = 0
+        if recovered:
+            self._status("[rg2-watch] PDF downloads available again")
 
     def _end_probe(self, outcome: str | None) -> None:
         with self._state:
