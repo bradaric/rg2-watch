@@ -68,6 +68,11 @@ class Doc:
         return f"{self.municipality}|{self.station_no}"
 
 
+def doc_key(doc: Doc) -> tuple[str, int | str]:
+    kind = doc.doc_type if doc.doc_type is not None else "label:" + " ".join(doc.label.split())
+    return (doc.station_key, kind)
+
+
 @dataclass(frozen=True)
 class ListingPage:
     docs: list[Doc]

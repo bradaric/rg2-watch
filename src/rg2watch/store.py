@@ -3,7 +3,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rg2watch.models import Doc, Election, Event, Finding, Scope
+from rg2watch.models import Doc, Election, Event, Finding, Scope, doc_key
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS elections(
@@ -66,7 +66,7 @@ class Store:
             "election_type=excluded.election_type, title=excluded.title, url=excluded.url",
             (e.parent, e.round, e.election_type, e.title, e.base_url))
 
-    def known_docs(self, parent: str, scope: Scope) -> dict[tuple[str, int | None], Doc]:
+    def known_docs(self, parent: str, scope: Scope) -> dict[tuple[str, int | str], Doc]:
         sql, args = "SELECT * FROM documents WHERE parent=? AND active=1", [parent]
         if scope.doc_type is not None:
             sql += " AND doc_type=?"
@@ -79,7 +79,7 @@ class Store:
             args.append(scope.station_key)
         with self._lock:
             rows = self._db.execute(sql + " ORDER BY id", args).fetchall()
-        return {(r["station_key"], r["doc_type"]): _doc(r) for r in rows}
+        return {doc_key(d): d for d in map(_doc, rows)}
 
     def apply_events(self, parent: str, sweep_id: int, events: list[Event]) -> None:
         now = _now()

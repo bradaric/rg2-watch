@@ -1,6 +1,6 @@
 import threading
 
-from rg2watch.models import Doc, Election, Event, Finding, Scope
+from rg2watch.models import Doc, Election, Event, Finding, Scope, doc_key
 from rg2watch.store import Store
 
 P = "662405"
@@ -102,3 +102,13 @@ def test_usable_from_other_thread(tmp_path):
     t.start()
     t.join()
     assert not errs and len(s.known_docs(P, Scope())) == 1
+
+
+def test_known_docs_keys_use_doc_key():
+    s = store()
+    known = Doc("Сечањ", "1", "ОШ", "  Непознато   лабел ", None, "https://x/u", "2026-10-19T20:15")
+    typed = doc("https://x/t")
+    s.apply_events(P, s.start_sweep(P, "l"), [Event("added", known), Event("added", typed)])
+    got = s.known_docs(P, Scope())
+    assert set(got) == {doc_key(known), doc_key(typed)}
+    assert doc_key(known) == ("Сечањ|1", "label:Непознато лабел")
