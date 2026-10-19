@@ -21,7 +21,9 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
    unguessable), then set `RG2W_NTFY_TOPIC=<topic>` (or `ntfy_topic` in the config).
 3. Start the live loop and leave it running:
 
-       RG2W_NTFY_TOPIC=<topic> uv run rg2watch watch --parent <parent> --config rg2watch.toml
+       RG2W_NTFY_TOPIC=<topic> uv run rg2watch watch --parent <parent> --config rg2watch.toml --analyze
+
+   `--analyze` turns on the paid Claude analysis of RG-2 forms (see below); leave it out to only watch.
 
    HIGH findings (RG-8/RG-9 published, RG-2 replaced, with the old URL as "was: ...") are pushed
    immediately, MEDIUM in digests, LOW only printed. Every finding is also printed (and flushed) to
@@ -40,15 +42,31 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
 
 ## Visual analysis of RG-2 forms
 
-While `watch` runs, every newly published RG-2 (and repeat-vote RG-2: types 6/10/15/16) is
+Analysis is opt-in because it calls a paid API: `watch` analyses only with `--analyze` or
+`analysis_enabled = true` in the config (`--no-analyze` overrides the config). At start it logs the
+spend cap, what this election has spent so far, how many forms are queued and how many older forms
+are not analysed.
+
+Only forms first seen after analysis was first enabled for an election in this DB are analysed
+(the moment is stored per election). Forms recorded earlier, for example by a `watch` run without
+`--analyze` or a DB from before analysis existed, are marked skipped and cost nothing; add
+`--analyze-backlog` (together with `--analyze`) to analyse them too, or, once analysis has been
+enabled for that election, queue them with `rg2watch requeue --skipped`. With `--baseline` on a fresh DB and `--analyze`, the forms recorded by
+the baseline pass are seen after enabling and are analysed.
+
+While analysis is on, every newly published RG-2 (and repeat-vote RG-2: types 6/10/15/16) is
 downloaded through the same rate limiter, rendered into page tiles and checked by Claude vision for
 corrections, missing signatures, a different pen/hand in the results block, arithmetic errors and
 procedural flags. This happens in background worker threads (`analysis_workers`, default 4), so the
 watcher keeps sweeping. Findings (rules V*, P*, A*) are stored and alerted like the D-rule findings.
 Documents that cannot be processed give a LOW `D3` (not a PDF / unreadable), a LOW `X1` (model
-refused) or, after 3 failed attempts with 60 s / 120 s backoff (Anthropic 429/5xx/overloaded/
-connection errors), a LOW `X2`. Each document URL is analysed once; a replaced file is a new URL
-and is analysed again.
+refused) or, after 3 failed attempts with 60 s / 120 s backoff (e.g. output that is not valid
+JSON), a LOW `X2`. When Anthropic is busy after the SDK's own retries (429, 5xx, 529 overloaded,
+connection errors or timeouts, also when they arrive mid-stream), the form is retried after 120 s
+without using an attempt; after 5 such failures in a row you get one "[rg2-watch] analysis delayed:
+Anthropic overloaded since HH:MM" alert and one "[rg2-watch] analysis no longer delayed" when a form
+goes through again. Each document URL is analysed once; a replaced file is a new URL and is
+analysed again.
 
 Errors that would fail every form (invalid key, no permission, unknown model) pause all analysis
 for `analysis_pause_s` (default 600 s) with one "[rg2-watch] analysis paused: ..." alert; the form
@@ -57,26 +75,32 @@ unless 3 different forms in a row are rejected (e.g. no credit left), which paus
 After the pause one probe form is tried (it uses an attempt, so a form that keeps failing ends as
 X2); when it works, analysis resumes ("[rg2-watch] analysis resumed"). While the pause keeps being
 extended, "[rg2-watch] analysis still paused since HH:MM" is re-sent at most once an hour. When
-RIK is busy or blocking a download, the form is retried after 120 s without using an attempt, and
-workers sit out the watcher's blocked pause; after 10 such deferrals in a row you get one "[rg2-watch]
-PDF downloads blocked/unavailable since HH:MM" alert and one when downloads work again.
+RIK is busy or blocking a download (including a download that takes longer than 120 s in one
+attempt), the form is retried after 120 s without using an attempt, and workers sit out the
+watcher's blocked pause. When PDF downloads are refused (401/403) 3 times in a row, workers stop
+downloading for `blocked_pause_s`. You get one "[rg2-watch] PDF downloads blocked/unavailable since
+HH:MM" alert (at that pause, or after 10 deferrals in a row) and one when downloads work again.
 After fixing a problem, put failed forms back in the queue:
 
     uv run rg2watch requeue [--parent <parent>]            # forms that used all 3 attempts (X2)
     uv run rg2watch requeue [--parent <parent>] --failed   # every failed form, also D3/X1
+    uv run rg2watch requeue [--parent <parent>] --skipped  # also forms seen before analysis was on
 
 On Ctrl-C/SIGTERM, `watch` waits up to `stop_wait_s` (default 80 s) for in-flight analyses so
 their cost is recorded; anything still running is retried on the next start. The default fits
 under systemd's default `TimeoutStopSec` of 90 s; raise both together if you change it.
 `--baseline` only silences D-rule alerts: already-published RG-2 forms are analysed too.
 
-Analysis needs Anthropic credentials (`ANTHROPIC_API_KEY` or an ant profile). Without them `watch`
-logs one warning and only watches; `--no-analyze` turns analysis off explicitly and `watch --once`
-never analyses. Skipped forms stay queued in the DB and are analysed by the next run that has
-analysis on. Spend is recorded per call (`price_in_per_mtok`/`price_out_per_mtok`); when it reaches
-`max_spend_usd` (default 100) analysis pauses with one "[rg2-watch] spend cap reached" alert while
-the watcher keeps running. With several workers busy, the cap can be overshot by up to one form per
-worker. PDFs are cached under `<db dir>/pdfs`.
+Analysis needs Anthropic credentials (`ANTHROPIC_API_KEY` or an ant profile). Without them
+`watch --analyze` logs one warning and only watches; `watch --once` never analyses. Forms published
+while analysis is off (after it was first enabled) stay queued and are analysed by the next run
+with analysis on. Spend is recorded per call (`price_in_per_mtok`/`price_out_per_mtok`, cache reads
+at 5% of the input price) and capped per election: `max_spend_usd` (default 20) is the sum of all
+analyses of that election (`parent`) in this DB, so each election has its own budget; `eval` runs
+count under the election `eval` and `analyze` under `adhoc`. When the cap is reached analysis
+pauses with one "[rg2-watch] spend cap reached" alert while the watcher keeps running. With several
+workers busy, the cap can be overshot by up to one form per worker. PDFs are cached under
+`<db dir>/pdfs`.
 
 Check a single form by hand (local file, or a URL on the host of an election registered with `add`):
 
@@ -84,7 +108,8 @@ Check a single form by hand (local file, or a URL on the host of an election reg
     uv run rg2watch analyze https://www.rik.parlament.gov.rs/extfile/... [--json]
 
 It prints the cost, scan quality and findings (or, with `--json`, the full report and findings).
-`analyze` exits 2 when credentials are missing. Its spend is not counted towards `max_spend_usd`.
+`analyze` exits 2 when credentials are missing. Its spend is recorded under `adhoc`, so it never
+counts against an election's cap (and is not capped itself: each run is an explicit request).
 
 `watch --once` bootstraps, runs every lane once (including a full safety sweep, ignoring the page
 budget) and exits. `watch` also
@@ -111,14 +136,34 @@ Run it (the PDFs are looked up by `file` name inside `--pdf-dir`):
 
     uv run rg2watch eval --labels tests/golden/labels.jsonl --pdf-dir data/raw662405 [--limit N]
 
-This calls the Anthropic API, so it first prints an estimated cost (up to two tiles per page x ~4.8k
-input tokens plus ~3k output tokens per form) and refuses to run without `--yes`. It needs
-credentials like `analyze` (exit 2 without). Each analysis is recorded in the DB under the
-`eval` election, so its spend counts towards `max_spend_usd`; the run stops when the cap is reached.
+This calls the Anthropic API, so it first prints an estimate (the real tile count of each PDF,
+planned without rendering, x ~5k input tokens, plus ~10k output tokens per form since adaptive
+thinking is billed as output; actual cost may differ) and the remaining cap, and refuses to run
+without `--yes`. If the estimate exceeds the remaining cap it also refuses unless you add
+`--force-over-cap`. `--limit` must be at least 1. Every `expect` value must be `true` or `false`;
+otherwise the labels file is rejected with its file:line. It needs credentials like `analyze`
+(exit 2 without). Each analysis is recorded in the DB under the `eval` election, which has its own
+`max_spend_usd` budget; the run stops when the cap is reached.
 `--cached` re-scores from analyses already stored in the DB and never calls the API, which is
 how you re-check after changing a rule. The table and per-form findings are also written to
 `data/eval/<timestamp>.json` (next to the DB). With no filled-in `expect` it prints
 "no verified labels yet - fill tests/golden/labels.jsonl".
+
+Calibration runbook (keep its spend apart from election-night data):
+
+1. Use a dedicated DB, so its spend and analyses never mix with a live election:
+   `--db data/calib.sqlite`.
+2. Pilot on 5 forms first and check the printed estimate against the actual spend:
+
+       uv run rg2watch eval --labels tests/golden/labels.jsonl --pdf-dir data/raw662405 \
+           --db data/calib.sqlite --limit 5 --yes
+
+3. Then the full run with a config that sets `max_spend_usd = 25`:
+
+       uv run rg2watch eval --labels tests/golden/labels.jsonl --pdf-dir data/raw662405 \
+           --db data/calib.sqlite --config calib.toml --yes
+
+4. Re-score after rule changes with `--cached` (no API calls).
 
 ## Replay (rehearsal without RIK)
 
