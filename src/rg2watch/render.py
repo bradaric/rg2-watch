@@ -18,6 +18,7 @@ OVERLAP = 0.04
 MAX_DPI = 300
 MAX_PAGES = 60
 MAX_PAGE_PIXELS = 40_000_000
+MAX_TILE_PIXELS = 3_750_000  # the model downsizes larger images; send what it will see
 OSD_PAGE_TIMEOUT_S = 10
 OSD_BUDGET_S = 20
 Image.MAX_IMAGE_PIXELS = 200_000_000
@@ -74,9 +75,9 @@ def _osd_rotation(img: Image.Image, timeout: float = OSD_PAGE_TIMEOUT_S) -> int:
 
 
 def _jpeg(img: Image.Image, max_edge: int) -> bytes:
-    if max(img.size) > max_edge:
-        k = max_edge / max(img.size)
-        img = img.resize((max(1, round(img.width * k)), max(1, round(img.height * k))),
+    k = min(1.0, max_edge / max(img.size), (MAX_TILE_PIXELS / (img.width * img.height)) ** 0.5)
+    if k < 1.0:
+        img = img.resize((max(1, int(img.width * k)), max(1, int(img.height * k))),
                          Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=90)
@@ -92,31 +93,51 @@ def _halves(img: Image.Image) -> list[Image.Image]:
     return [img.crop((0, 0, w, cut)), img.crop((0, h - cut, w, h))]
 
 
+def _plan(pdf, pdf_path: Path, max_edge: int, max_tiles: int, dpi: int):
+    """(pages to render as (index, effective dpi, long edge), split) - reads no pixels."""
+    n = len(pdf)
+    if n == 0:
+        raise RenderError(f"PDF has no pages: {pdf_path}")
+    if n > MAX_PAGES:
+        raise RenderError(f"PDF has {n} pages (max {MAX_PAGES}): {pdf_path}")
+    plan = []
+    for i in range(n):
+        page = pdf[i]
+        eff = min(MAX_DPI, max(dpi, _embedded_dpi(page)))
+        w, h = page.get_width() * eff / 72, page.get_height() * eff / 72
+        if w * h > MAX_PAGE_PIXELS:
+            raise RenderError(f"page {i + 1} would render at {w:.0f}x{h:.0f} px: {pdf_path}")
+        plan.append((i, eff, max(w, h)))
+
+    split = sum(2 if edge > max_edge else 1 for _, _, edge in plan) <= max_tiles
+    keep = plan
+    if not split and n > max_tiles:
+        log.warning("%s has %d pages; keeping first %d and last", pdf_path, n, max_tiles - 1)
+        keep = plan[:max_tiles - 1] + plan[-1:]
+    return keep, split
+
+
+def count_tiles(pdf_path: Path, max_edge: int = 2576, max_tiles: int = 16, dpi: int = 200) -> int:
+    """Number of tiles render_tiles would produce, without rendering any pixels."""
+    pdf = _open(pdf_path)
+    try:
+        try:
+            keep, split = _plan(pdf, pdf_path, max_edge, max_tiles, dpi)
+        except RenderError:
+            raise
+        except Exception as exc:
+            raise RenderError(f"cannot plan {pdf_path}: {exc}") from exc
+        return sum(2 if split and round(edge) > max_edge else 1 for _, _, edge in keep)
+    finally:
+        pdf.close()
+
+
 def render_tiles(pdf_path: Path, max_edge: int = 2576, max_tiles: int = 16,
                  dpi: int = 200) -> list[Tile]:
     pdf = _open(pdf_path)
     try:
-        n = len(pdf)
-        if n == 0:
-            raise RenderError(f"PDF has no pages: {pdf_path}")
-        if n > MAX_PAGES:
-            raise RenderError(f"PDF has {n} pages (max {MAX_PAGES}): {pdf_path}")
         try:
-            plan = []  # (page index, effective dpi, rendered long edge)
-            for i in range(n):
-                page = pdf[i]
-                eff = min(MAX_DPI, max(dpi, _embedded_dpi(page)))
-                w, h = page.get_width() * eff / 72, page.get_height() * eff / 72
-                if w * h > MAX_PAGE_PIXELS:
-                    raise RenderError(f"page {i + 1} would render at {w:.0f}x{h:.0f} px: {pdf_path}")
-                plan.append((i, eff, max(w, h)))
-
-            split = sum(2 if edge > max_edge else 1 for _, _, edge in plan) <= max_tiles
-            keep = plan
-            if not split and n > max_tiles:
-                log.warning("%s has %d pages; keeping first %d and last", pdf_path, n, max_tiles - 1)
-                keep = plan[:max_tiles - 1] + plan[-1:]
-
+            keep, split = _plan(pdf, pdf_path, max_edge, max_tiles, dpi)
             tiles: list[Tile] = []
             osd_spent = 0.0
             for i, eff, _ in keep:

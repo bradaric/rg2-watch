@@ -117,8 +117,8 @@ def _content(tiles: list[Tile]) -> list[dict]:
 def _usage_cost(usage, cfg: Config) -> tuple[int, int, float]:
     """(input_tokens, output_tokens, cost_usd) for one response.
 
-    Input tokens include cache reads/creations. Cost: cache reads at 10% of the
-    input rate, cache creation at 1.25x. When usage.iterations is present each
+    Input tokens include cache reads/creations. Cost: cache reads at 5% of the
+    input rate (Opus 5.5: $0.20 vs $4 per MTok), cache creation at 1.25x. When usage.iterations is present each
     entry is summed and priced at cfg prices (a fallback model's real rates may
     differ, so cost is then an estimate).
     """
@@ -132,9 +132,15 @@ def _usage_cost(usage, cfg: Config) -> tuple[int, int, float]:
         out = getattr(e, "output_tokens", None) or 0
         tin += plain + read + create
         tout += out
-        cost += ((plain + 0.1 * read + 1.25 * create) * cfg.price_in_per_mtok
+        cost += ((plain + 0.05 * read + 1.25 * create) * cfg.price_in_per_mtok
                  + out * cfg.price_out_per_mtok) / 1_000_000
     return tin, tout, cost
+
+
+def _final_message(client, params: dict):
+    """Streamed request: the SDK refuses non-streaming calls with large max_tokens."""
+    with client.beta.messages.stream(**params) as stream:
+        return stream.get_final_message()
 
 
 def analyze_document(tiles: list[Tile], client, cfg: Config) -> AnalysisResult:
@@ -144,13 +150,13 @@ def analyze_document(tiles: list[Tile], client, cfg: Config) -> AnalysisResult:
     cost = 0.0
     for max_tokens in (MAX_TOKENS, MAX_TOKENS * 2):
         try:
-            resp = client.beta.messages.create(
+            resp = _final_message(client, dict(
                 model=cfg.model,
                 max_tokens=max_tokens,
                 messages=messages,
                 output_config={"effort": cfg.effort, "format": {"type": "json_schema", "schema": SCHEMA}},
                 **extra,
-            )
+            ))
         except Exception as exc:
             if cost:  # the truncated first call was billed: keep it visible to spend tracking
                 exc.input_tokens, exc.output_tokens, exc.cost_usd = tin, tout, cost

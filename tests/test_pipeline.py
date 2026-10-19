@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import threading
@@ -50,16 +51,17 @@ class FakeAnthropic:
     def __init__(self, reply):
         self.reply = reply  # a response, an exception, or a callable
         self.calls = 0
-        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+        self.beta = SimpleNamespace(messages=SimpleNamespace(stream=self._stream))
 
-    def _create(self, **kw):
+    @contextlib.contextmanager
+    def _stream(self, **kw):
         self.calls += 1
         r = self.reply
         if callable(r):
             r = r()
         if isinstance(r, BaseException):
             raise r
-        return r
+        yield SimpleNamespace(get_final_message=lambda: r)
 
 
 class Clock:

@@ -67,6 +67,7 @@ def test_osd_failure_does_not_fail(tmp_path):
 
 def test_osd_rotation_applied(tmp_path, monkeypatch):
     monkeypatch.setattr(render, "_osd_rotation", lambda img, timeout=10: 90)
+    monkeypatch.setattr(render, "MAX_TILE_PIXELS", 10**9)  # isolate rotation from the area clamp
     tiles = render_tiles(make_pdf(tmp_path / "a.pdf", (1653, 2338), 1))
     w, h = dims(tiles[0])
     assert w == 2338 and abs(h - 1653) <= 1
@@ -98,8 +99,9 @@ def test_unusable_pdf_fixtures_rejected(name):
         render_tiles(FIX / name)
 
 
-def test_rotated_300dpi_page_keeps_resolution(tmp_path):
+def test_rotated_300dpi_page_keeps_resolution(tmp_path, monkeypatch):
     import pypdfium2 as pdfium
+    monkeypatch.setattr(render, "MAX_TILE_PIXELS", 10**9)  # isolate dpi from the area clamp
     src = make_pdf(tmp_path / "p.pdf", (2480, 3508), 1, dpi=300)  # portrait A4 at 300 dpi
     doc = pdfium.PdfDocument(str(src))
     doc[0].set_rotation(270)  # landscape page, long edges swapped
@@ -170,3 +172,21 @@ def test_osd_budget_counts_only_osd_time(tmp_path, monkeypatch):
     monkeypatch.setattr(render, "_jpeg", slow_jpeg)
     render_tiles(make_pdf(tmp_path / "a.pdf", (827, 1169), 3, dpi=100))
     assert timeouts == [10, 5]  # page 3 skipped: 30 s spent in OSD > 20 s budget
+
+
+@pytest.mark.parametrize("size,pages", [((3306, 2338), 2), ((2400, 2400), 1), ((5000, 1500), 1)])
+def test_tiles_clamped_to_model_pixel_limits(tmp_path, size, pages):
+    tiles = render_tiles(make_pdf(tmp_path / "a.pdf", size, pages))
+    for t in tiles:
+        w, h = dims(t)
+        assert max(w, h) <= 2576 and w * h <= 3_750_000
+
+
+@pytest.mark.parametrize("size,pages,dpi", [((3306, 2338), 2, 200), ((1653, 2338), 3, 200),
+                                            ((827, 1169), 20, 100), ((3306, 2338), 10, 200)])
+def test_count_tiles_matches_render_without_rendering(tmp_path, monkeypatch, size, pages, dpi):
+    pdf = make_pdf(tmp_path / "a.pdf", size, pages, dpi=dpi)
+    expected = len(render_tiles(pdf))
+    monkeypatch.setattr(render.pdfium.PdfPage, "render",
+                        lambda *a, **kw: pytest.fail("count_tiles must not render pixels"))
+    assert render.count_tiles(pdf) == expected

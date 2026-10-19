@@ -20,15 +20,38 @@ def _resp(report=REPORT, stop="end_turn", tin=10, tout=5, text=None):
     )
 
 
+class FakeStream:
+    """Stands in for the SDK's stream manager: the request happens on __enter__."""
+
+    def __init__(self, reply):
+        self.reply = reply
+
+    def __enter__(self):
+        if isinstance(self.reply, BaseException):
+            raise self.reply
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_final_message(self):
+        return self.reply
+
+
 class FakeClient:
     def __init__(self, *responses):
         self.responses = list(responses)
-        self.calls = []
-        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+        self.calls = []  # streamed requests
+        self.create_calls = []  # non-streamed requests
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create, stream=self._stream))
 
     def _create(self, **kw):
-        self.calls.append(kw)
+        self.create_calls.append(kw)
         return self.responses.pop(0)
+
+    def _stream(self, **kw):
+        self.calls.append(kw)
+        return FakeStream(self.responses.pop(0))
 
 
 TILES = [Tile("p1a", b"\xff\xd8aaa"), Tile("p1b", b"\xff\xd8bbb")]
@@ -187,7 +210,7 @@ def test_iterations_summed_and_model_recorded():
     ]
     res = analyze_document(TILES, FakeClient(r), Config())
     assert (res.input_tokens, res.output_tokens) == (2_000_000, 100_000)
-    assert res.cost_usd == pytest.approx(4.0 + 0.4 + 2.0)
+    assert res.cost_usd == pytest.approx(4.0 + 0.2 + 2.0)
     assert res.model == "fallback-model"
 
 
@@ -196,21 +219,31 @@ def test_cache_pricing():
     r.usage.cache_read_input_tokens = 1_000_000
     r.usage.cache_creation_input_tokens = 1_000_000
     res = analyze_document(TILES, FakeClient(r), Config())
-    assert res.cost_usd == pytest.approx(0.4 + 5.0)
+    assert res.cost_usd == pytest.approx(0.2 + 5.0)  # cache reads at 5% of input
 
 
 def test_retry_api_error_carries_first_call_cost():
     err = RuntimeError("overloaded")
-    calls = []
-
-    def create(**kw):
-        calls.append(kw)
-        if len(calls) == 1:
-            return _resp(stop="max_tokens", tin=1_000_000, tout=0)
-        raise err
-
-    c = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
+    c = FakeClient(_resp(stop="max_tokens", tin=1_000_000, tout=0), err)
     with pytest.raises(RuntimeError) as info:
         analyze_document(TILES, c, Config())
     assert info.value is err and info.value.cost_usd == pytest.approx(4.0)
     assert info.value.input_tokens == 1_000_000
+
+
+def test_both_calls_streamed_with_same_params():
+    c = FakeClient(_resp(stop="max_tokens", text="{"), _resp())
+    analyze_document(TILES, c, Config())
+    assert c.create_calls == []
+    first, second = c.calls
+    assert {k: v for k, v in first.items() if k != "max_tokens"} == \
+        {k: v for k, v in second.items() if k != "max_tokens"}
+
+
+def test_no_non_streamed_call_above_sdk_limit():
+    # SDK 1.15 raises ValueError for non-streaming requests it expects to exceed ~10 minutes
+    c = FakeClient(_resp(stop="max_tokens", text="{"), _resp(stop="max_tokens", text="{"))
+    with pytest.raises(AnalysisError):
+        analyze_document(TILES, c, Config())
+    assert len(c.calls) == 2
+    assert all(k["max_tokens"] <= 21000 for k in c.create_calls)
