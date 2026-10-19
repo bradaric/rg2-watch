@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -188,7 +189,8 @@ def test_retries_then_raises_unavailable():
     assert limiter.current_rps < 2.0
     backoffs = [s for s in t.sleeps if s >= 2]
     assert len(backoffs) == 3
-    assert all(2 <= b < 70 for b in backoffs)
+    for b, base in zip(backoffs, (2, 4, 8)):
+        assert base <= b < base + 1
 
 
 def test_timeout_is_retried_then_succeeds():
@@ -258,7 +260,7 @@ def test_stations_decodes_json_string_body_despite_html_content_type():
     assert client.stations("207") == {"207620": "1", "207621": "2"}
 
 
-def test_from_url_uses_origin_or_override():
+def test_from_url_uses_origin_or_override(monkeypatch):
     html = (FIX / "zapisnici_662405.html").read_text(encoding="utf-8")
     hosts = []
 
@@ -266,14 +268,79 @@ def test_from_url_uses_origin_or_override():
         hosts.append(str(request.url))
         return httpx.Response(200, text=html)
 
-    import rg2watch.rik_client as mod
     orig = httpx.Client
-    mod.httpx.Client = lambda **kw: orig(transport=httpx.MockTransport(handler), **kw)
-    try:
-        c1 = RikClient.from_url(f"{BASE}/zapisnici/662405", Config())
-        c2 = RikClient.from_url(f"{BASE}/zapisnici/662405", Config(base_url="http://127.0.0.1:9"))
-    finally:
-        mod.httpx.Client = orig
+    monkeypatch.setattr(httpx, "Client", lambda **kw: orig(transport=httpx.MockTransport(handler), **kw))
+    c1 = RikClient.from_url(f"{BASE}/zapisnici/662405", Config())
+    c2 = RikClient.from_url(f"{BASE}/zapisnici/662405", Config(base_url="http://127.0.0.1:9"))
     assert hosts == [f"{BASE}/zapisnici/662405", "http://127.0.0.1:9/zapisnici/662405"]
     assert c1.election.parent == "662405" and c1.election.base_url == BASE
     assert c2.election.base_url == "http://127.0.0.1:9"
+
+
+def test_html_200_is_overload_then_recovers():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) <= 2:
+            return httpx.Response(200, text="<html>Service busy</html>",
+                                  headers={"Content-Type": "text/html"})
+        return httpx.Response(200, json=page_payload(2, 1))
+
+    client, limiter, _ = make(handler)
+    assert client.listing(Filters(), 1).records == 2
+    assert len(calls) == 3
+    assert limiter.current_rps < 2.0
+
+
+@pytest.mark.parametrize("body", ['[1, 2]', '{"x": 1}', '"str"'])
+def test_wrong_shape_200_raises_unavailable(body):
+    client, limiter, _ = make(lambda r: httpx.Response(200, text=body))
+    with pytest.raises(RikUnavailable):
+        client.listing(Filters(), 1)
+    assert limiter.current_rps < 2.0
+
+
+def test_retry_after_respected_and_capped():
+    for header, expected in (("30", 30.0), ("500", 60.0)):
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            if len(calls) == 1:
+                return httpx.Response(503, headers={"Retry-After": header})
+            return httpx.Response(200, json=page_payload(0, 0))
+
+        client, _, t = make(handler)
+        client.listing(Filters(), 1)
+        assert max(t.sleeps) == expected
+
+
+def test_limiter_threads_never_exceed_cap():
+    lock = threading.Lock()
+    now = [0.0]
+    slots = []
+
+    def clock():
+        return now[0]
+
+    def sleep(s):
+        with lock:
+            now[0] += s
+
+    lim = AdaptiveLimiter(2.0, clock=clock, sleep=sleep)
+
+    def worker():
+        for _ in range(25):
+            lim.acquire()
+            with lock:
+                slots.append(now[0])
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    # 50 acquires at 2 rps must span at least 24.5 s of (fake) time
+    assert len(slots) == 50
+    assert now[0] >= 24.5

@@ -1,5 +1,6 @@
 import json
 import random
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -38,15 +39,17 @@ class AdaptiveLimiter:
         self.sleep = sleep
         self._rps = max_rps
         self._next_slot = 0.0
+        self._lock = threading.Lock()
 
     @property
     def current_rps(self) -> float:
         return self._rps
 
     def acquire(self) -> None:
-        now = self.clock()
-        slot = max(now, self._next_slot)
-        self._next_slot = slot + 1.0 / self._rps
+        with self._lock:
+            now = self.clock()
+            slot = max(now, self._next_slot)
+            self._next_slot = slot + 1.0 / self._rps
         if slot > now:
             self.sleep(slot - now)
 
@@ -54,17 +57,29 @@ class AdaptiveLimiter:
         if latency_s > 5.0:
             self.on_overload()
         elif latency_s < 2.0:
-            self._rps = min(self.max_rps, self._rps + 0.1)
+            with self._lock:
+                self._rps = min(self.max_rps, self._rps + 0.1)
 
     def on_overload(self) -> None:
-        self._rps = max(self.min_rps, self._rps / 2)
+        with self._lock:
+            self._rps = max(self.min_rps, self._rps / 2)
+
+
+def _retry_after(resp: httpx.Response) -> float:
+    try:
+        return max(0.0, min(60.0, float(resp.headers.get("Retry-After", ""))))
+    except ValueError:
+        return 0.0
 
 
 def _send(http: httpx.Client, limiter: AdaptiveLimiter, timeout_s: float,
-          method: str, url: str, **kwargs) -> httpx.Response:
+          method: str, url: str, parse=None, **kwargs):
+    """Send with retries. `parse(resp)` may raise ValueError for a 200 that is
+    really an error/maintenance page; that counts as overload."""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         limiter.acquire()
         start = limiter.clock()
+        retry_after = 0.0
         try:
             resp = http.request(method, url, timeout=timeout_s, **kwargs)
         except httpx.TransportError as exc:  # timeouts, connection errors
@@ -74,14 +89,21 @@ def _send(http: httpx.Client, limiter: AdaptiveLimiter, timeout_s: float,
             if resp.status_code == 429 or resp.status_code >= 500:
                 limiter.on_overload()
                 reason = f"HTTP {resp.status_code}"
+                retry_after = _retry_after(resp)
             elif resp.status_code >= 400:
                 raise RikError(f"{method} {url} -> HTTP {resp.status_code}")
             else:
-                limiter.on_success(limiter.clock() - start)
-                return resp
+                try:
+                    result = parse(resp) if parse else resp
+                except ValueError as exc:
+                    limiter.on_overload()
+                    reason = f"bad body: {exc}"
+                else:
+                    limiter.on_success(limiter.clock() - start)
+                    return result
         if attempt == MAX_ATTEMPTS:
             raise RikUnavailable(f"{method} {url} failed after {MAX_ATTEMPTS} attempts: {reason}")
-        limiter.sleep(min(60, 2**attempt) + random.uniform(0, 1))
+        limiter.sleep(max(retry_after, min(60, 2**attempt) + random.uniform(0, 1)))
     raise AssertionError("unreachable")
 
 
@@ -110,15 +132,23 @@ class RikClient:
         election = parse_election_page(resp.text, base)
         return cls(election, limiter, http, cfg.request_timeout_s)
 
-    def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        return _send(self.http, self.limiter, self.timeout_s, method,
-                     self.election.base_url + path, headers=self._headers, **kwargs)
+    def _request(self, method: str, path: str, shape: str, **kwargs):
+        """Returns decoded JSON; body must be a dict containing key `shape`
+        (or, for shape '', a list)."""
+        def parse(resp: httpx.Response):
+            try:
+                body = json.loads(resp.text)
+            except ValueError as exc:
+                raise ValueError("not JSON") from exc
+            if shape:
+                if not isinstance(body, dict) or shape not in body:
+                    raise ValueError(f"missing {shape!r}")
+            elif not isinstance(body, list):
+                raise ValueError("expected list")
+            return body
 
-    def _json(self, resp: httpx.Response):
-        try:
-            return json.loads(resp.text)
-        except ValueError as exc:
-            raise RikError(f"invalid JSON from {resp.request.url}") from exc
+        return _send(self.http, self.limiter, self.timeout_s, method,
+                     self.election.base_url + path, parse=parse, headers=self._headers, **kwargs)
 
     def listing(self, filters: Filters, page: int) -> ListingPage:
         e = self.election
@@ -136,7 +166,7 @@ class RikClient:
             data["filters[municipality]"] = filters.municipality_id
         if filters.station_no_id is not None:
             data["filters[election_station_no]"] = filters.station_no_id
-        payload = self._json(self._request("POST", "/get-election", data=data))
+        payload = self._request("POST", "/get-election", "records", data=data)
         return parse_listing(payload, e.base_url)
 
     def count(self, filters: Filters) -> int:
@@ -149,9 +179,9 @@ class RikClient:
     def municipalities(self) -> dict[str, str]:
         merged: dict[str, str] = {}
         for q in "aeiou":
-            resp = self._request("GET", "/templates/election/getElectionStations.php",
+            body = self._request("GET", "/templates/election/getElectionStations.php", "",
                                  params={"q": q, "electionId": self.election.round})
-            merged.update(parse_municipalities(self._json(resp)))
+            merged.update(parse_municipalities(body))
         return merged
 
     def stations(self, municipality_id: str) -> dict[str, str]:
@@ -163,5 +193,6 @@ class RikClient:
             "site_lang": "sr",
             "election_round": self.election.round,
         }
-        resp = self._request("POST", "/templates/election/ajaxSelectMunicipality.php", data=data)
-        return parse_station_options(self._json(resp)["number"])
+        body = self._request("POST", "/templates/election/ajaxSelectMunicipality.php", "number",
+                             data=data)
+        return parse_station_options(body["number"])
