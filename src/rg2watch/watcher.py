@@ -17,6 +17,7 @@ REFRESH_MIN_S = 600
 MISSING_BACKOFF_CAP_S = 600
 BLOCKED_STREAK = 3  # consecutive 401/403 answers before all lanes pause
 MIN_BUDGET = 5  # per-tick request budget floor
+URGENT_RARE = (8, 9, 27, 28)  # RG-8/RG-9 family: swept first
 BASELINE_LANES = ("rare", "watchlist", "probe", "missing", "safety")
 
 
@@ -32,6 +33,8 @@ class _Job:
     on_done: Callable[["_Job"], None] | None = None
     total: int | None = None  # count to store once the job succeeds
     key: object = None
+    prio: tuple = ()
+    stale_total: int | None = None  # count moved after the job started: re-run instead of storing
     next_page: int = 1
     max_page: int | None = None
     ok: bool = True
@@ -76,6 +79,7 @@ class Watcher:
         self._blind_ref: float | None = None
         self._lane = ""
         self._budget = 0
+        self._missing_work = cfg.missing_station_threshold > 0  # had stations to query last run
         self._last: dict[str, float] = {}
         self._jobs: dict[str, list[_Job]] = {"rare": [], "watchlist": [], "probe": []}
         self._safety_job: _Job | None = None
@@ -88,17 +92,6 @@ class Watcher:
         self._baseline = set(BASELINE_LANES) if baseline else set()
         self._baseline_counts: Counter[str] = Counter()
         self._progress = {"rare": False, "probe": False, "missing": False, "safety": False}
-        # Priority order within a tick; removal re-checks run early and again at the end.
-        self._lanes = [
-            ("rare", self._rare_wants, self._rare),
-            ("recheck", lambda now: bool(self._recheck), self._rechecks),
-            ("watchlist", self._watchlist_wants, self._watchlist),
-            ("probe", self._probe_wants, self._probe),
-            ("missing", lambda now: self._due("missing", self.cfg.probe_interval_s, now), self._missing),
-            ("safety", lambda now: self._safety_job is not None or self._safety_due(now), self._safety),
-            ("recheck", lambda now: bool(self._recheck), self._rechecks),
-        ]
-
     def bootstrap(self, refresh: bool = False) -> None:
         self.store.upsert_election(self.client.election)
         if refresh or not self.store.municipality_ids(self.parent):
@@ -136,14 +129,51 @@ class Watcher:
                 log.warning("municipality refresh failed: %r", exc)
                 self._abort = isinstance(exc, RikUnavailable)
                 self._last_bootstrap = self.clock()  # throttle retries
-        self._budget = max(MIN_BUDGET, self.cfg.tick_request_budget)
-        for name, wants, fn in self._lanes:
-            if self._abort:
-                break
-            if wants(self.clock()):
-                self._run_lane(name, fn)
-                if self._baseline:
-                    self._baseline_update()
+        self._budget = budget = max(MIN_BUDGET, self.cfg.tick_request_budget)
+        # Priority: rare > removal re-checks > watchlist > probe > missing > safety, except that a
+        # reserved share is held back from watchlist/probe for safety (first) and missing when they
+        # have work, so a busy probe cannot starve them. Unused reserve flows to the later lanes.
+        self._lane_if("rare", self._rare_wants, self._rare)
+        self._lane_if("recheck", self._recheck_wants, self._rechecks)
+        now = self.clock()
+        held = 0
+        if self._safety_wants(now) or (self._missing_work and self._missing_wants(now)):
+            held = min(self._budget, int(budget * self.cfg.reserved_share))
+        self._budget -= held
+        self._lane_if("watchlist", self._watchlist_wants, self._watchlist)
+        self._lane_if("probe", self._probe_wants, self._probe)
+        self._budget += held
+        self._lane_if("safety", self._safety_wants, self._capped(self._safety, held))
+        self._lane_if("missing", self._missing_wants, self._missing)
+        self._lane_if("safety", self._safety_wants, self._safety)
+        self._lane_if("recheck", self._recheck_wants, self._rechecks)
+
+    def _lane_if(self, name: str, wants, fn) -> None:
+        if self._abort or not wants(self.clock()):
+            return
+        self._run_lane(name, fn)
+        if self._baseline:
+            self._baseline_update()
+
+    def _capped(self, fn, cap: int):
+        """Run fn on at most `cap` requests of the remaining budget."""
+        def run(sweep_id: int) -> None:
+            rest = max(0, self._budget - cap)
+            self._budget -= rest
+            try:
+                fn(sweep_id)
+            finally:
+                self._budget += rest
+        return run
+
+    def _recheck_wants(self, now: float) -> bool:
+        return bool(self._recheck)
+
+    def _missing_wants(self, now: float) -> bool:
+        return self._due("missing", self.cfg.probe_interval_s, now)
+
+    def _safety_wants(self, now: float) -> bool:
+        return self._safety_job is not None or self._safety_due(now)
 
     def _due(self, name: str, interval: float, now: float) -> bool:
         last = self._last.get(name)
@@ -261,7 +291,6 @@ class Watcher:
     def _advance(self, sweep_id: int, job: _Job) -> bool:
         """Fetch pages of a job while budget lasts. Returns True once the job is finished.
         RikUnavailable aborts the tick and retries the same page later."""
-        batch: list[Doc] = []
         while self._budget > 0 and (job.max_page is None or job.next_page <= job.max_page):
             try:
                 res = self._listing(job.filters, job.next_page)
@@ -275,21 +304,21 @@ class Watcher:
                     job.max_page = 0  # no page count known: give the job up
                 job.next_page += 1
                 continue
+            docs = res.docs if job.doc_type is None else [d for d in res.docs if d.doc_type == job.doc_type]
+            if docs and not job.complete:
+                # If this raises the cursor stays put and the page is fetched again next tick.
+                self._process(sweep_id, docs, job.scope, False, job.doc_type)
+            job.docs += docs
             job.max_page = res.max_page if job.max_page is None else max(job.max_page, res.max_page)
             job.next_page += 1
-            batch += res.docs
-        if job.doc_type is not None:
-            batch = [d for d in batch if d.doc_type == job.doc_type]
-        if batch and not job.complete:
-            self._process(sweep_id, batch, job.scope, False, job.doc_type)
-        job.docs += batch
         return job.max_page is not None and job.next_page > job.max_page
 
     def _run_jobs(self, sweep_id: int, jobs: list[_Job]) -> None:
         while jobs and not self._abort and self._budget > 0:
             if not self._advance(sweep_id, jobs[0]):
                 return
-            self._finish(sweep_id, jobs.pop(0))
+            self._finish(sweep_id, jobs[0])  # on error the job stays queued and is finished later
+            jobs.pop(0)
 
     def _finish(self, sweep_id: int, job: _Job) -> None:
         if job.complete:
@@ -342,18 +371,32 @@ class Watcher:
             key, stored = f"type:{t}", self.store.get_count(self.parent, f"type:{t}")
             queued = next((j for j in jobs if j.key == t), None)
             if queued is not None:
-                queued.total = n
+                if queued.next_page == 1:
+                    queued.total = n
+                elif n != queued.total:
+                    queued.stale_total = n  # may be on a page already passed: re-run when done
             elif (n != stored or (resweep and n > 0)) and not (n == 0 and stored is None):
-                jobs.append(_Job(Filters(doc_type=t), Scope(doc_type=t), True, t,
-                                 on_done=self._rare_done, total=n, key=t))
+                jobs.append(self._rare_job(t, n, count_changed=n != stored))
             else:
                 self.store.set_count(self.parent, key, n)
+        self._sort_rare()
         if resweep:  # every non-empty rare type re-swept: catches count-neutral replacements
             self._rare_resweep_at = now
         self._progress["rare"] = True
 
+    def _rare_job(self, t: int, n: int, count_changed: bool) -> _Job:
+        return _Job(Filters(doc_type=t), Scope(doc_type=t), True, t, on_done=self._rare_done,
+                    total=n, key=t, prio=(not count_changed, t not in URGENT_RARE))
+
+    def _sort_rare(self) -> None:
+        # Started job first, then count changes before re-sweeps, RG-8/RG-9 family first.
+        self._jobs["rare"].sort(key=lambda j: (j.next_page == 1, j.prio))
+
     def _rare_done(self, job: _Job) -> None:
-        if job.ok:
+        if job.stale_total is not None:
+            self._jobs["rare"].append(self._rare_job(job.key, job.stale_total, count_changed=True))
+            self._sort_rare()
+        elif job.ok:
             self.store.set_count(self.parent, f"type:{job.key}", job.total)
 
     def _rechecks(self, sweep_id: int) -> None:
@@ -414,7 +457,13 @@ class Watcher:
             if jobs:
                 if not self._advance(sweep_id, jobs[0]):
                     return
-                self._finish(sweep_id, jobs.pop(0))
+                try:
+                    self._finish(sweep_id, jobs[0])
+                except Exception:
+                    if self._round is not None:
+                        self._round.ok = False  # do not store "rg2" for this round
+                    raise
+                jobs.pop(0)
                 continue
             r = self._round
             if r is None:
@@ -427,7 +476,11 @@ class Watcher:
                 if total == self.store.get_count(self.parent, "rg2"):
                     return
                 names = self.store.municipality_ids(self.parent)
-                if self.cfg.probe_cost_guard and 2 * len(names) >= max_page:
+                # Cost guard: a round costs ~2 requests per municipality plus the pages of the
+                # changed ones (estimate: change/10 pages + one page per changed municipality).
+                change = abs(total - (self.store.get_count(self.parent, "rg2") or 0))
+                round_cost = 2 * len(names) + change / PAGE_SIZE + min(change, len(names))
+                if self.cfg.probe_cost_guard and round_cost >= max_page:
                     jobs.append(_Job(full, Scope(doc_type=6), False, 6, self._guard_done, total))
                 else:
                     self._round = _Round(total, list(names.items()))
@@ -457,6 +510,7 @@ class Watcher:
                 continue
             total_after, _ = self._count(full)
             self._round = None
+            self._last["probe"] = self.clock()  # next round no sooner than probe_interval_s from now
             self._finish_round(r, total_after)  # may queue a fallback pass: loop advances it
 
     def _muni_done(self, r: _Round, key: str, job: _Job) -> None:
@@ -484,6 +538,7 @@ class Watcher:
             self.store.set_count(self.parent, "rg2", r.total)
 
     def _guard_done(self, job: _Job) -> None:
+        self._last["probe"] = self.clock()
         if not job.ok:
             return
         per = Counter(d.municipality for d in {d.station_key: d for d in job.docs}.values())
@@ -492,6 +547,7 @@ class Watcher:
         self.store.set_count(self.parent, "rg2", job.total)
 
     def _full_done(self, job: _Job) -> None:
+        self._last["probe"] = self.clock()
         if job.ok:
             self.store.set_count(self.parent, "rg2", job.total)
 
@@ -505,7 +561,8 @@ class Watcher:
                     missing.append((f"{name}|{no}", mid, sid))
         self._missing_state = {k: v for k, v in self._missing_state.items()
                                if k in {m[0] for m in missing}}
-        if missing and len(missing) <= self.cfg.missing_station_threshold:
+        self._missing_work = bool(missing) and len(missing) <= self.cfg.missing_station_threshold
+        if self._missing_work:
             now = self.clock()
             due = sorted((self._missing_state.get(m[0], (0.0, 0.0))[0], i)
                          for i, m in enumerate(missing)
@@ -536,6 +593,6 @@ class Watcher:
             self._safety_job = _Job(Filters(doc_type=6), Scope(doc_type=6), True, 6)
         if not self._advance(sweep_id, self._safety_job):
             return
-        job, self._safety_job = self._safety_job, None
-        self._finish(sweep_id, job)
+        self._finish(sweep_id, self._safety_job)
+        self._safety_job = None
         self._progress["safety"] = True

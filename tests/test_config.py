@@ -14,6 +14,7 @@ def test_defaults_without_file(monkeypatch):
     assert c.safety_sweep_interval_s == 300
     assert c.tick_request_budget == 40
     assert c.rare_resweep_interval_s == 300
+    assert c.reserved_share == 0.25
     assert c.blocked_pause_s == 300
     assert c.blind_alert_s == 300
     assert c.missing_station_threshold == 50

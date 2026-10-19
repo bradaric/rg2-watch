@@ -1,4 +1,7 @@
+import math
+
 import httpx
+import pytest
 
 from rg2watch.config import Config
 from rg2watch.fake_rik import FakeRik
@@ -519,14 +522,15 @@ PARL_MUNIS = {str(1000 + i): f"P{i:03d}" for i in range(170)}
 PARL_STATIONS = {mid: {f"{mid}{n:02d}": str(n) for n in range(1, 51)} for mid in PARL_MUNIS}
 
 
-def parl_env(**kw):
-    """170 municipalities x 50 stations, all with RG-2 except P169|50; store already in sync."""
+def parl_env(without=("P169|50",), **kw):
+    """170 municipalities x 50 stations (850 RG-2 pages), all with RG-2 except `without`;
+    store already in sync."""
     from rg2watch.models import Doc, Event
     recs, docs = [], []
     for mid, name in PARL_MUNIS.items():
         for n in range(1, 51):
             href = f"/extfile/{mid}/{n}/rg2_v1.pdf"
-            has = not (name == "P169" and n == 50)
+            has = f"{name}|{n}" not in without
             recs.append({"municipality": name, "election_station_number": str(n),
                          "election_station_name": f"School {n}", "number": f"{n}.",
                          "_municipality_id": mid, "_docs": [doc(6, href)] if has else []})
@@ -541,13 +545,14 @@ def parl_env(**kw):
         store.save_stations(P, mid, {no: sid for sid, no in st.items()})
     store.apply_events(P, store.start_sweep(P, "seed"), [Event("added", d) for d in docs])
     for mid, name in PARL_MUNIS.items():
-        store.set_count(P, f"rg2:m:{mid}", 49 if name == "P169" else 50)
+        store.set_count(P, f"rg2:m:{mid}", sum(1 for d in docs if d.municipality == name))
     store.set_count(P, "rg2", len(docs))
     for rt in RARE_TYPES:
         store.set_count(P, f"type:{rt}", 0)
     return w, fake, store, t, batches, limiter
 
 
+@pytest.mark.slow
 def test_parliament_scale_rg9_emitted_while_probe_round_is_midway():
     w, fake, store, t, batches, _ = parl_env(missing_station_threshold=0)
     fake.add_doc("P169|50", doc(6, "/extfile/1169/50/rg2_v1.pdf"))  # starts a long probe round
@@ -565,6 +570,7 @@ def test_parliament_scale_rg9_emitted_while_probe_round_is_midway():
     assert found is not None and found - 3 <= 1  # within 2 ticks
 
 
+@pytest.mark.slow
 def test_parliament_scale_probe_round_over_several_ticks_finds_last_municipality():
     w, fake, store, t, batches, _ = parl_env(missing_station_threshold=0)
     fake.add_doc("P169|50", doc(6, "/extfile/1169/50/rg2_v1.pdf"))
@@ -572,6 +578,8 @@ def test_parliament_scale_probe_round_over_several_ticks_finds_last_municipality
     for i in range(20):
         w.run_once()
         t.now += 60
+        if w._round is not None:
+            assert store.get_count(P, "rg2") == 8499  # not stored before the round completes
         if any(e.doc.station_key == "P169|50" for e in events(batches)):
             found = i
             break
@@ -612,3 +620,149 @@ def test_budget_clamped_to_at_least_5():
     fake.request_log.clear()
     w.run_once()
     assert len(listing_reqs(fake)) == len(RARE_TYPES) + 5
+
+
+@pytest.mark.slow
+def test_parliament_scale_reserve_lets_safety_finish_under_continuous_uploads():
+    without = [f"P{i:03d}|50" for i in range(0, 170, 2)]  # 85 stations still to upload
+    w, fake, store, t, batches, _ = parl_env(without=set(without), missing_station_threshold=0,
+                                             rare_interval_s=100_000, watcher_kw={"initial_safety": True})
+    old = store.known_docs(P, Scope(doc_type=6))[("P169|49", 6)].url
+    fake.replace_doc("P169|49", 6, "/extfile/1169/49/rg2_v2.pdf")  # last page, count-neutral
+    bound = math.ceil(850 / (0.25 * 40)) + 2
+    found = None
+    for i in range(1, bound + 1):
+        key = without[i % len(without)]  # one new upload per tick keeps the probe busy
+        if not any(d["type"] == 6 for d in fake._record(key)["_docs"]):
+            fake.add_doc(key, doc(6, f"/extfile/{key.replace('|', '/')}/rg2_v1.pdf"))
+        w.run_once()
+        t.now += 60
+        if any(e.kind == "replaced" for e in events(batches)):
+            found = i
+            break
+    assert found is not None, f"not detected within {bound} ticks"
+    assert [(e.kind, e.previous_url) for e in events(batches) if e.kind == "replaced"] == [
+        ("replaced", old)]
+
+
+def test_rare_job_restarts_when_count_changes_after_it_started():
+    # Reviewer scenario: the new RG-7 lands on a page the running rare job has already passed.
+    w, fake, store, t, batches, _ = big_env(safety_sweep_interval_s=100_000, rare_resweep_interval_s=100_000,
+                                            missing_station_threshold=0)
+    for rec in fake.records:
+        if not (rec["municipality"] == "M00" and rec["election_station_number"] == "1"):
+            mid, n = rec["_municipality_id"], rec["election_station_number"]
+            rec["_docs"].append(doc(7, f"/extfile/{mid}/{n}/rg7.pdf"))
+    w.run_once()
+    t.now += 60
+    assert w._jobs["rare"] and w._jobs["rare"][0].next_page > 1
+    fake.add_doc("M00|1", doc(7, "/extfile/200/1/rg7_new.pdf"))
+    for _ in range(40):
+        w.run_once()
+        t.now += 60
+    assert ("M00|1", 7) in store.known_docs(P, Scope())
+    assert store.get_count(P, "type:7") == 600
+
+
+def test_rare_jobs_ordered_count_change_first_rg8_rg9_family_first():
+    recs = make_records()
+    for i, t_ in enumerate((7, 8, 9, 10)):
+        recs[i]["_docs"].append(doc(t_, f"/extfile/r/{t_}.pdf"))
+    w, fake, store, t, batches, _ = env(records=recs)
+    w.bootstrap()
+    for t_, n in ((7, 0), (8, 0), (9, 1), (10, 1)):  # 7, 8 changed; 9, 10 only due for re-sweep
+        store.set_count(P, f"type:{t_}", n)
+    w._rare_resweep_at = float("-inf")
+    w._run_lane("rare", lambda sid: w._rare_counts(w.clock()))
+    assert [j.key for j in w._jobs["rare"]] == [8, 7, 9, 10]
+
+
+def test_cost_guard_estimates_round_cost():
+    munis = {str(300 + i): f"G{i:02d}" for i in range(15)}
+    stations = {mid: {f"{mid}{n:02d}": str(n) for n in range(1, 41)} for mid in munis}
+    recs = [{"municipality": name, "election_station_number": str(n), "election_station_name": "S",
+             "number": "1.", "_municipality_id": mid,
+             "_docs": [doc(6, f"/extfile/{mid}/{n}/rg2.pdf")] if n < 40 else []}
+            for mid, name in munis.items() for n in range(1, 41)]  # 585 records, 59 pages
+    w, fake, store, t, batches, _ = env(guard=True, records=recs, munis=munis, stations=stations,
+                                        missing_station_threshold=0, tick_request_budget=1000)
+    w.run_once()  # nothing stored: 2*15 + 585/10 + 15 >= 59 -> full pass
+    assert len(events(batches)) == 585
+    assert not [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
+                if "filters[municipality]" in f]
+    fake.add_doc("G03|40", doc(6, "/extfile/303/40/rg2.pdf"))
+    t.now += 60
+    fake.request_log.clear()
+    w.run_once()  # one new doc: 2*15 + 0.1 + 1 < 59 -> per-municipality round
+    assert [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
+            if "filters[municipality]" in f]
+    assert [(e.kind, e.doc.station_key) for e in events(batches)][-1] == ("added", "G03|40")
+
+
+def test_next_probe_round_waits_probe_interval_after_round_end():
+    w, fake, store, t, batches, _ = env(missing_station_threshold=0)
+    started = t.now
+    w.run_once()
+    ended = t.now  # the round's requests took a few (fake) seconds
+    assert ended - started > 2
+    fake.add_doc("Beta|12", doc(6, "/extfile/102/12/rg2_v1.pdf"))
+
+    def global_counts():
+        return [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
+                if "filters[municipality]" not in f and f["page"] == "1"]
+
+    t.now = started + 31  # 30 s after the round started, not after it ended
+    fake.request_log.clear()
+    w.run_once()
+    assert global_counts() == []
+    t.now = ended + 29
+    w.run_once()
+    assert global_counts() == []
+    t.now = ended + 30
+    w.run_once()
+    assert global_counts()
+
+
+def test_failed_batch_processing_is_retried_not_skipped():
+    w, fake, store, t, batches, _ = env(guard=True, missing_station_threshold=0)
+    real, calls = w._process, []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("database is locked")
+        return real(*a, **k)
+
+    w._process = flaky
+    w.run_once()  # page 2 of the full pass fails to process
+    assert w._jobs["probe"] and w._jobs["probe"][0].next_page == 2
+    assert store.get_count(P, "rg2") is None
+    t.now += 1
+    w.run_once()
+    assert len(events(batches)) == 33 and store.get_count(P, "rg2") == 33
+
+
+def test_failed_finish_keeps_job_and_does_not_store_rg2():
+    w, fake, store, t, batches, _ = env(missing_station_threshold=0)
+    w.run_once()
+    fake.add_doc("Beta|12", doc(6, "/extfile/102/12/rg2_v1.pdf"))
+    real, calls = w._finish, []
+
+    def flaky(sweep_id, job):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        return real(sweep_id, job)
+
+    w._finish = flaky
+    t.now += 60
+    w.run_once()
+    assert store.get_count(P, "rg2") == 33  # round not ok: total not updated
+    t.now += 60
+    w.run_once()
+    assert [(e.kind, e.doc.station_key) for e in events(batches)][-1] == ("added", "Beta|12")
+    assert store.get_count(P, "rg2") == 33  # that round was not ok
+    for _ in range(2):
+        t.now += 60
+        w.run_once()
+    assert store.get_count(P, "rg2") == 34

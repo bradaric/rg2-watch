@@ -14,6 +14,7 @@ class Config:
     safety_sweep_interval_s: int = 300
     tick_request_budget: int = 40
     rare_resweep_interval_s: int = 300
+    reserved_share: float = 0.25
     blocked_pause_s: int = 300
     blind_alert_s: int = 300
     missing_station_threshold: int = 50
