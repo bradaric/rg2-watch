@@ -5,7 +5,7 @@ from pathlib import Path
 
 import anthropic
 
-from .analyze import AnalysisError, analyze_document
+from .analyze import AnalysisError, OllamaUnavailable, analyze_document, stored_model
 from .config import Config
 from .models import Doc, Event
 from .pipeline import GLOBAL_ERRORS, PROMPT_VERSION
@@ -111,7 +111,7 @@ def run_eval(labels: list[dict], pdf_dir: Path, store: Store, client, cfg: Confi
             continue
         try:
             doc = _register(store, entry, path)
-            report = store.latest_report(doc.url) if cached else None
+            report = store.latest_report(doc.url, stored_model(cfg.model), PROMPT_VERSION) if cached else None
             if report is None and cached:
                 errors[name] = "no stored analysis (run without --cached)"
                 continue
@@ -129,7 +129,7 @@ def run_eval(labels: list[dict], pdf_dir: Path, store: Store, client, cfg: Confi
         except RenderError as exc:
             errors[name] = f"unreadable PDF: {exc}"
             continue
-        except GLOBAL_ERRORS as exc:
+        except (OllamaUnavailable, *GLOBAL_ERRORS) as exc:
             errors[name] = f"{type(exc).__name__}: {exc}"
             print(f"API error affecting every form, stopping: {exc}", file=out)
             break
@@ -138,7 +138,7 @@ def run_eval(labels: list[dict], pdf_dir: Path, store: Store, client, cfg: Confi
             if billed:
                 cost += billed
                 try:
-                    store.save_failed_analysis(path.resolve().as_uri(), cfg.model, PROMPT_VERSION,
+                    store.save_failed_analysis(path.resolve().as_uri(), stored_model(cfg.model), PROMPT_VERSION,
                                                billed, str(exc)[:200])
                 except Exception:
                     log.error("billed cost $%.3f for %s not recorded", billed, name)

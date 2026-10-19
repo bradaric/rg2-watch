@@ -8,7 +8,7 @@ from pathlib import Path
 
 import anthropic
 
-from .analyze import AnalysisError, AnalysisRefused, analyze_document
+from .analyze import AnalysisError, AnalysisRefused, OllamaUnavailable, analyze_document, stored_model
 from .config import Config
 from .fetch import fetch_pdf
 from .models import Doc, Event, Finding
@@ -53,7 +53,7 @@ def _short(exc: BaseException, limit: int = _MAX_ERROR) -> str:
 
 
 def _is_overload(exc: BaseException) -> bool:
-    if isinstance(exc, OVERLOAD_ERRORS):
+    if isinstance(exc, (*OVERLOAD_ERRORS, OllamaUnavailable)):
         return True
     body = getattr(exc, "body", None) if isinstance(exc, anthropic.APIStatusError) else None
     error = body.get("error") if isinstance(body, dict) else None

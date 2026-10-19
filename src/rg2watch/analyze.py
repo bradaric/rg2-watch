@@ -1,6 +1,9 @@
 import base64
+import copy
 import json
 from dataclasses import dataclass
+
+import httpx
 
 from rg2watch.config import Config
 from rg2watch.render import Tile
@@ -21,6 +24,22 @@ class AnalysisError(Exception):
 
 class AnalysisRefused(AnalysisError):
     pass
+
+
+class OllamaUnavailable(Exception):
+    """Local Ollama unreachable or too slow: transient, like Anthropic overload (defer, no attempt used)."""
+
+
+OLLAMA_PREFIX = "ollama:"
+
+
+def is_ollama(model: str) -> bool:
+    return model.startswith(OLLAMA_PREFIX)
+
+
+def stored_model(model: str) -> str:
+    """Name under which analyses of cfg.model are stored (the Ollama name for ollama: models)."""
+    return model[len(OLLAMA_PREFIX):] if is_ollama(model) else model
 
 
 def _obj(props: dict) -> dict:
@@ -178,7 +197,77 @@ def _final_message(client, params: dict):
         return stream.get_final_message()
 
 
+def _ollama_schema() -> dict:
+    """SCHEMA with maxItems on every array. Ollama's constrained decoding accepts the schema as is
+    but a local model can loop inside an unbounded array (e.g. "V", "V", ...) until the context ends."""
+    caps = {("header", "sections_present"): 5, ("numbers",): 40, ("yesno",): len(YESNO_KEYS),
+            ("visual", "other_anomalies"): 10}
+    schema = copy.deepcopy(SCHEMA)
+    for path, cap in caps.items():
+        node = schema
+        for key in path:
+            node = node["properties"][key]
+        node["maxItems"] = cap
+    return schema
+
+
+OLLAMA_SCHEMA = _ollama_schema()
+
+
+def _parse_report(text) -> dict:
+    """JSON text from the model -> normalised report. Raises ValueError/TypeError/KeyError/AttributeError."""
+    report = json.loads(text)
+    if not isinstance(report, dict) or set(report) != set(SCHEMA["required"]):
+        raise ValueError("response keys do not match schema")
+    return _normalise(report)
+
+
+def analyze_ollama(tiles: list[Tile], http: httpx.Client | None, cfg: Config) -> AnalysisResult:
+    name = stored_model(cfg.model)
+    names = ", ".join(t.name for t in tiles)
+    body = {
+        "model": name,
+        "stream": False,
+        "format": OLLAMA_SCHEMA,
+        "options": {"num_ctx": cfg.ollama_num_ctx, "num_predict": MAX_TOKENS},
+        "messages": [{
+            "role": "user",
+            "content": f"{PROMPT}\n\nImages in order: {names}.",
+            "images": [base64.standard_b64encode(t.jpeg).decode("ascii") for t in tiles],
+        }],
+    }
+    owns = http is None
+    http = http or httpx.Client()
+    try:
+        resp = http.post(f"{cfg.ollama_url.rstrip('/')}/api/chat", json=body, timeout=cfg.ollama_timeout_s)
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
+        raise OllamaUnavailable(f"Ollama at {cfg.ollama_url}: {type(exc).__name__}: {exc}") from exc
+    finally:
+        if owns:
+            http.close()
+    if resp.status_code >= 500:
+        raise OllamaUnavailable(f"Ollama HTTP {resp.status_code}: {resp.text[:200]}")
+    if resp.status_code != 200:
+        raise AnalysisError(f"Ollama HTTP {resp.status_code}: {resp.text[:200]}")
+    try:
+        data = resp.json()
+        text = data["message"]["content"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise AnalysisError(f"unexpected Ollama response: {exc!r}") from exc
+    tin, tout = data.get("prompt_eval_count") or 0, data.get("eval_count") or 0
+    try:
+        report = _parse_report(text)
+    except ValueError as exc:
+        raise AnalysisError(f"response is not valid JSON for the schema: {exc}", tin, tout) from exc
+    except (TypeError, KeyError, AttributeError) as exc:
+        raise AnalysisError(f"response does not match schema: {exc!r}", tin, tout) from exc
+    return AnalysisResult(report, tin, tout, 0.0, name, data.get("done_reason") or "stop")
+
+
 def analyze_document(tiles: list[Tile], client, cfg: Config) -> AnalysisResult:
+    """`client` is the Anthropic client, or (ollama: models) an httpx.Client / None."""
+    if is_ollama(cfg.model):
+        return analyze_ollama(tiles, client, cfg)
     messages = [{"role": "user", "content": _content(tiles)}]
     extra = {"betas": [FALLBACK_BETA], "fallbacks": "default"} if cfg.fallbacks else {}
     tin = tout = 0

@@ -32,6 +32,9 @@ class Config:
     fallbacks: bool = True
     analysis_enabled: bool = False  # opt-in: `watch --analyze` also enables it
     max_spend_usd: float = 20.0  # per election (parent)
+    ollama_url: str = "http://localhost:11434"  # used when model = "ollama:<name>"
+    ollama_num_ctx: int = 65536
+    ollama_timeout_s: float = 900.0
     price_in_per_mtok: float = 4.0
     price_out_per_mtok: float = 20.0
     analysis_workers: int = 4

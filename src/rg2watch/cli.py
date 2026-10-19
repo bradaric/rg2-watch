@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .analyze import AnalysisError, analyze_document
+from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
 from .config import Config, load_config
 from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
 from .evaluate import PARENT as EVAL_PARENT
@@ -68,6 +68,7 @@ def _parser() -> argparse.ArgumentParser:
                            "analysis_enabled = true)")
     mode.add_argument("--no-analyze", action="store_true",
                       help="do not analyse, even if the config enables it")
+    s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
     s.add_argument("--analyze-backlog", action="store_true",
                    help="with analysis on, also analyse forms seen before analysis was enabled")
 
@@ -75,12 +76,14 @@ def _parser() -> argparse.ArgumentParser:
                        help="analyse one RG-2 PDF (local path or URL of a registered election)")
     s.add_argument("source", help="local PDF path or document URL")
     s.add_argument("--json", action="store_true", help="print report and findings as JSON")
+    s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
 
     s = sub.add_parser("eval", parents=[common],
                        help="score the rules against hand labels on local PDFs")
     s.add_argument("--labels", type=Path, required=True, help="labels JSONL (tests/golden/labels.jsonl)")
     s.add_argument("--pdf-dir", type=Path, required=True, help="directory holding the labelled PDFs")
     s.add_argument("--limit", type=_positive_int, help="only the first N labelled forms (N >= 1)")
+    s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
     s.add_argument("--cached", action="store_true",
                    help="use stored analyses only; never calls the API")
     s.add_argument("--yes", action="store_true", help="confirm the estimated API spend")
@@ -118,6 +121,8 @@ def _config(args) -> Config:
     cfg = load_config(args.config)
     if args.db is not None:
         cfg.db_path = args.db
+    if getattr(args, "model", None):
+        cfg.model = args.model
     if getattr(args, "base_url", None):
         cfg.base_url = args.base_url
     return cfg
@@ -148,6 +153,13 @@ def _cmd_add(args) -> int:
 
 def _notifier_http() -> httpx.Client:
     return httpx.Client(timeout=httpx.Timeout(10.0, connect=3.0), headers={"User-Agent": USER_AGENT})
+
+
+def _analysis_client(cfg: Config):
+    """(client, None) for cfg.model's backend: an httpx client for ollama:, else Anthropic."""
+    if is_ollama(cfg.model):
+        return httpx.Client(), None
+    return _anthropic_client()
 
 
 def _anthropic_client():
@@ -245,7 +257,7 @@ def _cmd_watch(args) -> int:
             log.info("analysis off (opt in with --analyze or analysis_enabled = true): new RG-2 "
                      "forms are recorded, not analysed")
         else:
-            ai, why = _anthropic_client()
+            ai, why = _analysis_client(cfg)
             if ai is None:
                 log.warning("analysis disabled: %s", why)
             else:
@@ -285,7 +297,7 @@ def _cmd_watch(args) -> int:
 
 def _cmd_analyze(args) -> int:
     cfg = _config(args)
-    ai, why = _anthropic_client()
+    ai, why = _analysis_client(cfg)
     if ai is None:
         print(f"analysis unavailable: {why}", file=sys.stderr)
         return 2
@@ -323,12 +335,12 @@ def _cmd_analyze(args) -> int:
         doc = Doc("", "", path.name, "", 6, str(path), "")
     try:
         result = analyze_document(render_tiles(path), ai, cfg)
-    except (RenderError, AnalysisError) as exc:
+    except (RenderError, AnalysisError, OllamaUnavailable) as exc:
         cost = getattr(exc, "cost_usd", 0.0)
         if cost:
             error = str(exc)[:200]
             _record_adhoc(cfg, doc.url, lambda s: s.save_failed_analysis(
-                doc.url, cfg.model, PROMPT_VERSION, cost, error, parent=ADHOC))
+                doc.url, stored_model(cfg.model), PROMPT_VERSION, cost, error, parent=ADHOC))
         print(f"analysis failed: {exc}" + (f" (billed ${cost:.3f})" if cost else ""), file=sys.stderr)
         return 1
     _record_adhoc(cfg, doc.url, lambda s: s.save_analysis(doc.url, result, PROMPT_VERSION,
@@ -373,14 +385,17 @@ def _cmd_eval(args) -> int:
     if args.limit:
         labels = labels[:args.limit]
     ai = None
+    local = is_ollama(cfg.model)
     if not args.cached:
-        ai, why = _anthropic_client()
+        ai, why = _analysis_client(cfg)
         if ai is None:
             print(f"evaluation unavailable: {why}", file=sys.stderr)
             return 2
     store = _open_store(cfg)
     try:
-        if not args.cached:
+        if not args.cached and local:
+            print("local model, no API cost")
+        elif not args.cached:
             forms, tiles, usd = estimate_cost(labels, args.pdf_dir, cfg)
             remaining = max(0.0, cfg.max_spend_usd - store.total_spend(EVAL_PARENT))
             print(f"{forms} form(s), {tiles} tiles: estimated cost ${usd:.2f} (estimate, actual "

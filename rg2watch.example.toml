@@ -47,6 +47,11 @@ analysis_enabled = false
 # Model and effort for the forensic check
 model = "claude-opus-5-5"
 effort = "high"
+# Local model instead: model = "ollama:qwen3.8:27b-64k" (free, no API key; or `--model` on
+# eval/analyze/watch). Settings for that backend:
+ollama_url = "http://localhost:11434"
+ollama_num_ctx = 65536
+ollama_timeout_s = 900
 # Server-side refusal fallback to another model
 fallbacks = true
 # Analysis pauses (one "[rg2-watch] spend cap reached" alert) once the recorded spend of this

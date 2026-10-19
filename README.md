@@ -115,6 +115,20 @@ counts against an election's cap (and is not capped itself: each run is an expli
 budget) and exits. `watch` also
 accepts a zapisnici URL instead of `--parent`. `--base-url` overrides the RIK host; `-v` enables debug logs.
 
+## Local models
+
+`model = "ollama:<name>"` in the config (or `--model ollama:<name>` on `eval`, `analyze` and `watch`)
+sends the same tiles, prompt and JSON schema to a local Ollama (`ollama_url`, `ollama_num_ctx`,
+`ollama_timeout_s`; defaults `http://localhost:11434`, 65536, 900). No API key is needed, nothing is
+billed (cost 0), and `eval` needs no `--yes`. The model must support vision. If Ollama is down or
+times out the form is deferred like an Anthropic overload, without using an attempt.
+
+Stored analyses are kept per (document, model, prompt version): `eval --cached` only reuses reports
+from the same model and prompt version, so Claude and local runs can share one DB and be compared
+on the same golden set:
+
+    uv run rg2watch eval --labels tests/golden/labels.jsonl --pdf-dir PDFS --model ollama:qwen3.8:27b-64k
+
 ## Evaluation
 
 `rg2watch eval` analyses a set of hand-labelled local PDFs and reports, per rule, how often it fires
