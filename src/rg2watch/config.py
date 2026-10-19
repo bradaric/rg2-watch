@@ -27,6 +27,13 @@ class Config:
     medium_digest_s: int = 600
     request_timeout_s: float = 20.0
     max_pdf_bytes: int = 50_000_000
+    model: str = "claude-opus-5-5"
+    effort: str = "high"
+    fallbacks: bool = True
+    max_spend_usd: float = 100.0
+    price_in_per_mtok: float = 4.0
+    price_out_per_mtok: float = 20.0
+    analysis_workers: int = 4
 
 
 def load_config(path: Path | None) -> Config:
