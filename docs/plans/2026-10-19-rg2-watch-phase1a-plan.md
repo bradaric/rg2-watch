@@ -235,3 +235,21 @@ RARE_TYPES: tuple[int, ...] = (7,8,9,10,14,15,16,19,20,21,22,23,24,25,26,27,28,2
 - [ ] `uv run rg2watch fixtures https://www.rik.parlament.gov.rs/zapisnici/662405 --out data/fixtures --pdfs --limit-pdfs 40` (max_rps 1).
 - [ ] `uv run rg2watch replay --fixtures data/fixtures/662405 --speed 120 --faults` in background, then `uv run rg2watch watch --base-url http://127.0.0.1:8765 ...` for a few simulated hours; record request counts, lane durations and detection latency in `docs/plans/2026-10-19-phase1a-replay-results.md`.
 - [ ] `uv run rg2watch add https://www.rik.parlament.gov.rs/zapisnici/779676` + `watch --once` against the real site (parliamentary 2026, currently empty) to confirm empty-election behaviour; 1 req/s.
+
+### Task 11 (added after final review): one page budget for every lane
+
+**Why:** final-review re-check showed that at parliamentary scale (~170 municipalities, ~830 RG-2 pages) the per-municipality probe path, watchlist sweeps, rare-type sweeps and D4 re-checks are not page-budgeted; one probe tick at peak can cost ~1,200 requests (10-20 min), during which the rare lane (RG-8/RG-9 HIGH) cannot run.
+
+**Files:** Modify `src/rg2watch/watcher.py`, `src/rg2watch/rik_parse.py`, `src/rg2watch/cli.py`, `tests/test_watcher.py`, `tests/test_rik_parse.py`.
+
+**Requirements:**
+- Every lane's work is resumable and charged against one per-tick request budget `tick_request_budget` (new config, default 40; replaces/absorbs `sweep_pages_per_tick` - keep `sweep_pages_per_tick` as an alias if present in a user's toml). Priority order within a tick: rare-lane count checks and rare sweeps > watchlist > probe (global count, per-municipality count cursor, changed-municipality sweeps) > missing > safety pass. Rare-lane count checks always run every `rare_interval_s` even if the budget is exhausted by earlier work in the same tick (they are first).
+- Per-municipality probe: a municipality cursor; counts and changed-municipality sweeps continue across ticks; a probe round completes when all municipalities are counted; "rg2" stored only at round completion (keep the race-tolerant shortfall logic).
+- Watchlist and rare-type sweeps resumable the same way; D4 re-checks queued and charged to the budget.
+- Rare lane periodic full re-sweep decoupled from safety: every `rare_resweep_interval_s` (new config, default 300) re-sweep all non-empty rare types (detects count-neutral rare replacements).
+- `--once` keeps unlimited budget.
+- Clamp budget to >= 5.
+- Parser: href regex must accept the opposite quote character inside the href (`(?:(?!\1)[^<>])*`); test with an href containing `"` inside single quotes.
+- cli watch loop: `deliver()` in its own try (a failing run_once must not skip delivery).
+
+**Tests:** (1) FakeRik with 170 municipalities x 50 stations, all with RG-2, a new RG-9 added while a probe round is mid-way: emitted within 2 ticks; no tick exceeds rare-count requests + budget. (2) probe round spanning several ticks still detects a new RG-2 in the last municipality. (3) count-neutral RG-7 replacement detected by rare re-sweep within `rare_resweep_interval_s` + 2 ticks. (4) parser quote test. (5) deliver runs when run_once raises.
