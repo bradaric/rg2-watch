@@ -1,4 +1,5 @@
 import logging
+import math
 import threading
 import time
 from collections import Counter
@@ -132,7 +133,8 @@ class Watcher:
         self._budget = budget = max(MIN_BUDGET, self.cfg.tick_request_budget)
         # Priority: rare > removal re-checks > watchlist > probe > missing > safety, except that a
         # reserved share is held back from watchlist/probe for safety (first) and missing when they
-        # have work, so a busy probe cannot starve them. Unused reserve flows to the later lanes.
+        # have work, so a busy probe cannot starve them. Unused reserve goes back to the probe,
+        # then to safety.
         self._lane_if("rare", self._rare_wants, self._rare)
         self._lane_if("recheck", self._recheck_wants, self._rechecks)
         now = self.clock()
@@ -143,8 +145,11 @@ class Watcher:
         self._lane_if("watchlist", self._watchlist_wants, self._watchlist)
         self._lane_if("probe", self._probe_wants, self._probe)
         self._budget += held
+        before = self._budget
         self._lane_if("safety", self._safety_wants, self._capped(self._safety, held))
-        self._lane_if("missing", self._missing_wants, self._missing)
+        held -= before - self._budget
+        self._lane_if("missing", self._missing_wants, self._capped(self._missing, held))
+        self._lane_if("probe", self._probe_wants, self._probe)
         self._lane_if("safety", self._safety_wants, self._safety)
         self._lane_if("recheck", self._recheck_wants, self._rechecks)
 
@@ -476,11 +481,7 @@ class Watcher:
                 if total == self.store.get_count(self.parent, "rg2"):
                     return
                 names = self.store.municipality_ids(self.parent)
-                # Cost guard: a round costs ~2 requests per municipality plus the pages of the
-                # changed ones (estimate: change/10 pages + one page per changed municipality).
-                change = abs(total - (self.store.get_count(self.parent, "rg2") or 0))
-                round_cost = 2 * len(names) + change / PAGE_SIZE + min(change, len(names))
-                if self.cfg.probe_cost_guard and round_cost >= max_page:
+                if self.cfg.probe_cost_guard and self._round_cost(total, names) >= max_page:
                     jobs.append(_Job(full, Scope(doc_type=6), False, 6, self._guard_done, total))
                 else:
                     self._round = _Round(total, list(names.items()))
@@ -512,6 +513,18 @@ class Watcher:
             self._round = None
             self._last["probe"] = self.clock()  # next round no sooner than probe_interval_s from now
             self._finish_round(r, total_after)  # may queue a fallback pass: loop advances it
+
+    def _round_cost(self, total: int, names: dict[str, str]) -> float:
+        """Estimated requests of a per-municipality round: 2 counts per municipality plus a full
+        sweep of each changed one. Changed municipalities ~ min(|change|, n); pages per sweep ~ the
+        average of ceil(stored count / 10) over municipalities (1 when unknown or empty)."""
+        n = len(names)
+        if not n:
+            return 0
+        change = abs(total - (self.store.get_count(self.parent, "rg2") or 0))
+        pages = [max(1, math.ceil((self.store.get_count(self.parent, f"rg2:m:{mid}") or 0) / PAGE_SIZE))
+                 for mid in names.values()]
+        return 2 * n + min(change, n) * sum(pages) / n
 
     def _muni_done(self, r: _Round, key: str, job: _Job) -> None:
         if job.ok:

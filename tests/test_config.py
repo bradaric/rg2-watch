@@ -48,3 +48,13 @@ def test_sweep_pages_per_tick_is_alias_for_budget(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("sweep_pages_per_tick = 7\n", encoding="utf-8")
     assert load_config(p).tick_request_budget == 7
+
+
+def test_reserved_share_clamped_with_warning(tmp_path, caplog):
+    p = tmp_path / "c.toml"
+    p.write_text("reserved_share = 1.5\n", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="rg2watch.config"):
+        assert load_config(p).reserved_share == 0.9
+    assert "reserved_share" in caplog.text
+    p.write_text("reserved_share = -0.1\n", encoding="utf-8")
+    assert load_config(p).reserved_share == 0.0

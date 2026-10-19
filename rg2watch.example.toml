@@ -17,7 +17,7 @@ tick_request_budget = 40
 # Seconds between full re-sweeps of every non-empty rare type (finds count-neutral replacements)
 rare_resweep_interval_s = 300
 # Share of the budget held back from watchlist/probe for the safety sweep (first) and the
-# missing-station lane while they have work; unused reserve goes back to the other lanes
+# missing-station lane while they have work; unused reserve goes back to the probe (range 0.0-0.9)
 reserved_share = 0.25
 # Pause all lanes this long after repeated 401/403 answers from RIK
 blocked_pause_s = 300

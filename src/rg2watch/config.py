@@ -1,3 +1,4 @@
+import logging
 import os
 import tomllib
 from dataclasses import dataclass, field, fields
@@ -42,6 +43,11 @@ def load_config(path: Path | None) -> Config:
     if "db_path" in data:
         data["db_path"] = Path(data["db_path"])
     cfg = Config(**data)
+    if not 0.0 <= cfg.reserved_share <= 0.9:
+        clamped = min(0.9, max(0.0, cfg.reserved_share))
+        logging.getLogger("rg2watch.config").warning(
+            "reserved_share %s out of range [0.0, 0.9]; using %s", cfg.reserved_share, clamped)
+        cfg.reserved_share = clamped
     topic = os.environ.get("RG2W_NTFY_TOPIC")
     if topic:
         cfg.ntfy_topic = topic

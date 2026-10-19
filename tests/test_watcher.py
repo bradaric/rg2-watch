@@ -686,17 +686,45 @@ def test_cost_guard_estimates_round_cost():
             for mid, name in munis.items() for n in range(1, 41)]  # 585 records, 59 pages
     w, fake, store, t, batches, _ = env(guard=True, records=recs, munis=munis, stations=stations,
                                         missing_station_threshold=0, tick_request_budget=1000)
-    w.run_once()  # nothing stored: 2*15 + 585/10 + 15 >= 59 -> full pass
-    assert len(events(batches)) == 585
-    assert not [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
+
+    def muni_reqs():
+        return [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
                 if "filters[municipality]" in f]
+
+    w.run_once()  # per-municipality counts unknown (1 page each): 2*15 + 15*1 = 45 < 59 -> round
+    assert len(events(batches)) == 585 and muni_reqs()
     fake.add_doc("G03|40", doc(6, "/extfile/303/40/rg2.pdf"))
     t.now += 60
     fake.request_log.clear()
-    w.run_once()  # one new doc: 2*15 + 0.1 + 1 < 59 -> per-municipality round
-    assert [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
-            if "filters[municipality]" in f]
+    w.run_once()  # one change, 39 stored -> 4 pages: 2*15 + 1*4 = 34 < 59 -> round
+    assert muni_reqs()
     assert [(e.kind, e.doc.station_key) for e in events(batches)][-1] == ("added", "G03|40")
+    for mid, name in munis.items():
+        if name != "G03":
+            fake.add_doc(f"{name}|40", doc(6, f"/extfile/{mid}/40/rg2.pdf"))
+    t.now += 60
+    fake.request_log.clear()
+    w.run_once()  # 14 changes: 2*15 + 14*4 = 86 >= 60 -> full pass
+    assert muni_reqs() == []
+    assert len(events(batches)) == 600
+
+
+def test_unused_reserve_flows_back_to_probe():
+    # Missing lane has work (1 station missing, under threshold) but queries nothing: its reserve
+    # must go back to the probe round in the same tick.
+    w, fake, store, t, batches, _ = parl_env(missing_station_threshold=50, missing_max_per_tick=0,
+                                             safety_sweep_interval_s=10**7, rare_interval_s=10**7)
+    w.run_once()
+    t.now += 60
+    fake.add_doc("P169|50", doc(6, "/extfile/1169/50/rg2_v1.pdf"))
+    per_tick = []
+    for _ in range(4):
+        fake.request_log.clear()
+        w.run_once()
+        t.now += 60
+        per_tick.append(len(listing_reqs(fake)))
+    assert w._round is not None  # still mid-round, so every tick had probe work
+    assert per_tick == [40, 40, 40, 40]
 
 
 def test_next_probe_round_waits_probe_interval_after_round_end():
@@ -734,11 +762,10 @@ def test_failed_batch_processing_is_retried_not_skipped():
         return real(*a, **k)
 
     w._process = flaky
-    w.run_once()  # page 2 of the full pass fails to process
-    assert w._jobs["probe"] and w._jobs["probe"][0].next_page == 2
-    assert store.get_count(P, "rg2") is None
-    t.now += 1
-    w.run_once()
+    w.run_once()  # page 2 of the full pass fails to process; the probe's second slot retries it
+    pages = [f["page"] for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
+             if "filters[municipality]" not in f]
+    assert pages.count("2") == 2  # re-fetched, not skipped
     assert len(events(batches)) == 33 and store.get_count(P, "rg2") == 33
 
 
@@ -756,12 +783,9 @@ def test_failed_finish_keeps_job_and_does_not_store_rg2():
 
     w._finish = flaky
     t.now += 60
-    w.run_once()
-    assert store.get_count(P, "rg2") == 33  # round not ok: total not updated
-    t.now += 60
-    w.run_once()
+    w.run_once()  # finish fails, the job stays queued and the probe's second slot finishes it
     assert [(e.kind, e.doc.station_key) for e in events(batches)][-1] == ("added", "Beta|12")
-    assert store.get_count(P, "rg2") == 33  # that round was not ok
+    assert store.get_count(P, "rg2") == 33  # that round was not ok: total not updated
     for _ in range(2):
         t.now += 60
         w.run_once()
