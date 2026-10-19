@@ -1,5 +1,6 @@
 import json
 import random
+import re
 import threading
 import time
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
@@ -117,42 +118,46 @@ def _send(http: httpx.Client, limiter: AdaptiveLimiter, timeout_s: float,
     raise AssertionError("unreachable")
 
 
-MAINTENANCE_WORDS = (b"maintenance", b"unavailable", b"temporarily", b"overload", b"busy",
-                     b"odrzavanj", "održavanj".encode())
+MAINTENANCE_STEMS = ("одржавањ", "недоступ", "održavanj", "odrzavanj", "nedostup")
+MAINTENANCE_WORDS = re.compile(r"\b(maintenance|unavailable|temporarily|overload|busy)\b")
+_SCRIPT_STYLE = re.compile(r"<(script|style)\b.*?</\1\s*>", re.S)
+CLASSIFY_BYTES = 4096
 
 
 def _read_capped(http: httpx.Client, url: str, timeout_s: float, max_bytes: int,
-                 deadline: float) -> httpx.Response:
+                 deadline: float, clock) -> httpx.Response:
     """Stream a PDF body with a size cap, an early %PDF check and a deadline.
-    Permanent problems raise RikError; maintenance-looking HTML raises ValueError (retried)."""
-    with http.stream("GET", url, timeout=timeout_s) as r:
-        if r.status_code >= 300:
+    Any 3xx/non-PDF is a permanent RikError (redirects are never followed);
+    maintenance-looking HTML raises ValueError (retried as overload)."""
+    with http.stream("GET", url, timeout=timeout_s, follow_redirects=False) as r:
+        if 300 <= r.status_code < 400:
+            raise RikError(f"GET {url} -> HTTP {r.status_code} (redirect not followed)")
+        if r.status_code >= 400:
             return httpx.Response(r.status_code,
                                   headers={"Retry-After": r.headers.get("Retry-After", "")})
         length = r.headers.get("content-length", "")
         if length.isdigit() and int(length) > max_bytes:
             raise RikError(f"GET {url}: Content-Length {length} exceeds {max_bytes}")
         buf = bytearray()
-        checked = False
         for chunk in r.iter_bytes():
             buf += chunk
             if len(buf) > max_bytes:
                 raise RikError(f"GET {url}: body exceeds {max_bytes} bytes")
-            if time.monotonic() > deadline:
+            if clock() > deadline:
                 raise RikError(f"GET {url}: download exceeded time limit")
-            if not checked and len(buf) >= 4:
-                checked = True
-                if not buf.startswith(b"%PDF"):
-                    _reject_non_pdf(url, bytes(buf))
-        if not checked and not buf.startswith(b"%PDF"):
-            _reject_non_pdf(url, bytes(buf))
+            if len(buf) >= 4 and not buf.startswith(b"%PDF") and len(buf) >= CLASSIFY_BYTES:
+                break  # not a PDF: stop reading, classify the head
+        if not buf.startswith(b"%PDF"):
+            _reject_non_pdf(url, bytes(buf[:CLASSIFY_BYTES]))
         return httpx.Response(r.status_code, content=bytes(buf))
 
 
 def _reject_non_pdf(url: str, head: bytes) -> None:
-    low = head[:4096].lower()
-    if (b"<html" in low or b"<!doctype html" in low) and any(w in low for w in MAINTENANCE_WORDS):
-        raise ValueError("maintenance page")
+    text = head.decode("utf-8", errors="ignore").casefold()
+    if "<html" in text or "<!doctype html" in text:
+        visible = _SCRIPT_STYLE.sub(" ", text)
+        if MAINTENANCE_WORDS.search(visible) or any(w in visible for w in MAINTENANCE_STEMS):
+            raise ValueError("maintenance page")
     raise RikError(f"GET {url}: not a PDF")
 
 
@@ -266,14 +271,20 @@ class RikClient:
             raise RikError(f"refusing download from foreign host: {parts.netloc}")
         path = quote(parts.path, safe="/%:@~-._!$&'()*+,;=")
         full = urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
-        deadline = time.monotonic() + max_total_s
+        deadline = self.limiter.clock() + max_total_s
 
         def opener() -> httpx.Response:
-            return _read_capped(self.http, full, self.timeout_s, self.max_pdf_bytes, deadline)
+            return _read_capped(self.http, full, self.timeout_s, self.max_pdf_bytes, deadline,
+                                self.limiter.clock)
+
+        def parse(resp: httpx.Response) -> bytes:
+            if not resp.content.startswith(b"%PDF"):
+                raise RikError(f"GET {full}: not a PDF")
+            return resp.content
 
         try:
             body = _send(self.http, self.limiter, self.timeout_s, "GET", full,
-                         parse=lambda resp: resp.content, opener=opener)
+                         parse=parse, opener=opener)
         except RikBlocked:
             self.blocked_streak += 1
             raise

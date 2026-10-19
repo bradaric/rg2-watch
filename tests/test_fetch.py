@@ -1,3 +1,5 @@
+import threading
+
 import httpx
 import pytest
 
@@ -9,8 +11,8 @@ PDF = b"%PDF-1.4 fake"
 BASE = "https://www.rik.parlament.gov.rs"
 
 
-def make(handler, **kw):
-    limiter = AdaptiveLimiter(2.0, clock=lambda: 0.0, sleep=lambda s: None)
+def make(handler, clock=lambda: 0.0, **kw):
+    limiter = AdaptiveLimiter(2.0, clock=clock, sleep=lambda s: None)
     http = httpx.Client(transport=httpx.MockTransport(handler))
     return RikClient(Election("662405", "660578", "3", "Test", BASE), limiter, http, **kw), limiter, None
 
@@ -53,7 +55,7 @@ def test_download_percent_encodes_path():
 
 
 def test_download_rejects_non_pdf():
-    client, _, _ = make(lambda r: httpx.Response(200, content=b"<html>maintenance</html>"))
+    client, _, _ = make(lambda r: httpx.Response(200, content=b"this is not a pdf"))
     with pytest.raises(RikError):
         client.download("/extfile/a.pdf")
 
@@ -98,3 +100,104 @@ def test_download_rejects_foreign_host():
     client, _, _ = make(lambda r: httpx.Response(200, content=PDF))
     with pytest.raises(RikError):
         client.download("https://evil.example.com/a.pdf")
+
+
+@pytest.mark.parametrize("location", ["https://evil.example.com/a.pdf", "/other.pdf"])
+def test_redirect_is_not_followed(tmp_path, location):
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if request.url.host != "www.rik.parlament.gov.rs":
+            return httpx.Response(200, content=PDF)
+        return httpx.Response(302, headers={"Location": location})
+
+    client, limiter, _ = make(handler)
+    client.http.follow_redirects = True  # as RikClient.from_url configures it
+    overloads = count_overloads(limiter)
+    with pytest.raises(RikError):
+        fetch_pdf(client, "/extfile/a.pdf", tmp_path / "cache")
+    assert len(calls) == 1 and not overloads
+    assert not list(tmp_path.rglob("*.pdf"))
+
+
+def test_empty_body_never_cached(tmp_path):
+    client, _, _ = make(lambda r: httpx.Response(200, content=b""))
+    with pytest.raises(RikError):
+        fetch_pdf(client, "/extfile/a.pdf", tmp_path / "cache")
+    assert not list(tmp_path.rglob("*.pdf"))
+
+
+def test_deadline_stops_trickling_download():
+    now = [0.0]
+
+    def body():
+        yield PDF
+        while True:
+            now[0] += 50
+            yield b"x"
+
+    client, _, _ = make(lambda r: httpx.Response(200, content=body()), clock=lambda: now[0])
+    with pytest.raises(RikError, match="time limit"):
+        client.download("/extfile/a.pdf")
+    assert now[0] <= 150
+
+
+def test_large_non_pdf_stream_aborts_early():
+    sent = []
+
+    def body():
+        for i in range(10_000):
+            sent.append(i)
+            yield b"A" * 1024
+
+    client, limiter, _ = make(lambda r: httpx.Response(200, content=body()))
+    with pytest.raises(RikError):
+        client.download("/extfile/a.pdf")
+    assert len(sent) <= 8
+
+
+@pytest.mark.parametrize("html", [
+    "<html><body>Сајт је у току одржавања</body></html>".encode(),
+    "<html><body>Sajt je nedostupan zbog Održavanja</body></html>".encode(),
+    "<!DOCTYPE html><html><body>Temporarily BUSY</body></html>".encode(),
+])
+def test_maintenance_terms_retry(html):
+    calls = []
+    client, _, _ = make(lambda r: (calls.append(1), httpx.Response(200, content=html))[1])
+    with pytest.raises(RikError):
+        client.download("/extfile/a.pdf")
+    assert len(calls) == 4
+
+
+def test_html_with_keyword_only_in_script_is_permanent():
+    calls = []
+    html = b"<html><head><script>var busy = 1; // maintenance</script></head><body>Not found</body></html>"
+    client, _, _ = make(lambda r: (calls.append(1), httpx.Response(200, content=html))[1])
+    with pytest.raises(RikError):
+        client.download("/extfile/a.pdf")
+    assert len(calls) == 1
+
+
+def test_concurrent_fetch_uses_unique_tmp_files(tmp_path):
+    barrier = threading.Barrier(2, timeout=10)
+
+    def handler(request):
+        barrier.wait()
+        return httpx.Response(200, content=PDF)
+
+    client, _, _ = make(handler)
+    results, errors = [], []
+
+    def work():
+        try:
+            results.append(fetch_pdf(client, "/extfile/a.pdf", tmp_path / "cache"))
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert not errors and len(results) == 2 and results[0] == results[1]
+    assert [p.name for p in (tmp_path / "cache").iterdir()] == [results[0].name]
+    assert results[0].read_bytes() == PDF

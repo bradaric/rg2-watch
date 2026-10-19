@@ -118,11 +118,15 @@ def render_tiles(pdf_path: Path, max_edge: int = 2576, max_tiles: int = 16,
                 keep = plan[:max_tiles - 1] + plan[-1:]
 
             tiles: list[Tile] = []
-            osd_start = time.monotonic()
+            osd_spent = 0.0
             for i, eff, _ in keep:
                 img = pdf[i].render(scale=eff / 72).to_pil().convert("RGB")
-                remaining = OSD_BUDGET_S - (time.monotonic() - osd_start)
-                rot = _osd_rotation(img, min(OSD_PAGE_TIMEOUT_S, remaining)) if remaining > 0 else 0
+                remaining = OSD_BUDGET_S - osd_spent  # only time spent inside OSD calls
+                rot = 0
+                if remaining > 0:
+                    t0 = time.monotonic()
+                    rot = _osd_rotation(img, min(OSD_PAGE_TIMEOUT_S, remaining))
+                    osd_spent += time.monotonic() - t0
                 if rot:
                     img = img.rotate(-rot, expand=True)  # PIL rotates counter-clockwise
                 if split and max(img.size) > max_edge:

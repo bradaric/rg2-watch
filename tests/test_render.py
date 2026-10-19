@@ -109,3 +109,64 @@ def test_rotated_300dpi_page_keeps_resolution(tmp_path):
     tiles = render_tiles(out, dpi=200)
     assert [t.name for t in tiles] == ["p1a", "p1b"]
     assert all(abs(max(dims(t)) - 2480) <= 1 for t in tiles)  # 300 dpi, not downgraded to ~212
+
+
+def test_only_kept_pages_are_rendered(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(render, "_osd_rotation", lambda img, timeout=10: seen.append(1) or 0)
+    render_tiles(make_pdf(tmp_path / "a.pdf", (827, 1169), 20, dpi=100), max_tiles=16)
+    assert len(seen) == 16
+
+
+def test_tile_loop_exception_becomes_render_error(tmp_path, monkeypatch):
+    def boom(img, max_edge):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(render, "_jpeg", boom)
+    with pytest.raises(RenderError):
+        render_tiles(make_pdf(tmp_path / "a.pdf", (827, 1169), 1, dpi=100))
+
+
+@pytest.mark.real_osd
+def test_osd_subprocess_timeout_is_swallowed(monkeypatch):
+    import subprocess
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/tesseract")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert render._osd_rotation(Image.new("RGB", (50, 50)), timeout=7) == 0
+    assert seen["timeout"] == 7
+
+
+class FakeMonotonic:
+    now = 0.0
+
+    @classmethod
+    def monotonic(cls):
+        return cls.now
+
+
+def test_osd_budget_counts_only_osd_time(tmp_path, monkeypatch):
+    FakeMonotonic.now = 0.0
+    monkeypatch.setattr(render, "time", FakeMonotonic)
+    timeouts = []
+
+    def osd(img, timeout=10):
+        timeouts.append(timeout)
+        FakeMonotonic.now += 15
+        return 0
+
+    real_jpeg = render._jpeg
+
+    def slow_jpeg(img, max_edge):
+        FakeMonotonic.now += 100  # rendering/encoding time must not eat the OSD budget
+        return real_jpeg(img, max_edge)
+
+    monkeypatch.setattr(render, "_osd_rotation", osd)
+    monkeypatch.setattr(render, "_jpeg", slow_jpeg)
+    render_tiles(make_pdf(tmp_path / "a.pdf", (827, 1169), 3, dpi=100))
+    assert timeouts == [10, 5]  # page 3 skipped: 30 s spent in OSD > 20 s budget
