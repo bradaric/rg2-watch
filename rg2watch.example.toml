@@ -12,6 +12,8 @@ rare_interval_s = 60
 safety_sweep_interval_s = 1800
 # Stations missing from a sweep before it is treated as suspicious
 missing_station_threshold = 50
+# Do a full RG-2 sweep instead of per-municipality probes when probing would cost as much
+probe_cost_guard = true
 # Municipalities/stations to flag with priority
 watchlist = []
 # ntfy server and topic (topic can also come from env RG2W_NTFY_TOPIC, which wins)

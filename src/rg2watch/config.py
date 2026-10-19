@@ -13,6 +13,7 @@ class Config:
     rare_interval_s: int = 60
     safety_sweep_interval_s: int = 1800
     missing_station_threshold: int = 50
+    probe_cost_guard: bool = True
     watchlist: list[str] = field(default_factory=list)
     ntfy_url: str = "https://ntfy.sh"
     ntfy_topic: str | None = None
