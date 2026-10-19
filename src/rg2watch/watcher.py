@@ -517,13 +517,14 @@ class Watcher:
     def _round_cost(self, total: int, names: dict[str, str]) -> float:
         """Estimated requests of a per-municipality round: 2 counts per municipality plus a full
         sweep of each changed one. Changed municipalities ~ min(|change|, n); pages per sweep ~ the
-        average of ceil(stored count / 10) over municipalities (1 when unknown or empty)."""
+        average of ceil(count / 10), using total / n for a municipality with no stored count (so a
+        first run on an empty store picks the full pass), at least 1 page."""
         n = len(names)
         if not n:
             return 0
         change = abs(total - (self.store.get_count(self.parent, "rg2") or 0))
-        pages = [max(1, math.ceil((self.store.get_count(self.parent, f"rg2:m:{mid}") or 0) / PAGE_SIZE))
-                 for mid in names.values()]
+        counts = [self.store.get_count(self.parent, f"rg2:m:{mid}") for mid in names.values()]
+        pages = [max(1, math.ceil((total / n if c is None else c) / PAGE_SIZE)) for c in counts]
         return 2 * n + min(change, n) * sum(pages) / n
 
     def _muni_done(self, r: _Round, key: str, job: _Job) -> None:

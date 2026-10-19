@@ -5,7 +5,7 @@ import pytest
 
 from rg2watch.config import Config
 from rg2watch.fake_rik import FakeRik
-from rg2watch.models import LABEL_TO_TYPE, RARE_TYPES, Election, Scope
+from rg2watch.models import LABEL_TO_TYPE, RARE_TYPES, Election, Filters, Scope
 from rg2watch.rik_client import AdaptiveLimiter, RikClient
 from rg2watch.store import Store
 from rg2watch.watcher import Watcher
@@ -691,8 +691,8 @@ def test_cost_guard_estimates_round_cost():
         return [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
                 if "filters[municipality]" in f]
 
-    w.run_once()  # per-municipality counts unknown (1 page each): 2*15 + 15*1 = 45 < 59 -> round
-    assert len(events(batches)) == 585 and muni_reqs()
+    w.run_once()  # counts unknown -> 585/15 = 39 each (4 pages): 2*15 + 15*4 = 90 >= 59 -> full pass
+    assert len(events(batches)) == 585 and muni_reqs() == []
     fake.add_doc("G03|40", doc(6, "/extfile/303/40/rg2.pdf"))
     t.now += 60
     fake.request_log.clear()
@@ -790,3 +790,17 @@ def test_failed_finish_keeps_job_and_does_not_store_rg2():
         t.now += 60
         w.run_once()
     assert store.get_count(P, "rg2") == 34
+
+
+@pytest.mark.slow
+def test_parliament_scale_first_population_uses_full_pass():
+    recs = [{"municipality": name, "election_station_number": str(n), "election_station_name": "S",
+             "number": "1.", "_municipality_id": mid, "_docs": [doc(6, f"/extfile/{mid}/{n}/rg2.pdf")]}
+            for mid, name in PARL_MUNIS.items() for n in range(1, 51)]  # 850 pages
+    w, fake, store, t, batches, _ = env(guard=True, records=recs, munis=PARL_MUNIS,
+                                        stations=PARL_STATIONS, missing_station_threshold=0)
+    w.run_once()  # empty store: 2*170 + 170 * ceil(50 / 10) = 1190 >= 850 -> full pass
+    assert w._round is None
+    assert [j.filters for j in w._jobs["probe"]] == [Filters(doc_type=6)]
+    assert not [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
+                if "filters[municipality]" in f]
