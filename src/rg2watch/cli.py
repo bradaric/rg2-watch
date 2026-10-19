@@ -1,6 +1,7 @@
 import argparse
 import dataclasses
 import logging
+import signal
 import sys
 import time
 from pathlib import Path
@@ -87,12 +88,15 @@ def _cmd_add(args) -> int:
     return 0
 
 
+def _notifier_http() -> httpx.Client:
+    return httpx.Client(timeout=httpx.Timeout(10.0, connect=3.0), headers={"User-Agent": USER_AGENT})
+
+
 def _handlers(store: Store, notifier: Notifier, parent: str):
     def deliver() -> None:
+        """Called once per tick by the watch loop."""
         try:
-            pending = store.unalerted(parent, {"HIGH", "MEDIUM", "LOW"})
-            if pending:
-                store.mark_alerted(notifier.send(pending))
+            store.mark_alerted(notifier.send(store.unalerted(parent, {"HIGH", "MEDIUM", "LOW"})))
         except Exception:
             log.exception("alert delivery failed; retrying next tick")
 
@@ -110,7 +114,6 @@ def _handlers(store: Store, notifier: Notifier, parent: str):
                               ev.doc.station_no, ev.doc.url, exc_info=True)
         for f in found:
             _store_finding(store, parent, f)
-        deliver()
 
     return on_events, deliver
 
@@ -143,8 +146,7 @@ def _cmd_watch(args) -> int:
             print("watch needs a zapisnici URL or --parent", file=sys.stderr)
             return 2
         parent = client.election.parent
-        notifier = Notifier(cfg, httpx.Client(timeout=10.0, headers={"User-Agent": USER_AGENT}),
-                            out=sys.stdout)
+        notifier = Notifier(cfg, _notifier_http(), out=sys.stdout)
 
         on_events, deliver = _handlers(store, notifier, parent)
         watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once)
@@ -198,6 +200,10 @@ def _cmd_fixtures(args) -> int:
     return 0
 
 
+def _sigterm(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     logging.basicConfig(
@@ -205,10 +211,16 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO if args.cmd == "watch" else logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures}[args.cmd]
+    previous = None
+    if args.cmd in ("watch", "replay"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
+        previous = signal.signal(signal.SIGTERM, _sigterm)
     try:
         return handler(args)
     except KeyboardInterrupt:
         return 0
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == "__main__":

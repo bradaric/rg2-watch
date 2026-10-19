@@ -74,9 +74,11 @@ def test_on_events_survives_one_bad_finding(caplog):
     evs = [Event("added", d) for d in docs]
     store.apply_events("p", store.start_sweep("p", "t"), [evs[0], evs[2]])  # doc 2 unknown to store
     out = io.StringIO()
-    on_events, _ = _handlers(store, Notifier(Config(), None, out=out), "p")
+    on_events, deliver = _handlers(store, Notifier(Config(), None, out=out), "p")
     with caplog.at_level(logging.ERROR, logger="rg2watch.cli"):
         on_events(evs)
+    assert out.getvalue() == ""  # on_events only stores; the watch loop delivers once per tick
+    deliver()
     assert out.getvalue().count("[HIGH] D1") == 2
     assert "http://x/2.pdf" in caplog.text and "D1" in caplog.text
 
@@ -125,3 +127,58 @@ def test_add_unreachable_exits_1(tmp_path, capsys, monkeypatch):
     rc = main(["add", "http://127.0.0.1:9/zapisnici/1", "--db", str(tmp_path / "a.sqlite")])
     assert rc == 1
     assert "cannot reach" in capsys.readouterr().err
+
+
+def test_notifier_http_timeouts():
+    from rg2watch.cli import _notifier_http
+    t = _notifier_http().timeout
+    assert (t.connect, t.read, t.write, t.pool) == (3.0, 10.0, 10.0, 10.0)
+
+
+def test_watch_sigterm_flushes_stdout_and_exits_0(tmp_path):
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    root = make_fixture_dir(tmp_path)
+    server = make_replay_server(root, port=0, speed=1e9, faults=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    out_path = tmp_path / "out.txt"
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        cfg = tmp_path / "c.toml"
+        cfg.write_text("max_rps = 1000.0\n")
+        common = ["--db", str(tmp_path / "w.sqlite"), "--config", str(cfg)]
+        assert main(["add", f"{base}/zapisnici/662405", *common]) == 0
+        env = {k: v for k, v in os.environ.items() if k != "RG2W_NTFY_TOPIC"}
+        with open(out_path, "w") as out:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "rg2watch.cli", "watch", "--parent", "662405", "--base-url", base,
+                 *common], stdout=out, stderr=subprocess.DEVNULL, env=env)
+        deadline = time.monotonic() + 30
+        while "[HIGH] D1" not in out_path.read_text() and time.monotonic() < deadline:
+            assert proc.poll() is None
+            time.sleep(0.05)
+        proc.send_signal(signal.SIGTERM)
+        rc = proc.wait(timeout=30)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert rc == 0
+    assert "RG-9 published" in out_path.read_text()
+
+
+def test_replay_sigterm_exits_0(tmp_path):
+    import signal
+    import subprocess
+    import sys
+
+    root = make_fixture_dir(tmp_path)
+    proc = subprocess.Popen([sys.executable, "-m", "rg2watch.cli", "replay", "--fixtures", str(root),
+                             "--port", "0"], stderr=subprocess.PIPE, text=True)
+    assert "replay server on" in proc.stderr.readline()
+    proc.send_signal(signal.SIGTERM)
+    assert proc.wait(timeout=30) == 0
+    proc.stderr.close()
