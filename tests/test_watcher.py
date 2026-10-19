@@ -220,20 +220,81 @@ def test_missing_backoff_doubles():
     assert counts == [2, 2, 0, 2]  # queried at +0, +30, next due +90
 
 
-def test_incomplete_municipality_list_falls_back_to_full_sweep(caplog):
+def full_sweep_pages(fake):
+    """Pages 2 and 3 of the unfiltered RG-2 listing are only requested by a full sweep (34 records)."""
+    return [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
+            if "filters[municipality]" not in f and f["page"] in ("2", "3")]
+
+
+def test_incomplete_municipality_list_falls_back_after_two_ticks():
     w, fake, store, t, batches, _ = env(munis={"101": "Alpha", "102": "Beta"})
     w.run_once()
-    assert len(events(batches)) == 33  # Gamma docs found via the full sweep
+    t.now += 60
+    w.run_once()  # second consecutive shortfall -> one full sweep
+    assert len(events(batches)) == 33  # Gamma docs found
     batches.clear()
     fake.add_doc("Gamma|12", doc(6, "/extfile/103/12/rg2_v1.pdf"))
-    t.now += 60
-    w.run_once()
+    for _ in range(2):
+        t.now += 60
+        w.run_once()
     assert [(e.kind, e.doc.station_key) for e in events(batches)] == [("added", "Gamma|12")]
-    assert store.get_count(P, "rg2") is None
     fake.request_log.clear()
     t.now += 700
     w.run_once()
     assert any(r["path"].endswith("getElectionStations.php") for r in fake.request_log)
+
+
+def test_persistent_shortfall_sweeps_once_not_every_tick():
+    w, fake, store, t, batches, _ = env(munis={"101": "Alpha", "102": "Beta"})
+    for _ in range(6):
+        w.run_once()
+        t.now += 60
+    assert len(full_sweep_pages(fake)) == 2  # one sweep (pages 2 and 3), not one per tick
+    assert store.get_count(P, "rg2") == 33
+
+
+def test_race_during_municipality_loop_is_not_a_shortfall():
+    w, fake, store, t, batches, _ = env()
+    w.run_once()
+    batches.clear()
+    fake.add_doc("Beta|12", doc(6, "/extfile/102/12/rg2_v1.pdf"))
+    t.now += 60
+    fired = []
+
+    def hook(req):
+        f = req["form"]
+        if f.get("filters[municipality]") == "102" and not fired:
+            fired.append(1)
+            fake.add_doc("Alpha|12", doc(6, "/extfile/101/12/rg2_v1.pdf"))  # Alpha already counted
+
+    fake.before_request = hook
+    for _ in range(3):
+        w.run_once()
+        t.now += 60
+    assert not full_sweep_pages(fake)
+    assert sorted(e.doc.station_key for e in events(batches)) == ["Alpha|12", "Beta|12"]
+
+
+def test_refresh_failure_is_throttled():
+    w, fake, store, t, batches, _ = env()
+    w.bootstrap()
+    w._refresh_wanted = True
+    t.now += 700
+    fake.fail_status = 404
+    fake.request_log.clear()
+    for _ in range(3):
+        w.run_once()
+    assert len([r for r in fake.request_log if r["path"].endswith("getElectionStations.php")]) == 1
+
+
+def test_missing_state_dropped_once_station_has_rg2():
+    w, fake, store, t, batches, _ = env()
+    w.run_once()
+    assert "Beta|12" in w._missing_state
+    fake.add_doc("Beta|12", doc(6, "/extfile/102/12/rg2_v1.pdf"))
+    t.now += 60
+    w.run_once()
+    assert "Beta|12" not in w._missing_state
 
 
 def test_unknown_listing_name_warns_once_and_is_not_re_added(caplog):

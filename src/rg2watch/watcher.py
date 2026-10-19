@@ -27,7 +27,8 @@ class Watcher:
         self._refresh_wanted = False
         self._last_bootstrap: float | None = None
         self._warned: set[str] = set()
-        self._unknown_seen = False
+        self._unknown_names: set[str] = set()
+        self._shortfall_streak = 0
         self._missing_state: dict[str, tuple[float, float]] = {}  # station key -> (next_at, delay)
         # The safety sweep first fires one interval after start; other lanes fire immediately.
         self._last: dict[str, float] = {"safety": clock()}
@@ -65,6 +66,7 @@ class Watcher:
             except Exception as exc:
                 log.warning("municipality refresh failed: %r", exc)
                 self._abort = isinstance(exc, RikUnavailable)
+                self._last_bootstrap = self.clock()  # throttle retries
         for name, interval, fn in self._lanes:
             if self._abort:
                 break
@@ -130,7 +132,7 @@ class Watcher:
             docs = [d for d in docs if d.doc_type == doc_type]
         known_names = self.store.municipality_ids(self.parent)
         for name in {d.municipality for d in docs} - set(known_names):
-            self._unknown_seen = True
+            self._unknown_names.add(name)
             self._refresh_wanted = True
             if name not in self._warned:
                 self._warned.add(name)
@@ -227,7 +229,7 @@ class Watcher:
                 self.store.set_count(self.parent, "rg2", total)
             return
         # Count-neutral changes (one add + one removal) are caught by the safety sweep.
-        all_ok, counts, self._unknown_seen = True, 0, False
+        all_ok, counts = True, 0
         for name, mid in names.items():
             if self._abort:
                 return
@@ -247,12 +249,21 @@ class Watcher:
             except Exception:
                 log.exception("probe: municipality %s failed", name)
                 all_ok = False
-        if all_ok and (counts != total or self._unknown_seen):
-            # Stored municipality list is incomplete or names disagree: sweep everything,
-            # leave the global count unstored so the next tick probes again, refresh municipalities.
+        if not all_ok:
+            return
+        total_after, _ = self._count(full)
+        # A sum between the two totals is a race with new uploads, not a shortfall.
+        if counts < min(total, total_after) or self._unknown_names - set(names):
+            # Stored municipalities cannot account for the docs (incomplete list or name mismatch).
             self._refresh_wanted = True
-            self._sweep(sweep_id, full, Scope(doc_type=6), complete=False, doc_type=6)
-        elif all_ok:
+            self._shortfall_streak += 1
+            if self._shortfall_streak >= 2:
+                self._shortfall_streak = 0
+                ok, _ = self._sweep(sweep_id, full, Scope(doc_type=6), complete=False, doc_type=6)
+                if ok:
+                    self.store.set_count(self.parent, "rg2", total_after)
+        else:
+            self._shortfall_streak = 0
             self.store.set_count(self.parent, "rg2", total)
 
     def _missing(self, sweep_id: int) -> None:
@@ -262,6 +273,8 @@ class Watcher:
             for no, sid in self.store.station_ids(self.parent, mid).items():
                 if f"{name}|{no}" not in have:
                     missing.append((f"{name}|{no}", mid, sid))
+        self._missing_state = {k: v for k, v in self._missing_state.items()
+                               if k in {m[0] for m in missing}}
         if not missing or len(missing) > self.cfg.missing_station_threshold:
             return
         now = self.clock()

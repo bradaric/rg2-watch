@@ -28,6 +28,7 @@ class FakeRik:
         self.request_log: list[dict] = []
         self.fail_status: int | None = None
         self.hidden_in_sweeps: set[str] = set()
+        self.before_request: Callable[[dict], None] | None = None
 
     # mutators -------------------------------------------------------------
     def _record(self, station_key: str) -> dict:
@@ -110,6 +111,8 @@ class FakeRik:
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         self.request_log.append({"method": request.method, "path": path, "form": form,
                                  "params": dict(request.url.params)})
+        if self.before_request is not None:
+            self.before_request(self.request_log[-1])
         if self.fail_status is not None:
             return httpx.Response(self.fail_status)
         e = self.election
