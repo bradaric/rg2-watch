@@ -182,9 +182,10 @@ def test_spend_cap_pauses_and_alerts_once(tmp_path):
     assert e.out.getvalue().count(CAP_TITLE) == 1
 
 
-def test_api_error_retried_then_failed_after_3(tmp_path):
-    err = anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com"))
-    e = Env(tmp_path, err)
+def test_bad_output_retried_then_failed_after_3(tmp_path):
+    bad = resp(clean_report())
+    bad.content[0].text = "<html>"  # not JSON: an attempt is used each time
+    e = Env(tmp_path, bad)
     d = doc()
     e.publish(d)
     assert e.drain() == 1
@@ -586,13 +587,51 @@ def test_only_one_probe_while_paused(tmp_path):
     assert e.drain() == 1 and e.ai.calls == 3
 
 
-def test_rate_limit_consumes_attempt(tmp_path):
-    e = Env(tmp_path, api_error(anthropic.RateLimitError, 429))
+def overload_errors():
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    mid_stream = anthropic.APIStatusError(
+        "overloaded", response=httpx.Response(200, request=req),
+        body={"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}})
+    return [api_error(anthropic.RateLimitError, 429), api_error(anthropic.InternalServerError, 500),
+            api_error(anthropic.OverloadedError, 529), anthropic.APIConnectionError(request=req),
+            anthropic.APITimeoutError(request=req), mid_stream]
+
+
+@pytest.mark.parametrize("err", overload_errors(), ids=lambda e: type(e).__name__)
+def test_overload_refunds_and_defers_120s(tmp_path, err):
+    e = Env(tmp_path, err)
     d = doc()
     e.publish(d)
+    for _ in range(6):  # never runs out of attempts while Anthropic is overloaded
+        assert e.drain() == 1
+        assert e.status(d.url) == ("failed", 0)
+        e.clock.now += 119
+        assert e.drain() == 0
+        e.clock.now += 1
+    assert e.findings == [] and "analysis paused" not in e.out.getvalue()
+    e.ai.reply = resp(clean_report())
+    assert e.drain() == 1 and e.status(d.url) == ("done", 1)
+
+
+def test_overload_alerts_once_after_5_and_recovers_once(tmp_path):
+    e = Env(tmp_path, api_error(anthropic.OverloadedError, 529))
+    pdf_dir = tmp_path / "pdfs"
+    docs = [doc(f"{n}.pdf", no=str(n)) for n in range(1, 9)]
+    for n in range(1, 9):
+        make_pdf(pdf_dir / f"{n}.pdf")
+    e.publish(*docs[:4])
     e.drain()
-    assert e.status(d.url) == ("failed", 1)
-    assert "analysis paused" not in e.out.getvalue()
+    assert e.ai.calls == 4 and "analysis delayed" not in e.out.getvalue()
+    e.publish(*docs[4:])
+    e.drain()
+    hhmm = time.strftime("%H:%M", time.localtime(e.clock.now))
+    assert alerts(e, f"[rg2-watch] analysis delayed: Anthropic overloaded since {hhmm}") == 1
+    assert alerts(e, "analysis delayed") == 1
+    e.ai.reply = resp(clean_report())
+    e.clock.now += 120
+    assert e.drain() == 8
+    assert alerts(e, "[rg2-watch] analysis no longer delayed") == 1
+    assert alerts(e, "analysis delayed:") == 1
 
 
 @pytest.mark.parametrize("fail", [403, 503])
@@ -607,6 +646,7 @@ def test_rik_unavailable_download_consumes_no_attempt(tmp_path, fail):
     assert e.status(d.url) == ("failed", 0) and e.findings == []
     assert e.rik.blocked_streak == 0 and e.rik.last_ok is None  # watcher health untouched
     e.fake.fail_status = None
+    e.clock.now += e.cfg.blocked_pause_s  # 403s also start the download pause
     assert e.drain() == 1
     assert e.status(d.url) == ("done", 1)
 
@@ -890,11 +930,11 @@ def test_pdf_download_blocked_alert_and_recovery(tmp_path):
     for n in range(1, 13):
         make_pdf(pdf_dir / f"{n}.pdf")
     e.publish(*docs)
-    e.fake.fail_status = 403
+    e.fake.fail_status = 503  # busy, not blocking: alert after 10 deferrals
     for _ in range(9):
         e.pipe.process_next()
     assert "PDF downloads" not in e.out.getvalue()
-    for _ in range(5):
+    for _ in range(3):
         e.pipe.process_next()
     assert alerts(e, "[rg2-watch] PDF downloads blocked/unavailable since ") == 1
     e.fake.fail_status = None
@@ -902,3 +942,31 @@ def test_pdf_download_blocked_alert_and_recovery(tmp_path):
     e.drain()
     assert alerts(e, "[rg2-watch] PDF downloads available again") == 1
     assert e.rik.blocked_streak == 0
+
+
+def test_pdf_downloads_blocked_3_times_pause_workers(tmp_path):
+    e = Env(tmp_path, resp(clean_report()), blocked_pause_s=300)
+    pdf_dir = tmp_path / "pdfs"
+    docs = [doc(f"{n}.pdf", no=str(n)) for n in range(1, 7)]
+    for n in range(1, 7):
+        make_pdf(pdf_dir / f"{n}.pdf")
+    e.publish(*docs)
+    e.fake.fail_status = 403
+    for _ in range(3):
+        assert e.pipe.process_next() is True
+    assert e.rik.download_blocked_streak == 3
+    assert alerts(e, "[rg2-watch] PDF downloads blocked/unavailable since ") == 1
+    tried = len(e.pdf_requests())
+    e.clock.now += 299
+    for _ in range(5):
+        assert e.pipe.process_next() is False  # paused: no download attempted
+    assert len(e.pdf_requests()) == tried
+    assert e.rik.blocked_streak == 0  # the watcher's own health is untouched
+    e.clock.now += 1
+    e.pipe.process_next()  # pause over: still blocked -> paused again, no second alert
+    assert len(e.pdf_requests()) > tried and e.pipe.process_next() is False
+    assert alerts(e, "PDF downloads blocked") == 1
+    e.fake.fail_status = None
+    e.clock.now += 300
+    assert e.drain() == 6
+    assert alerts(e, "[rg2-watch] PDF downloads available again") == 1

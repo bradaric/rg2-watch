@@ -14,7 +14,7 @@ from .fetch import fetch_pdf
 from .models import Doc, Event, Finding
 from .notify import Notifier
 from .render import RenderError, render_tiles
-from .rik_client import RikClient, RikError, RikUnavailable
+from .rik_client import RikBlocked, RikClient, RikError, RikUnavailable
 from .rules import evaluate_report
 from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, Store
 
@@ -35,6 +35,14 @@ GLOBAL_ERRORS = (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
 # (e.g. no credit, an invalid parameter): then it is treated as global.
 BAD_REQUEST_GLOBAL = 3
 DOWNLOAD_ALERT_AFTER = 10  # consecutive download deferrals before a status alert
+DOWNLOAD_BLOCKED_PAUSE_AFTER = 3  # consecutive 401/403 on PDFs before workers pause downloads
+# Anthropic busy after the SDK's own retries: the form is deferred without using an attempt.
+OVERLOAD_ERRORS = (anthropic.RateLimitError, anthropic.InternalServerError,
+                   anthropic.OverloadedError, anthropic.APIConnectionError)
+# The same errors arriving mid-stream reach us as a plain APIStatusError carrying the error type.
+_OVERLOAD_TYPES = {"rate_limit_error", "overloaded_error", "api_error"}
+OVERLOAD_RETRY_S = 120
+OVERLOAD_ALERT_AFTER = 5  # consecutive overload failures before a status alert
 _MAX_ERROR = 200
 _RENDER_LOCK = threading.Lock()  # PDFium is not thread-safe
 
@@ -42,6 +50,14 @@ _RENDER_LOCK = threading.Lock()  # PDFium is not thread-safe
 def _short(exc: BaseException, limit: int = _MAX_ERROR) -> str:
     text = " ".join(f"{type(exc).__name__}: {exc}".split())
     return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _is_overload(exc: BaseException) -> bool:
+    if isinstance(exc, OVERLOAD_ERRORS):
+        return True
+    body = getattr(exc, "body", None) if isinstance(exc, anthropic.APIStatusError) else None
+    error = body.get("error") if isinstance(body, dict) else None
+    return isinstance(error, dict) and error.get("type") in _OVERLOAD_TYPES
 
 
 def _hhmm(ts: float) -> str:
@@ -70,6 +86,10 @@ class AnalysisPipeline:
         self._deferrals = 0  # consecutive download deferrals (RIK busy/blocking)
         self._deferred_since = 0.0
         self._download_alerted = False
+        self._download_paused_until = float("-inf")  # pipeline clock; PDFs blocked (401/403)
+        self._overloads = 0  # consecutive Anthropic overload failures
+        self._overloaded_since = 0.0
+        self._overload_alerted = False
 
     # control ----------------------------------------------------------------
     def submit(self, events: list[Event]) -> None:
@@ -137,7 +157,8 @@ class AnalysisPipeline:
                 self._end_probe(outcome)
 
     def _rik_paused(self) -> bool:
-        return self.client.limiter.clock() < self.client.paused_until
+        return (self.client.limiter.clock() < self.client.paused_until
+                or self.clock() < self._download_paused_until)
 
     def _over_cap(self) -> bool:
         spent = self.store.total_spend()
@@ -187,7 +208,7 @@ class AnalysisPipeline:
             log.warning("download of %s deferred %d s: %s", doc.url, RIK_RETRY_S, _short(exc))
             self.store.mark_analysis(doc.url, "failed", _short(exc),
                                      retry_at=self.clock() + RIK_RETRY_S, refund=True)
-            self._download_deferred()
+            self._download_deferred(isinstance(exc, RikBlocked))
             return None
         except (RenderError, RikError) as exc:
             self._permanent(doc, "D3", f"document could not be processed: {_short(exc)}", exc)
@@ -223,6 +244,9 @@ class AnalysisPipeline:
             return "api"
         except Exception as exc:  # 429/5xx/overloaded/connection after SDK retries, bad output
             self._record_cost(doc, exc)
+            if _is_overload(exc):
+                self._overloaded(doc, exc)
+                return "api" if isinstance(exc, anthropic.APIStatusError) else None
             self._transient(doc, exc)
             if isinstance(exc, AnalysisError):
                 self._api_ok()
@@ -250,6 +274,27 @@ class AnalysisPipeline:
     def _api_ok(self) -> None:
         with self._state:
             self._bad_requests.clear()
+            recovered, self._overload_alerted = self._overload_alerted, False
+            self._overloads = 0
+        if recovered:
+            log.info("Anthropic answering again")
+            self._status("[rg2-watch] analysis no longer delayed: Anthropic answering again")
+
+    def _overloaded(self, doc: Doc, exc: BaseException) -> None:
+        log.warning("analysis of %s deferred %d s, Anthropic busy: %s", doc.url, OVERLOAD_RETRY_S,
+                    _short(exc))
+        self.store.mark_analysis(doc.url, "failed", _short(exc),
+                                 retry_at=self.clock() + OVERLOAD_RETRY_S, refund=True)
+        with self._state:
+            if self._overloads == 0:
+                self._overloaded_since = self.clock()
+            self._overloads += 1
+            alert = self._overloads >= OVERLOAD_ALERT_AFTER and not self._overload_alerted
+            if alert:
+                self._overload_alerted = True
+        if alert:
+            self._status("[rg2-watch] analysis delayed: Anthropic overloaded since "
+                         f"{_hhmm(self._overloaded_since)}")
 
     def _global_failure(self, doc: Doc, exc: BaseException, probe: bool) -> str:
         if probe:  # the probe pays its attempt, so a poison document ends in X2
@@ -280,14 +325,20 @@ class AnalysisPipeline:
                          f"{type(exc).__name__}")
 
     # download health --------------------------------------------------------
-    def _download_deferred(self) -> None:
+    def _download_deferred(self, blocked: bool) -> None:
         with self._state:
             if self._deferrals == 0:
                 self._deferred_since = self.clock()
             self._deferrals += 1
-            alert = self._deferrals >= DOWNLOAD_ALERT_AFTER and not self._download_alerted
+            pause = blocked and self.client.download_blocked_streak >= DOWNLOAD_BLOCKED_PAUSE_AFTER
+            if pause:  # RIK refuses PDFs: stop downloading for a while, like the watcher does
+                self._download_paused_until = self.clock() + self.cfg.blocked_pause_s
+            alert = (pause or self._deferrals >= DOWNLOAD_ALERT_AFTER) and not self._download_alerted
             if alert:
                 self._download_alerted = True
+        if pause:
+            log.warning("PDF downloads refused %d times in a row; workers pause downloads for %d s",
+                        self.client.download_blocked_streak, self.cfg.blocked_pause_s)
         if alert:
             self._status("[rg2-watch] PDF downloads blocked/unavailable since "
                          f"{_hhmm(self._deferred_since)}")
