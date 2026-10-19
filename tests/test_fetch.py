@@ -9,10 +9,17 @@ PDF = b"%PDF-1.4 fake"
 BASE = "https://www.rik.parlament.gov.rs"
 
 
-def make(handler):
+def make(handler, **kw):
     limiter = AdaptiveLimiter(2.0, clock=lambda: 0.0, sleep=lambda s: None)
     http = httpx.Client(transport=httpx.MockTransport(handler))
-    return RikClient(Election("662405", "660578", "3", "Test", BASE), limiter, http), limiter, None
+    return RikClient(Election("662405", "660578", "3", "Test", BASE), limiter, http, **kw), limiter, None
+
+
+def count_overloads(limiter):
+    calls = []
+    orig = limiter.on_overload
+    limiter.on_overload = lambda: (calls.append(1), orig())
+    return calls
 
 
 def test_fetch_caches(tmp_path):
@@ -49,3 +56,45 @@ def test_download_rejects_non_pdf():
     client, _, _ = make(lambda r: httpx.Response(200, content=b"<html>maintenance</html>"))
     with pytest.raises(RikError):
         client.download("/extfile/a.pdf")
+
+
+def test_download_over_cap_rejected():
+    client, _, _ = make(lambda r: httpx.Response(200, content=PDF + b"x" * 1000), max_pdf_bytes=100)
+    with pytest.raises(RikError):
+        client.download("/extfile/a.pdf")
+
+
+def test_content_length_over_cap_rejected_without_reading_body():
+    def body():
+        raise AssertionError("body must not be read")
+        yield b""
+
+    client, _, _ = make(lambda r: httpx.Response(
+        200, headers={"Content-Length": "999999"}, content=body()), max_pdf_bytes=100)
+    with pytest.raises(RikError):
+        client.download("/extfile/a.pdf")
+
+
+def test_non_pdf_body_is_permanent_and_does_not_throttle():
+    calls = []
+    client, limiter, _ = make(lambda r: (calls.append(1), httpx.Response(200, content=b"<html>Not found</html>"))[1])
+    overloads = count_overloads(limiter)
+    with pytest.raises(RikError):
+        client.download("/extfile/a.pdf")
+    assert len(calls) == 1 and len(overloads) == 0
+
+
+def test_maintenance_html_is_retried_as_overload():
+    calls = []
+    client, limiter, _ = make(lambda r: (calls.append(1), httpx.Response(
+        200, content=b"<html><body>Site under maintenance</body></html>"))[1])
+    overloads = count_overloads(limiter)
+    with pytest.raises(RikError):
+        client.download("/extfile/a.pdf")
+    assert len(calls) == 4 and len(overloads) == 4
+
+
+def test_download_rejects_foreign_host():
+    client, _, _ = make(lambda r: httpx.Response(200, content=PDF))
+    with pytest.raises(RikError):
+        client.download("https://evil.example.com/a.pdf")

@@ -26,6 +26,7 @@ class Config:
     ntfy_topic: str | None = None
     medium_digest_s: int = 600
     request_timeout_s: float = 20.0
+    max_pdf_bytes: int = 50_000_000
 
 
 def load_config(path: Path | None) -> Config:
