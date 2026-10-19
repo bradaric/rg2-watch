@@ -29,6 +29,10 @@ class RikUnavailable(RikError):
     pass
 
 
+class RikBlocked(RikUnavailable):
+    """HTTP 401/403: treated as overload, never retried."""
+
+
 class AdaptiveLimiter:
     """Shared request pacer with AIMD: halve on overload, +0.1 rps on fast success."""
 
@@ -90,6 +94,9 @@ def _send(http: httpx.Client, limiter: AdaptiveLimiter, timeout_s: float,
                 limiter.on_overload()
                 reason = f"HTTP {resp.status_code}"
                 retry_after = _retry_after(resp)
+            elif resp.status_code in (401, 403):
+                limiter.on_overload()
+                raise RikBlocked(f"{method} {url} -> HTTP {resp.status_code}")
             elif resp.status_code >= 400:
                 raise RikError(f"{method} {url} -> HTTP {resp.status_code}")
             else:
@@ -114,6 +121,8 @@ class RikClient:
         self.limiter = limiter
         self.http = http
         self.timeout_s = timeout_s
+        self.last_ok: float | None = None  # limiter clock of the last successful request
+        self.blocked_streak = 0  # consecutive 401/403 responses
         self._headers = {
             "X-Requested-With": "XMLHttpRequest",
             "Referer": f"{election.base_url}/zapisnici/{election.parent}",
@@ -147,8 +156,15 @@ class RikClient:
                 raise ValueError("expected list")
             return body
 
-        return _send(self.http, self.limiter, self.timeout_s, method,
-                     self.election.base_url + path, parse=parse, headers=self._headers, **kwargs)
+        try:
+            body = _send(self.http, self.limiter, self.timeout_s, method,
+                         self.election.base_url + path, parse=parse, headers=self._headers, **kwargs)
+        except RikBlocked:
+            self.blocked_streak += 1
+            raise
+        self.last_ok = self.limiter.clock()
+        self.blocked_streak = 0
+        return body
 
     def listing(self, filters: Filters, page: int) -> ListingPage:
         return parse_listing(self.listing_raw(filters, page), self.election.base_url)

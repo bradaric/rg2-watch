@@ -11,7 +11,10 @@ def test_defaults_without_file(monkeypatch):
     assert c.max_rps == 2.0
     assert c.probe_interval_s == 30
     assert c.rare_interval_s == 60
-    assert c.safety_sweep_interval_s == 900
+    assert c.safety_sweep_interval_s == 300
+    assert c.sweep_pages_per_tick == 20
+    assert c.blocked_pause_s == 300
+    assert c.blind_alert_s == 300
     assert c.missing_station_threshold == 50
     assert c.watchlist == []
     assert c.ntfy_url == "https://ntfy.sh"

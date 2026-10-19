@@ -344,3 +344,25 @@ def test_limiter_threads_never_exceed_cap():
     # 50 acquires at 2 rps must span at least 24.5 s of (fake) time
     assert len(slots) == 50
     assert now[0] >= 24.5
+
+
+def test_403_is_blocked_overload_without_retry_and_tracked():
+    from rg2watch.rik_client import RikBlocked
+    calls = []
+    status = [403]
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(status[0], json=page_payload(0, 0))
+
+    client, limiter, t = make(handler)
+    assert client.last_ok is None
+    for _ in range(2):
+        with pytest.raises(RikBlocked):
+            client.listing(Filters(), 1)
+    assert len(calls) == 2 and client.blocked_streak == 2
+    assert limiter.current_rps < 2.0
+    assert issubclass(RikBlocked, RikUnavailable)
+    status[0] = 200
+    client.listing(Filters(), 1)
+    assert client.blocked_streak == 0 and client.last_ok is not None
