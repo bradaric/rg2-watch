@@ -3,7 +3,11 @@ name = "rg2watch"
 version = "0.1.0"
 description = "Watches the RIK website for newly published polling-station documents"
 requires-python = ">=3.12"
-dependencies = ["httpx"]
+dependencies = [
+    "httpx",
+    "pillow>=13.0.0",
+    "pypdfium2>=5.14.0",
+]
 
 [project.scripts]
 rg2watch = "rg2watch.cli:main"
@@ -21,4 +25,4 @@ packages = ["src/rg2watch"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["slow: large-scale scenarios (still run by default; deselect with -m 'not slow')"]
+markers = ["real_osd: runs real tesseract OSD", "slow: large-scale scenarios (still run by default; deselect with -m 'not slow')"]

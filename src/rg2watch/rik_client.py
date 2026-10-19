@@ -2,7 +2,7 @@ import json
 import random
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -214,3 +214,23 @@ class RikClient:
         body = self._request("POST", "/templates/election/ajaxSelectMunicipality.php", "number",
                              data=data)
         return parse_station_options(body["number"])
+
+    def download(self, url: str) -> bytes:
+        """GET a PDF through the limiter/retry path; the body must start with %PDF."""
+        parts = urlsplit(urljoin(self.election.base_url + "/", url))
+        path = quote(parts.path, safe="/%:@~-._!$&'()*+,;=")
+        full = urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
+
+        def parse(resp: httpx.Response) -> bytes:
+            if not resp.content.startswith(b"%PDF"):
+                raise ValueError("not a PDF")
+            return resp.content
+
+        try:
+            body = _send(self.http, self.limiter, self.timeout_s, "GET", full, parse=parse)
+        except RikBlocked:
+            self.blocked_streak += 1
+            raise
+        self.last_ok = self.limiter.clock()
+        self.blocked_streak = 0
+        return body
