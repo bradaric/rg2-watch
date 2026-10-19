@@ -1,3 +1,4 @@
+import io
 import json
 
 import pytest
@@ -65,7 +66,7 @@ def env(tmp_path, reply):
 def test_run_eval_scores_records_and_survives_bad_files(tmp_path):
     pdfs, _, entries, ai = env(tmp_path, resp(overwritten()))
     store = Store(":memory:")
-    out = run_eval(entries, pdfs, store, ai, Config(), cached=False, out=open(tmp_path / "o", "w"))
+    out = run_eval(entries, pdfs, store, ai, Config(), cached=False, out=io.StringIO())
     assert ai.calls == 2
     assert set(out["files"]) == {"a.pdf", "b.pdf"}
     assert set(out["errors"]) == {"html.pdf", "gone.pdf"}
@@ -76,7 +77,7 @@ def test_run_eval_scores_records_and_survives_bad_files(tmp_path):
 def test_run_eval_cached_never_calls_api(tmp_path):
     pdfs, _, entries, ai = env(tmp_path, resp(overwritten()))
     store = Store(":memory:")
-    sink = open(tmp_path / "o", "w")
+    sink = io.StringIO()
     run_eval(entries[:1], pdfs, store, ai, Config(), cached=False, out=sink)
     again = run_eval(entries, pdfs, store, None, Config(), cached=True, out=sink)
     assert ai.calls == 1
@@ -88,7 +89,7 @@ def test_run_eval_cached_never_calls_api(tmp_path):
 def test_run_eval_stops_at_spend_cap(tmp_path):
     pdfs, _, entries, ai = env(tmp_path, resp(overwritten()))
     out = run_eval([entries[0], entries[3]], pdfs, Store(":memory:"), ai, Config(max_spend_usd=0.001),
-                   cached=False, out=open(tmp_path / "o", "w"))
+                   cached=False, out=io.StringIO())
     assert ai.calls == 1 and out["errors"]["b.pdf"] == "spend cap reached"
 
 
