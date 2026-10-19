@@ -2,6 +2,7 @@ import copy
 
 import pytest
 
+from rg2watch import analyze
 from rg2watch.analyze import SCHEMA
 from rg2watch.config import Config
 from rg2watch.models import Doc
@@ -43,6 +44,27 @@ def clean_report():
                    "pasted_or_patched_area": False, "page_quality": "good", "other_anomalies": []},
         "confidence": "high",
     }
+
+
+_NF = {"type": "object", "properties": {
+    "value": {"anyOf": [{"type": "integer"}, {"type": "null"}]}, "legible": {"type": "boolean"},
+    "mark": {"type": "string", "enum": list(analyze.MARKS)}, "note": {"type": "string"}}}
+# normalised report shape (what analyze_document returns), not the API wire schema
+REPORT_SHAPE = {**SCHEMA, "properties": {**SCHEMA["properties"],
+    "numbers": {"type": "object", "properties": {
+        **{k: _NF for k in analyze.NUM_KEYS},
+        "list_votes": {"type": "array", "items": {"type": "object", "properties": {
+            "row": {"type": "integer"}, "field": _NF}}}}},
+    "yesno": {"type": "object", "properties": {k: {"type": "object", "properties": {
+        "answer": {"type": "string", "enum": list(analyze.ANSWERS)}}} for k in analyze.YESNO_KEYS}}}}
+
+
+def to_wire(report):
+    """Normalised report -> the flat array form the model returns."""
+    nums = [{"field": k, "row": None, **v} for k, v in report["numbers"].items() if k != "list_votes"]
+    nums += [{"field": "list_row", "row": r["row"], **r["field"]} for r in report["numbers"]["list_votes"]]
+    yesno = [{"item": k, "answer": v["answer"]} for k, v in report["yesno"].items()]
+    return {**report, "numbers": nums, "yesno": yesno}
 
 
 def _check(value, schema):
@@ -89,7 +111,7 @@ def mutated(fn):
 
 
 def test_clean_report_matches_schema():
-    _check(clean_report(), SCHEMA)
+    _check(clean_report(), REPORT_SHAPE)
 
 
 def test_clean_report_no_findings():
@@ -212,7 +234,7 @@ def _adversarial(quality, confidence, many_illegible):
     r["visual"].update(results_block_different_pen=True, results_block_different_hand=True,
                        pasted_or_patched_area=True, page_quality=quality)
     r["confidence"] = confidence
-    _check(r, SCHEMA)
+    _check(r, REPORT_SHAPE)
     return r
 
 

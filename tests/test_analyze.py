@@ -9,7 +9,7 @@ from rg2watch.analyze import SCHEMA, AnalysisError, AnalysisRefused, analyze_doc
 from rg2watch.config import Config
 from rg2watch.render import Tile
 
-REPORT = {k: None for k in SCHEMA["required"]}
+REPORT = {k: None for k in SCHEMA["required"]} | {"numbers": [], "yesno": []}
 
 
 def _resp(report=REPORT, stop="end_turn", tin=10, tout=5, text=None):
@@ -159,7 +159,6 @@ def test_schema_strict():
                 walk(v)
 
     walk(SCHEMA)
-    assert set(SCHEMA["properties"]["numbers"]["properties"]) >= {"registered", "list_votes", "outside_confirmations"}
 
 
 def test_schema_passes_sdk_strict_transform():
@@ -167,6 +166,59 @@ def test_schema_passes_sdk_strict_transform():
 
     transform_schema(SCHEMA)
     assert '"type": ["' not in json.dumps(SCHEMA)
+
+
+def test_schema_size_guard():
+    assert len(json.dumps(SCHEMA)) < 4500
+
+
+def test_prompt_v3_list_paragraph_before_names():
+    para = ("Report numbers as a list: one entry per numeric item (registered, first_voter_number, voted, "
+            "ballots_in_box, invalid, valid, assisted, outside_voted, outside_confirmations), and one entry "
+            'with field "list_row" and its row number for each electoral list in 10.5. '
+            "Report every yes/no item once in the yesno list.")
+    assert para in analyze.PROMPT
+    assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
+
+
+def _n(field, value=1, row=None, mark="clean", legible=True, note=""):
+    return {"field": field, "row": row, "value": value, "legible": legible, "mark": mark, "note": note}
+
+
+def test_normalise_missing_defaults():
+    out = analyze._normalise({"numbers": [], "yesno": [], "x": 1})
+    assert out["x"] == 1
+    assert set(out["numbers"]) == set(analyze.NUM_KEYS) | {"list_votes"}
+    assert out["numbers"]["voted"] == {"value": None, "legible": False, "mark": "empty",
+                                       "note": "not reported by model"}
+    assert out["numbers"]["list_votes"] == []
+    assert out["yesno"] == {k: {"answer": "unclear"} for k in analyze.YESNO_KEYS}
+
+
+def test_normalise_shape_duplicates_and_rows():
+    raw = {"numbers": [
+        _n("voted", 5, mark="overwritten"), _n("voted", 9),
+        _n("list_row", 7, row=3), _n("list_row", 8, row=1), _n("list_row", 99, row=3),
+        _n("list_row", 4, row=None)],
+        "yesno": [{"item": "interruption", "answer": "DA"}, {"item": "interruption", "answer": "NE"}]}
+    out = analyze._normalise(raw)
+    assert out["numbers"]["voted"] == {"value": 5, "legible": True, "mark": "overwritten", "note": ""}
+    assert [r["row"] for r in out["numbers"]["list_votes"]] == [1, 3]
+    assert out["numbers"]["list_votes"][1]["field"]["value"] == 7
+    assert out["yesno"]["interruption"] == {"answer": "DA"}
+    assert out["yesno"]["committee_remarks"] == {"answer": "unclear"}
+
+
+def test_analyze_document_returns_normalised_report():
+    rep = REPORT | {"numbers": [_n("valid", 3)]}
+    res = analyze_document(TILES, FakeClient(_resp(report=rep)), Config())
+    assert res.report["numbers"]["valid"]["value"] == 3
+    assert res.report["yesno"]["interruption"] == {"answer": "unclear"}
+
+
+def test_malformed_array_raises_analysis_error():
+    with pytest.raises(AnalysisError):
+        analyze_document(TILES, FakeClient(_resp(report=REPORT | {"numbers": [{"field": "voted"}]})), Config())
 
 
 def test_tokens_carried_on_each_exception_type():
@@ -255,4 +307,4 @@ def test_prompt_v2_dash_paragraph_before_names():
     assert para in analyze.PROMPT
     assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
     from rg2watch.pipeline import PROMPT_VERSION
-    assert PROMPT_VERSION == "v2"
+    assert PROMPT_VERSION == "v3"

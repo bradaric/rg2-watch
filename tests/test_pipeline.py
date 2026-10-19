@@ -18,7 +18,7 @@ from rg2watch.notify import Notifier
 from rg2watch.pipeline import PROMPT_VERSION, AnalysisPipeline
 from rg2watch.rik_client import AdaptiveLimiter, RikClient
 from rg2watch.store import Store
-from test_rules import clean_report, nf
+from test_rules import clean_report, nf, to_wire
 
 BASE = "https://www.rik.parlament.gov.rs"
 P = "662405"
@@ -42,7 +42,7 @@ def doc(name="a.pdf", dt=6, no="1"):
 
 def resp(report, stop="end_turn", tin=1000, tout=500):
     return SimpleNamespace(
-        content=[SimpleNamespace(type="text", text=json.dumps(report))],
+        content=[SimpleNamespace(type="text", text=json.dumps(to_wire(report)))],
         usage=SimpleNamespace(input_tokens=tin, output_tokens=tout),
         stop_reason=stop, model="claude-opus-5-5")
 
@@ -141,7 +141,7 @@ def test_added_rg2_analysed_and_findings_stored(tmp_path):
     assert [(f.rule, f.severity, f.doc.url) for _, f in stored] == [("V1", "HIGH", d.url)]
     assert e.status(d.url) == ("done", 1)
     row = e.store._db.execute("SELECT prompt_version, status, result_json, model FROM analyses").fetchone()
-    assert row[0] == PROMPT_VERSION == "v2" and row[1] == "done" and row[3] == "claude-opus-5-5"
+    assert row[0] == PROMPT_VERSION == "v3" and row[1] == "done" and row[3] == "claude-opus-5-5"
     assert json.loads(row[2])["numbers"]["voted"]["mark"] == "overwritten"
     assert e.store.total_spend() == pytest.approx((1000 * 4 + 500 * 20) / 1e6)
     assert e.out.getvalue() == ""  # workers never alert directly
