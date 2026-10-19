@@ -58,9 +58,12 @@ Re-enact it locally with a fake RIK server (documents appear along their origina
 ## Politeness
 
 All lanes share one rate limiter (default 2 requests/s, `max_rps`) that halves on timeouts and 5xx
-and recovers slowly. The watcher keeps running when RIK is overloaded. Full RG-2 sweeps are spread
-over ticks (`sweep_pages_per_tick`, default 20 pages) so the rare-type and count checks are never
-held up by a long sweep. Never point `replay`, tests or
+and recovers slowly. The watcher keeps running when RIK is overloaded. All lane work is resumable
+and charged to one per-tick request budget (`tick_request_budget`, default 40, minimum 5) in priority
+order: rare-type sweeps, removal re-checks, watchlist, RG-2 probe, missing stations, safety sweep.
+Rare-type count checks are not charged and run every `rare_interval_s`, so a new RG-8/RG-9 is never
+held up by a long probe round or sweep; every `rare_resweep_interval_s` all non-empty rare types are
+re-swept to catch replacements that leave counts unchanged. Never point `replay`, tests or
 experiments at the live site beyond what an election night needs.
 
 ## Privacy

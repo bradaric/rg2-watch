@@ -10,8 +10,12 @@ probe_interval_s = 30
 rare_interval_s = 60
 # Seconds between the starts of full safety sweeps (a long sweep is followed straight by the next)
 safety_sweep_interval_s = 300
-# Max listing pages per tick for full RG-2 sweeps (safety, probe fallback), so other lanes keep running
-sweep_pages_per_tick = 20
+# Max listing requests per tick shared by all lanes, in priority order: rare sweeps, removal
+# re-checks, watchlist, probe, missing stations, safety sweep. Rare-type count checks are not
+# charged and always run every rare_interval_s. Minimum 5. (Old name: sweep_pages_per_tick.)
+tick_request_budget = 40
+# Seconds between full re-sweeps of every non-empty rare type (finds count-neutral replacements)
+rare_resweep_interval_s = 300
 # Pause all lanes this long after repeated 401/403 answers from RIK
 blocked_pause_s = 300
 # Push one "[rg2-watch] RIK unreachable/blocking" alert after this long without a successful request
