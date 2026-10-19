@@ -10,7 +10,7 @@ from .models import LABEL_TO_TYPE, Doc, Election, ListingPage
 _ADDITIONAL = re.compile(r"additionalData = (\{.*?\});", re.S)
 _H1 = re.compile(r"<h1[^>]*>(.*?)</h1>", re.S)
 _LABEL = re.compile(r"<div class=''>\s*<span>(.*?)</span>", re.S)
-_LINK = re.compile(r"<a\s[^>]*href=(['\"])([^'\"<>]*)\1[^>]*>(?:(?!</a>).)*</a>\s*<span>(.*?)</span>", re.S)
+_LINK = re.compile(r"<a\s[^>]*href=(['\"])((?:(?!\1)[^<>])*)\1[^>]*>(?:(?!</a>).)*</a>\s*<span>(.*?)</span>", re.S)
 _PAGE = re.compile(r'data-page="(\d+)"')
 _OPTION = re.compile(r'<option\s+value="([^"]*)"[^>]*>(.*?)</option>', re.S)
 _HREF = re.compile(r"<a\s[^>]*href=", re.S)

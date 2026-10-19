@@ -115,3 +115,16 @@ def test_link_without_timestamp_logs_count_mismatch(caplog):
         page = parse_listing(_one(""), BASE)
     assert [(d.url, d.doc_type) for d in page.docs] == [(BASE + "/x/b.pdf", 12)]
     assert any("2 links" in r.getMessage() and "1 document" in r.getMessage() for r in caplog.records)
+
+
+def test_href_may_contain_opposite_quote():
+    payload = {"records": [{
+        "municipality": "M", "election_station_number": "5", "election_station_name": "S",
+        "extfiles": [{"extfile": "<div class=''><span>Записник о раду бирачког одбора (Образац РГ-2)</span></div>"
+                      "<div class='table-file'><a href='/x/a\"b.pdf'>a</a><span>01-02-2025 03:04h</span></div>"
+                      "<div class=''><span>Записник о посматрачима (Образац РГ-11/НП)</span></div>"
+                      "<div class='table-file'><a href=\"/x/c'd.pdf\">b</a><span>01-02-2025 03:05h</span></div>"}],
+    }], "pagination": ""}
+    page = parse_listing(payload, BASE)
+    assert [(d.url, d.doc_type) for d in page.docs] == [
+        (BASE + '/x/a"b.pdf', 6), (BASE + "/x/c'd.pdf", 12)]
