@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 rg2watch.toml
 .env
+.superpowers/
