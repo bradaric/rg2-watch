@@ -1,0 +1,23 @@
+[project]
+name = "rg2watch"
+version = "0.1.0"
+description = "Watches the RIK website for newly published polling-station documents"
+requires-python = ">=3.12"
+dependencies = ["httpx"]
+
+[project.scripts]
+rg2watch = "rg2watch.cli:main"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rg2watch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

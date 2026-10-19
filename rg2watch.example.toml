@@ -1,0 +1,23 @@
+# Base URL of the RIK site (override for replay/testing)
+base_url = "https://www.rik.parlament.gov.rs"
+# SQLite database path
+db_path = "data/rg2watch.sqlite"
+# Global request cap (requests/second), shared by all lanes
+max_rps = 2.0
+# Seconds between cheap count probes
+probe_interval_s = 30
+# Seconds between sweeps of rare document types
+rare_interval_s = 60
+# Seconds between full safety sweeps
+safety_sweep_interval_s = 1800
+# Stations missing from a sweep before it is treated as suspicious
+missing_station_threshold = 50
+# Municipalities/stations to flag with priority
+watchlist = []
+# ntfy server and topic (topic can also come from env RG2W_NTFY_TOPIC, which wins)
+ntfy_url = "https://ntfy.sh"
+# ntfy_topic = "my-topic"
+# Seconds between MEDIUM-severity digests
+medium_digest_s = 600
+# Per-request timeout in seconds
+request_timeout_s = 20.0

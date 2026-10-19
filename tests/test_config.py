@@ -1,0 +1,39 @@
+from pathlib import Path
+
+from rg2watch.config import load_config
+
+
+def test_defaults_without_file(monkeypatch):
+    monkeypatch.delenv("RG2W_NTFY_TOPIC", raising=False)
+    c = load_config(None)
+    assert c.base_url == "https://www.rik.parlament.gov.rs"
+    assert c.db_path == Path("data/rg2watch.sqlite")
+    assert c.max_rps == 2.0
+    assert c.probe_interval_s == 30
+    assert c.rare_interval_s == 60
+    assert c.safety_sweep_interval_s == 1800
+    assert c.missing_station_threshold == 50
+    assert c.watchlist == []
+    assert c.ntfy_url == "https://ntfy.sh"
+    assert c.ntfy_topic is None
+    assert c.medium_digest_s == 600
+    assert c.request_timeout_s == 20.0
+
+
+def test_toml_overrides(tmp_path, monkeypatch):
+    monkeypatch.delenv("RG2W_NTFY_TOPIC", raising=False)
+    p = tmp_path / "c.toml"
+    p.write_text('max_rps = 0.5\nwatchlist = ["Zaječar"]\ndb_path = "x.sqlite"\n', encoding="utf-8")
+    c = load_config(p)
+    assert c.max_rps == 0.5
+    assert c.watchlist == ["Zaječar"]
+    assert c.db_path == Path("x.sqlite")
+    assert c.probe_interval_s == 30
+
+
+def test_env_overrides_topic(tmp_path, monkeypatch):
+    p = tmp_path / "c.toml"
+    p.write_text('ntfy_topic = "from-file"\n', encoding="utf-8")
+    monkeypatch.setenv("RG2W_NTFY_TOPIC", "from-env")
+    assert load_config(p).ntfy_topic == "from-env"
+    assert load_config(None).ntfy_topic == "from-env"
