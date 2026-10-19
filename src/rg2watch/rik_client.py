@@ -151,6 +151,9 @@ class RikClient:
                      self.election.base_url + path, parse=parse, headers=self._headers, **kwargs)
 
     def listing(self, filters: Filters, page: int) -> ListingPage:
+        return parse_listing(self.listing_raw(filters, page), self.election.base_url)
+
+    def listing_raw(self, filters: Filters, page: int) -> dict:
         e = self.election
         data = {
             "page": str(page),
@@ -166,8 +169,7 @@ class RikClient:
             data["filters[municipality]"] = filters.municipality_id
         if filters.station_no_id is not None:
             data["filters[election_station_no]"] = filters.station_no_id
-        payload = self._request("POST", "/get-election", "records", data=data)
-        return parse_listing(payload, e.base_url)
+        return self._request("POST", "/get-election", "records", data=data)
 
     def count(self, filters: Filters) -> int:
         first = self.listing(filters, 1)
