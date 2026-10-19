@@ -84,3 +84,43 @@ def test_no_topic_stdout_only():
     n, out = make(lambda r: reqs.append(r) or httpx.Response(200), topic=None)
     assert n.send([(1, fin()), (2, fin("MEDIUM", "D1"))]) == [1, 2]
     assert reqs == [] and "[HIGH]" in out.getvalue()
+
+
+def test_digest_failure_then_retry():
+    ok = [False]
+    reqs = []
+
+    def h(r):
+        reqs.append(r)
+        return httpx.Response(200 if ok[0] else 503)
+
+    clock = Clock()
+    n, _ = make(h, clock=clock)
+    m = [(5, fin("MEDIUM", "D1"))]
+    n.send(m)
+    clock.t = 600
+    assert n.send(m) == []
+    ok[0] = True
+    assert n.send(m) == [5]
+    assert len(reqs) == 2
+
+
+def test_click_cyrillic_url_percent_encoded():
+    reqs = []
+    n, _ = make(lambda r: reqs.append(r) or httpx.Response(200))
+    f = fin()
+    f = Finding(f.rule, f.severity, Doc(f.doc.municipality, "3", "x", "x", 6, "https://x/записник.pdf", "2025-11-02T21:05"), "s")
+    assert n.send([(1, f)]) == [1]
+    c = reqs[0].headers["Click"]
+    c.encode("ascii")
+    assert c.startswith("https://x/%D0%B7")
+
+
+def test_title_with_newline_delivers_clean_header():
+    reqs = []
+    n, _ = make(lambda r: reqs.append(r) or httpx.Response(200))
+    f = fin()
+    f = Finding(f.rule, f.severity, Doc("Град\nЗајечар\r", "3", "x", "x", 6, "https://x/a.pdf", "2025-11-02T21:05"), "s")
+    assert n.send([(1, f)]) == [1]
+    t = reqs[0].headers["Title"]
+    assert "\n" not in t and "\r" not in t and t == "[HIGH] D2 Grad Zajecar BM 3"

@@ -18,7 +18,8 @@ _TRANSLIT.update({k.upper(): v.capitalize() for k, v in list(_TRANSLIT.items())}
 
 
 def to_ascii(text: str) -> str:
-    return "".join(_TRANSLIT.get(c, c) for c in text).encode("ascii", "replace").decode()
+    out = "".join(_TRANSLIT.get(c, c) for c in text).encode("ascii", "replace").decode()
+    return " ".join(out.split())
 
 
 def _uploaded(f: Finding) -> str:
@@ -46,7 +47,7 @@ class Notifier:
         self._pending_since: float | None = None
 
     def _post(self, title: str, body: str, priority: str, tags: str, click: str | None = None) -> bool:
-        headers = {"Title": to_ascii(title), "Priority": priority, "Tags": tags}
+        headers = {"Title": to_ascii(title), "Priority": priority, "Tags": to_ascii(tags)}
         if click:
             headers["Click"] = quote(click, safe=":/?&=%#@+,;~-._")
         try:
