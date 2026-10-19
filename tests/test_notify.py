@@ -124,3 +124,8 @@ def test_title_with_newline_delivers_clean_header():
     assert n.send([(1, f)]) == [1]
     t = reqs[0].headers["Title"]
     assert "\n" not in t and "\r" not in t and t == "[HIGH] D2 Grad Zajecar BM 3"
+
+
+def test_to_ascii_strips_control_chars():
+    from rg2watch.notify import to_ascii
+    assert to_ascii("Град\x00Зајечар\x1b[31m\x7fX\t") == "Grad Zajecar [31m X"

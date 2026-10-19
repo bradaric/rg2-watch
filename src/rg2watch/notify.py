@@ -1,3 +1,4 @@
+import re
 import sys
 import time
 from datetime import datetime
@@ -17,8 +18,12 @@ _TRANSLIT = {
 _TRANSLIT.update({k.upper(): v.capitalize() for k, v in list(_TRANSLIT.items())})
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def to_ascii(text: str) -> str:
     out = "".join(_TRANSLIT.get(c, c) for c in text).encode("ascii", "replace").decode()
+    out = _CONTROL.sub(" ", out)
     return " ".join(out.split())
 
 
