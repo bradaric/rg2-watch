@@ -149,8 +149,8 @@ def _read_capped(http: httpx.Client, url: str, timeout_s: float, max_bytes: int,
             buf += chunk
             if len(buf) > max_bytes:
                 raise RikError(f"GET {url}: body exceeds {max_bytes} bytes")
-            if clock() > deadline:
-                raise RikError(f"GET {url}: download exceeded time limit")
+            if clock() > deadline:  # slow/stalled server: transient, not the document's fault
+                raise RikUnavailable(f"GET {url}: download exceeded time limit")
             if len(buf) >= 4 and not buf.startswith(b"%PDF") and len(buf) >= CLASSIFY_BYTES:
                 break  # not a PDF: stop reading, classify the head
         if not buf.startswith(b"%PDF"):
@@ -282,7 +282,8 @@ class RikClient:
         return parse_station_options(body["number"])
 
     def download(self, url: str, max_total_s: float = 120.0) -> bytes:
-        """GET a PDF through the limiter/retry path (streamed, size-capped, base host only)."""
+        """GET a PDF through the limiter/retry path (streamed, size-capped, base host only).
+        Each attempt may take up to `max_total_s`; backoff between attempts is not counted."""
         base = urlsplit(self.election.base_url)
         parts = urlsplit(urljoin(self.election.base_url + "/", url))
         if (parts.scheme, parts.netloc) != (base.scheme, base.netloc):
@@ -290,11 +291,10 @@ class RikClient:
         path = quote(parts.path, safe="/%:@~-._!$&'()*+,;=")
         full = urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
         lim = self.download_limiter
-        deadline = lim.clock() + max_total_s
 
         def opener() -> httpx.Response:
-            return _read_capped(self.http, full, self.timeout_s, self.max_pdf_bytes, deadline,
-                                lim.clock)
+            return _read_capped(self.http, full, self.timeout_s, self.max_pdf_bytes,
+                                lim.clock() + max_total_s, lim.clock)
 
         def parse(resp: httpx.Response) -> bytes:
             if not resp.content.startswith(b"%PDF"):

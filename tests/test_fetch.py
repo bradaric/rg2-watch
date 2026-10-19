@@ -5,7 +5,7 @@ import pytest
 
 from rg2watch.fetch import fetch_pdf
 from rg2watch.models import Election
-from rg2watch.rik_client import AdaptiveLimiter, RikClient, RikError
+from rg2watch.rik_client import AdaptiveLimiter, RikClient, RikError, RikUnavailable
 
 PDF = b"%PDF-1.4 fake"
 BASE = "https://www.rik.parlament.gov.rs"
@@ -139,9 +139,37 @@ def test_deadline_stops_trickling_download():
             yield b"x"
 
     client, _, _ = make(lambda r: httpx.Response(200, content=body()), clock=lambda: now[0])
-    with pytest.raises(RikError, match="time limit"):
+    with pytest.raises(RikUnavailable, match="time limit"):  # transient: retried, refunded
         client.download("/extfile/a.pdf")
     assert now[0] <= 150
+
+
+def test_deadline_is_per_attempt_not_across_backoff():
+    now = [0.0]
+    calls = []
+
+    def sleep(s):
+        now[0] += s
+
+    def handler(request):
+        calls.append(now[0])
+        if len(calls) < 3:
+            now[0] += 20  # slow failing attempts
+            return httpx.Response(503)
+
+        def body():
+            yield PDF
+            for _ in range(3):
+                now[0] += 35  # 105 s of transfer on the third attempt
+                yield b"x"
+        return httpx.Response(200, content=body())
+
+    limiter = AdaptiveLimiter(2.0, clock=lambda: now[0], sleep=sleep)
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = RikClient(Election("662405", "660578", "3", "Test", BASE), limiter, http,
+                       download_limiter=limiter)
+    assert client.download("/extfile/a.pdf", max_total_s=120).startswith(PDF)
+    assert now[0] > 120  # the whole download, backoff included, took longer than one deadline
 
 
 def test_large_non_pdf_stream_aborts_early():
