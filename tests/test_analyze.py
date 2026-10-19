@@ -137,3 +137,63 @@ def test_schema_strict():
 
     walk(SCHEMA)
     assert set(SCHEMA["properties"]["numbers"]["properties"]) >= {"registered", "list_votes", "outside_confirmations"}
+
+
+def test_schema_passes_sdk_strict_transform():
+    from anthropic.lib._parse._transform import transform_schema
+
+    transform_schema(SCHEMA)
+    assert '"type": ["' not in json.dumps(SCHEMA)
+
+
+def test_tokens_carried_on_each_exception_type():
+    cases = [
+        (AnalysisRefused, _resp(stop="refusal", text="", tin=10, tout=5)),
+        (AnalysisError, _resp(text="<html>", tin=10, tout=5)),
+        (AnalysisError, _resp(report={"header": None}, tin=10, tout=5)),
+    ]
+    for exc_type, r in cases:
+        with pytest.raises(exc_type) as ei:
+            analyze_document(TILES, FakeClient(r), Config())
+        assert (ei.value.input_tokens, ei.value.output_tokens) == (10, 5)
+        assert ei.value.cost_usd == pytest.approx((10 * 4 + 5 * 20) / 1e6)
+
+
+def test_truncation_after_retry_carries_both_attempts():
+    c = FakeClient(_resp(stop="max_tokens", text="{", tin=10, tout=5),
+                   _resp(stop="max_tokens", text="{", tin=10, tout=5))
+    with pytest.raises(AnalysisError) as ei:
+        analyze_document(TILES, c, Config())
+    assert (ei.value.input_tokens, ei.value.output_tokens) == (20, 10)
+
+
+def test_refusal_on_retry_carries_both_attempts_and_category():
+    r2 = _resp(stop="refusal", text="", tin=7, tout=3)
+    r2.stop_details = SimpleNamespace(category="cyber", explanation=None)
+    c = FakeClient(_resp(stop="max_tokens", text="{", tin=10, tout=5), r2)
+    with pytest.raises(AnalysisRefused, match="cyber") as ei:
+        analyze_document(TILES, c, Config())
+    assert (ei.value.input_tokens, ei.value.output_tokens) == (17, 8)
+
+
+def test_iterations_summed_and_model_recorded():
+    r = _resp(tin=999, tout=999)
+    r.model = "fallback-model"
+    r.usage.iterations = [
+        SimpleNamespace(input_tokens=1_000_000, output_tokens=0, cache_read_input_tokens=0,
+                        cache_creation_input_tokens=0),
+        SimpleNamespace(input_tokens=0, output_tokens=100_000, cache_read_input_tokens=1_000_000,
+                        cache_creation_input_tokens=0),
+    ]
+    res = analyze_document(TILES, FakeClient(r), Config())
+    assert (res.input_tokens, res.output_tokens) == (2_000_000, 100_000)
+    assert res.cost_usd == pytest.approx(4.0 + 0.4 + 2.0)
+    assert res.model == "fallback-model"
+
+
+def test_cache_pricing():
+    r = _resp(tin=0, tout=0)
+    r.usage.cache_read_input_tokens = 1_000_000
+    r.usage.cache_creation_input_tokens = 1_000_000
+    res = analyze_document(TILES, FakeClient(r), Config())
+    assert res.cost_usd == pytest.approx(0.4 + 5.0)

@@ -10,7 +10,13 @@ MAX_TOKENS = 16000
 
 
 class AnalysisError(Exception):
-    pass
+    """Carries the tokens/cost already billed so spend tracking stays accurate."""
+
+    def __init__(self, message: str, input_tokens: int = 0, output_tokens: int = 0, cost_usd: float = 0.0):
+        super().__init__(message)
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cost_usd = cost_usd
 
 
 class AnalysisRefused(AnalysisError):
@@ -21,11 +27,11 @@ def _obj(props: dict) -> dict:
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
 
-_NULLABLE_STR = {"type": ["string", "null"]}
+_NULLABLE_STR = {"anyOf": [{"type": "string"}, {"type": "null"}]}
 _INT = {"type": "integer"}
 _BOOL = {"type": "boolean"}
 _NUM_FIELD = _obj({
-    "value": {"type": ["integer", "null"]},
+    "value": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
     "legible": _BOOL,
     "mark": {"type": "string", "enum": [
         "clean", "overwritten", "crossed_out", "correction_fluid",
@@ -108,16 +114,34 @@ def _content(tiles: list[Tile]) -> list[dict]:
     return blocks
 
 
-def _tokens(usage) -> tuple[int, int]:
-    tin = sum(getattr(usage, k, None) or 0 for k in (
-        "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
-    return tin, getattr(usage, "output_tokens", None) or 0
+def _usage_cost(usage, cfg: Config) -> tuple[int, int, float]:
+    """(input_tokens, output_tokens, cost_usd) for one response.
+
+    Input tokens include cache reads/creations. Cost: cache reads at 10% of the
+    input rate, cache creation at 1.25x. When usage.iterations is present each
+    entry is summed and priced at cfg prices (a fallback model's real rates may
+    differ, so cost is then an estimate).
+    """
+    entries = getattr(usage, "iterations", None) or [usage]
+    tin = tout = 0
+    cost = 0.0
+    for e in entries:
+        plain = getattr(e, "input_tokens", None) or 0
+        read = getattr(e, "cache_read_input_tokens", None) or 0
+        create = getattr(e, "cache_creation_input_tokens", None) or 0
+        out = getattr(e, "output_tokens", None) or 0
+        tin += plain + read + create
+        tout += out
+        cost += ((plain + 0.1 * read + 1.25 * create) * cfg.price_in_per_mtok
+                 + out * cfg.price_out_per_mtok) / 1_000_000
+    return tin, tout, cost
 
 
 def analyze_document(tiles: list[Tile], client, cfg: Config) -> AnalysisResult:
     messages = [{"role": "user", "content": _content(tiles)}]
     extra = {"betas": [FALLBACK_BETA], "fallbacks": "default"} if cfg.fallbacks else {}
     tin = tout = 0
+    cost = 0.0
     for max_tokens in (MAX_TOKENS, MAX_TOKENS * 2):
         resp = client.beta.messages.create(
             model=cfg.model,
@@ -126,20 +150,23 @@ def analyze_document(tiles: list[Tile], client, cfg: Config) -> AnalysisResult:
             output_config={"effort": cfg.effort, "format": {"type": "json_schema", "schema": SCHEMA}},
             **extra,
         )
-        i, o = _tokens(resp.usage)
-        tin, tout = tin + i, tout + o
+        i, o, c = _usage_cost(resp.usage, cfg)
+        tin, tout, cost = tin + i, tout + o, cost + c
         if resp.stop_reason != "max_tokens":
             break
+    billed = (tin, tout, cost)
     if resp.stop_reason == "refusal":
-        raise AnalysisRefused("model refused to analyse the document")
+        category = getattr(getattr(resp, "stop_details", None), "category", None)
+        suffix = f" (category: {category})" if category else ""
+        raise AnalysisRefused("model refused to analyse the document" + suffix, *billed)
     if resp.stop_reason == "max_tokens":
-        raise AnalysisError("output truncated at max_tokens after retry")
+        raise AnalysisError("output truncated at max_tokens after retry", *billed)
     text = next((b.text for b in resp.content if b.type == "text"), None)
     try:
         report = json.loads(text)
     except (TypeError, ValueError) as exc:
-        raise AnalysisError(f"response is not valid JSON: {exc}") from exc
+        raise AnalysisError(f"response is not valid JSON: {exc}", *billed) from exc
     if not isinstance(report, dict) or set(report) != set(SCHEMA["required"]):
-        raise AnalysisError("response keys do not match schema")
-    cost = (tin * cfg.price_in_per_mtok + tout * cfg.price_out_per_mtok) / 1_000_000
-    return AnalysisResult(report, tin, tout, cost, cfg.model, resp.stop_reason)
+        raise AnalysisError("response keys do not match schema", *billed)
+    model = getattr(resp, "model", None) or cfg.model
+    return AnalysisResult(report, tin, tout, cost, model, resp.stop_reason)
