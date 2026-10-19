@@ -55,6 +55,10 @@ class Store:
             self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(SCHEMA)
 
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
     def _write(self, sql: str, args=()):
         with self._lock, self._db:
             return self._db.execute(sql, args)
@@ -65,6 +69,11 @@ class Store:
             "ON CONFLICT(parent) DO UPDATE SET round=excluded.round, "
             "election_type=excluded.election_type, title=excluded.title, url=excluded.url",
             (e.parent, e.round, e.election_type, e.title, e.base_url))
+
+    def get_election(self, parent: str) -> Election | None:
+        with self._lock:
+            r = self._db.execute("SELECT * FROM elections WHERE parent=?", (parent,)).fetchone()
+        return Election(r["parent"], r["round"], r["election_type"], r["title"], r["url"]) if r else None
 
     def known_docs(self, parent: str, scope: Scope) -> dict[tuple[str, int | str], Doc]:
         sql, args = "SELECT * FROM documents WHERE parent=? AND active=1", [parent]

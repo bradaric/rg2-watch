@@ -17,7 +17,8 @@ MISSING_BACKOFF_CAP_S = 600
 
 class Watcher:
     def __init__(self, client: RikClient, store: Store, cfg: Config,
-                 on_events: Callable[[list[Event]], None], clock=time.monotonic, sleep=time.sleep):
+                 on_events: Callable[[list[Event]], None], clock=time.monotonic, sleep=time.sleep,
+                 initial_safety: bool = False):
         self.client, self.store, self.cfg = client, store, cfg
         self.on_events, self.clock, self.sleep = on_events, clock, sleep
         self.parent = client.election.parent
@@ -31,7 +32,8 @@ class Watcher:
         self._shortfall_streak = 0
         self._missing_state: dict[str, tuple[float, float]] = {}  # station key -> (next_at, delay)
         # The safety sweep first fires one interval after start; other lanes fire immediately.
-        self._last: dict[str, float] = {"safety": clock()}
+        self._last: dict[str, float] = {
+            "safety": clock() - (cfg.safety_sweep_interval_s if initial_safety else 0)}
         self._lanes = [
             ("rare", cfg.rare_interval_s, self._rare),
             ("watchlist", cfg.probe_interval_s, self._watchlist),
