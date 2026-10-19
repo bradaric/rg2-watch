@@ -137,7 +137,7 @@ See 6.
 ## 5. Integrity report schema (vision output)
 
 No personal names are transcribed. Per numeric field:
-`{value: int|null, legible: bool, mark: "clean"|"overwritten"|"crossed_out"|"correction_fluid"|"erased_scratched"|"digit_altered"|"empty"|"dash", note: str}`
+`{value: int|null, original_value: int|null (previous number readable under a correction), legible: bool, mark: "clean"|"overwritten"|"crossed_out"|"correction_fluid"|"erased_scratched"|"digit_altered"|"empty"|"dash", note: str}`
 
 Fields:
 - header: `form_code` (string as printed), `station_no` (item 1), `date` (item 2), `pages_present` [1,2], `pages_match_same_form` bool.
@@ -164,6 +164,7 @@ Visual / physical (primary):
 | V8 | mandatory field empty/illegible (any of 3, 10.1-10.4, list votes) | MEDIUM |
 | V9 | page missing, pages from different forms, form_code/station_no mismatch with listing | HIGH |
 | V10 | page quality poor/unreadable | LOW |
+| V12 | large correction: original_value and value both read, abs(original - value) >= 5 and >= 30% of original (`large_correction_abs`, `large_correction_share`); one finding per form, all fields; e.g. "item 12 outside_voted 44 -> 10 (-77%)" | HIGH (MEDIUM on unreliable scan) |
 | V11 | both DA and NE circled / none circled on a yes/no item | MEDIUM |
 
 Procedural:
@@ -181,7 +182,7 @@ Arithmetic (secondary; only when all involved fields legible):
 | A6 | turnout >= 95% (registered > 50) | MEDIUM |
 | A7 | one list >= 90% of valid (valid > 50) | MEDIUM |
 | A8 | assisted > 5% of voted | LOW |
-| A9 | outside_voted / voted >= 15% (HIGH), or >= 5% with outside_voted >= 10 (MEDIUM); initial thresholds, tune after calibration | HIGH / MEDIUM |
+| A9 | outside_voted / voted >= 15% (HIGH), or >= 5% with outside_voted >= 10 (MEDIUM); initial thresholds, tune after calibration; the share also uses `original_value` when it is larger than the final value (the larger share decides severity) | HIGH / MEDIUM |
 
 Document-level:
 | D1 | RG-7 / RG-8 / RG-9 / Примедба published for a station | MEDIUM (RG-8/RG-9 HIGH) |

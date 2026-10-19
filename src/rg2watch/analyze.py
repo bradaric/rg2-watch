@@ -54,6 +54,7 @@ SCHEMA: dict = _obj({
         "field": {"type": "string", "enum": [*NUM_KEYS, LIST_ROW]},
         "row": _NULLABLE_INT,
         "value": _NULLABLE_INT,
+        "original_value": _NULLABLE_INT,
         "legible": _BOOL,
         "mark": {"type": "string", "enum": list(MARKS)},
         "note": {"type": "string"},
@@ -88,7 +89,7 @@ PROMPT = """You are examining a scanned Serbian polling-station minutes form (З
 
 Your job is a forensic check of the PHYSICAL STATE of the handwritten entries, for a human reviewer who will look at flagged forms. Report what you see; do not judge intent.
 
-For every numeric field: give the value if legible, and mark how it was written. Use "overwritten" when digits are written over other digits, "crossed_out" when a value is struck through and rewritten, "correction_fluid" for white-out, "erased_scratched" for scraped or erased paper, "digit_altered" when a single digit looks changed (e.g. 1 turned into 7, 3 into 8), "empty" for a blank field, "dash" for a slash/dash. Use "clean" only when the entry is written once without any correction. Be strict: any visible correction counts.
+For every numeric field: give the value if legible, and mark how it was written. Use "overwritten" when digits are written over other digits, "crossed_out" when a value is struck through and rewritten, "correction_fluid" for white-out, "erased_scratched" for scraped or erased paper, "digit_altered" when a single digit looks changed (e.g. 1 turned into 7, 3 into 8), "empty" for a blank field, "dash" for a slash/dash. Use "clean" only when the entry is written once without any correction. Be strict: any visible correction counts. When a number was corrected (overwritten, crossed out, correction fluid, erased or digit altered), also report in original_value the previous number you can read under the correction; use null if it is not readable.
 
 For section V: count committee rows, rows with a written name, rows with a signature, and rows that have a name but no signature. Say whether the president's (ПРЕДСЕДНИК) row is signed. Say if many signatures look like they were made by the same hand.
 
@@ -115,11 +116,12 @@ class AnalysisResult:
 
 def _normalise(raw: dict) -> dict:
     """Turn the flat array form returned by the model into the report shape rules.py uses."""
-    missing = {"value": None, "legible": False, "mark": "empty", "note": "not reported by model"}
+    missing = {"value": None, "original_value": None, "legible": False, "mark": "empty", "note": "not reported by model"}
     found: dict[str, dict] = {}
     rows: dict[int, dict] = {}
     for e in raw["numbers"]:
         f = {k: e[k] for k in ("value", "legible", "mark", "note")}
+        f["original_value"] = e.get("original_value")
         if e["field"] == LIST_ROW:
             if e["row"] is not None:
                 rows.setdefault(e["row"], f)

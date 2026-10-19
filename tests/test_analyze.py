@@ -181,18 +181,23 @@ def test_prompt_v3_list_paragraph_before_names():
     assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
 
 
-def _n(field, value=1, row=None, mark="clean", legible=True, note=""):
-    return {"field": field, "row": row, "value": value, "legible": legible, "mark": mark, "note": note}
+def _n(field, value=1, row=None, mark="clean", legible=True, note="", **kw):
+    return {"field": field, "row": row, "value": value, "legible": legible, "mark": mark, "note": note, **kw}
 
 
 def test_normalise_missing_defaults():
     out = analyze._normalise({"numbers": [], "yesno": [], "x": 1})
     assert out["x"] == 1
     assert set(out["numbers"]) == set(analyze.NUM_KEYS) | {"list_votes"}
-    assert out["numbers"]["voted"] == {"value": None, "legible": False, "mark": "empty",
+    assert out["numbers"]["voted"] == {"value": None, "original_value": None, "legible": False, "mark": "empty",
                                        "note": "not reported by model"}
     assert out["numbers"]["list_votes"] == []
     assert out["yesno"] == {k: {"answer": "unclear"} for k in analyze.YESNO_KEYS}
+
+
+def test_normalise_carries_original_value():
+    out = analyze._normalise({"numbers": [_n("voted", 10, mark="crossed_out", original_value=44)], "yesno": []})
+    assert out["numbers"]["voted"]["original_value"] == 44
 
 
 def test_normalise_shape_duplicates_and_rows():
@@ -202,7 +207,8 @@ def test_normalise_shape_duplicates_and_rows():
         _n("list_row", 4, row=None)],
         "yesno": [{"item": "interruption", "answer": "DA"}, {"item": "interruption", "answer": "NE"}]}
     out = analyze._normalise(raw)
-    assert out["numbers"]["voted"] == {"value": 5, "legible": True, "mark": "overwritten", "note": ""}
+    assert out["numbers"]["voted"] == {"value": 5, "original_value": None, "legible": True,
+                                       "mark": "overwritten", "note": ""}
     assert [r["row"] for r in out["numbers"]["list_votes"]] == [1, 3]
     assert out["numbers"]["list_votes"][1]["field"]["value"] == 7
     assert out["yesno"]["interruption"] == {"answer": "DA"}
@@ -307,4 +313,4 @@ def test_prompt_v2_dash_paragraph_before_names():
     assert para in analyze.PROMPT
     assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
     from rg2watch.pipeline import PROMPT_VERSION
-    assert PROMPT_VERSION == "v4"
+    assert PROMPT_VERSION == "v5"

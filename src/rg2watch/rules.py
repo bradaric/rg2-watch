@@ -66,7 +66,9 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
 
     # V1 / V2: a visible correction counts even when the corrected value cannot be read
     def mark_text(f: dict) -> str:
-        return f"{f['mark']} ({f['value'] if _ok(f) else 'value unreadable'})"
+        val = f["value"] if _ok(f) else "value unreadable"
+        orig = f.get("original_value")
+        return f"{f['mark']} ({orig} -> {val})" if orig is not None else f"{f['mark']} ({val})"
 
     v1 = [f"{_LABELS[k]} {k} {mark_text(nums[k])}" for k in _RESULT_FIELDS
           if nums[k]["mark"] in _BAD_MARKS]
@@ -78,6 +80,20 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
           if nums[k]["mark"] in _BAD_MARKS]
     if v2:
         add("V2", "MEDIUM", v2)
+
+    # V12: large correction, one finding aggregating all fields
+    labelled = [(f"item {_LABELS[k]} {k}", nums[k]) for k in _LABELS if k in nums]
+    labelled += [(f"list row {r['row']}", r["field"]) for r in lists]
+    v12 = []
+    for label, f in labelled:
+        o, v = f.get("original_value"), f["value"]
+        if o is None or v is None:
+            continue
+        d = abs(o - v)
+        if d >= cfg.large_correction_abs and d / max(o, 1) >= cfg.large_correction_share:
+            v12.append(f"{label} {o} -> {v} ({(v - o) / max(o, 1):+.0%})")
+    if v12:
+        add("V12", "MEDIUM" if unreliable else "HIGH", v12)
 
     # V3-V7
 
@@ -180,11 +196,19 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
         add("A8", "LOW", f"assisted {n['assisted']} > {cfg.assisted_share:.0%} of voted {n['voted']}")
 
     if "outside_voted" in n and "voted" in n and n["voted"] > 0:
-        share = n["outside_voted"] / n["voted"]
-        text = f"outside-station voting {n['outside_voted']} of {n['voted']} ({share:.1%})"
+        cnt = n["outside_voted"]
+        orig = nums["outside_voted"].get("original_value")
+        if orig is not None and orig > cnt:
+            cnt_used = orig
+        else:
+            cnt_used, orig = cnt, None
+        share = cnt_used / n["voted"]
+        text = f"outside-station voting {cnt} of {n['voted']} ({cnt / n['voted']:.1%})"
+        if orig is not None:
+            text += f", originally {orig} ({share:.1%})"
         if share >= cfg.outside_share_high:
             add("A9", "HIGH", text)
-        elif share >= cfg.outside_share_medium and n["outside_voted"] >= 10:
+        elif share >= cfg.outside_share_medium and cnt_used >= 10:
             add("A9", "MEDIUM", text)
 
     low = report["confidence"] == "low"

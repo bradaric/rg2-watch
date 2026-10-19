@@ -12,8 +12,8 @@ DOC = Doc("Test", "12", "School", "label", 6, "http://x/a.pdf", "2026-10-19")
 CFG = Config()
 
 
-def nf(value=100, legible=True, mark="clean"):
-    return {"value": value, "legible": legible, "mark": mark, "note": ""}
+def nf(value=100, legible=True, mark="clean", original=None):
+    return {"value": value, "original_value": original, "legible": legible, "mark": mark, "note": ""}
 
 
 def yn(answer="NE"):
@@ -47,7 +47,8 @@ def clean_report():
 
 
 _NF = {"type": "object", "properties": {
-    "value": {"anyOf": [{"type": "integer"}, {"type": "null"}]}, "legible": {"type": "boolean"},
+    "value": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+    "original_value": {"anyOf": [{"type": "integer"}, {"type": "null"}]}, "legible": {"type": "boolean"},
     "mark": {"type": "string", "enum": list(analyze.MARKS)}, "note": {"type": "string"}}}
 # normalised report shape (what analyze_document returns), not the API wire schema
 REPORT_SHAPE = {**SCHEMA, "properties": {**SCHEMA["properties"],
@@ -393,3 +394,42 @@ def test_report_not_mutated():
     before = copy.deepcopy(r)
     evaluate_report(r, DOC, CFG)
     assert r == before
+
+
+def _outside(value, original, voted=417, **kw):
+    def fn(r):
+        r["numbers"]["voted"].update(value=voted)
+        r["numbers"]["outside_voted"].update(value=value, original_value=original, **kw)
+    return rules(mutated(fn))
+
+
+def test_v1_summary_shows_original():
+    def fn(r):
+        r["numbers"]["invalid"].update(value=14, original_value=18, mark="crossed_out")
+    assert "10.3 invalid crossed_out (18 -> 14)" in rules(mutated(fn))["V1"].summary
+
+
+def test_a9_driven_by_original():
+    a9 = _outside(10, 44)["A9"]
+    assert a9.severity == "MEDIUM"
+    assert a9.summary == "outside-station voting 10 of 417 (2.4%), originally 44 (10.6%)"
+    assert "A9" not in _outside(10, None)
+    assert "originally" not in _outside(60, 20)["A9"].summary
+
+
+def test_v12_fires_on_large_correction():
+    f = _outside(10, 44, mark="crossed_out")["V12"]
+    assert f.severity == "HIGH"
+    assert f.summary == "item 12 outside_voted 44 -> 10 (-77%)"
+
+
+def test_v12_not_fired_below_thresholds():
+    assert "V12" not in _outside(14, 18, mark="crossed_out")
+    assert "V12" not in _outside(312, 313, mark="overwritten")
+    assert "V12" not in _outside(10, None)
+
+
+def test_v12_capped_at_medium_when_unreliable():
+    r = _adversarial("unreadable", "high", False)
+    r["numbers"]["outside_voted"].update(value=10, original_value=44, legible=True)
+    assert rules(r)["V12"].severity == "MEDIUM"
