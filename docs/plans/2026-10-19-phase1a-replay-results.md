@@ -24,3 +24,9 @@ Not reached in 10 min: the remove and RG-9 faults (rank 50% / 75% of uploads fal
 
 ## Observations
 - Rare lane dominates request volume (one count probe per rare doc type per minute, ~20 types). Acceptable at ~0.35 req/s; could be merged into one unfiltered count if RIK struggles.
+
+## Re-run on final Phase 1a code (5f6d413)
+Same fixtures, `--speed 240`, 5 min wall clock, stdout redirected to a file, stopped by SIGTERM (`timeout`).
+- 169 requests in 5 min; no errors or tracebacks.
+- 111 documents, 110 added + 1 replaced (injected fault); findings D1 MEDIUM x12, D2 HIGH x1, all marked alerted.
+- All 13 alert lines present in the redirected stdout file (flush fix confirmed); "interrupted, shutting down" logged on SIGTERM.
