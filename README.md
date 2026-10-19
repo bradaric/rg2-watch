@@ -61,8 +61,10 @@ All lanes share one rate limiter (default 2 requests/s, `max_rps`) that halves o
 and recovers slowly. The watcher keeps running when RIK is overloaded. All lane work is resumable
 and charged to one per-tick request budget (`tick_request_budget`, default 40, minimum 5) in priority
 order: rare-type sweeps, removal re-checks, watchlist, RG-2 probe, missing stations, safety sweep.
+A share of the budget (`reserved_share`, default 0.25) is held back from watchlist and probe for the
+safety sweep and the missing-station lane while they have work, so a busy probe cannot starve them.
 Rare-type count checks are not charged and run every `rare_interval_s`, so a new RG-8/RG-9 is never
-held up by a long probe round or sweep; every `rare_resweep_interval_s` all non-empty rare types are
+held up by a long probe round or sweep (RG-8/RG-9 sweeps go first); every `rare_resweep_interval_s` all non-empty rare types are
 re-swept to catch replacements that leave counts unchanged. Never point `replay`, tests or
 experiments at the live site beyond what an election night needs.
 

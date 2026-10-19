@@ -4,7 +4,7 @@ base_url = "https://www.rik.parlament.gov.rs"
 db_path = "data/rg2watch.sqlite"
 # Global request cap (requests/second), shared by all lanes
 max_rps = 2.0
-# Seconds between cheap count probes
+# Seconds between cheap count probes (a new probe round starts this long after the previous one ended)
 probe_interval_s = 30
 # Seconds between sweeps of rare document types
 rare_interval_s = 60
@@ -16,6 +16,9 @@ safety_sweep_interval_s = 300
 tick_request_budget = 40
 # Seconds between full re-sweeps of every non-empty rare type (finds count-neutral replacements)
 rare_resweep_interval_s = 300
+# Share of the budget held back from watchlist/probe for the safety sweep (first) and the
+# missing-station lane while they have work; unused reserve goes back to the other lanes
+reserved_share = 0.25
 # Pause all lanes this long after repeated 401/403 answers from RIK
 blocked_pause_s = 300
 # Push one "[rg2-watch] RIK unreachable/blocking" alert after this long without a successful request
