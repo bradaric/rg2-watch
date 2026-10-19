@@ -182,3 +182,27 @@ def test_replay_sigterm_exits_0(tmp_path):
     proc.send_signal(signal.SIGTERM)
     assert proc.wait(timeout=30) == 0
     proc.stderr.close()
+
+
+def test_watch_once_baseline_records_silently(tmp_path, capsys):
+    root = make_fixture_dir(tmp_path)
+    server = make_replay_server(root, port=0, speed=1e9, faults=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        db = tmp_path / "w.sqlite"
+        cfg = tmp_path / "rg2watch.toml"
+        cfg.write_text("max_rps = 1000.0\nsweep_pages_per_tick = 1\n")
+        common = ["--db", str(db), "--config", str(cfg)]
+        assert main(["add", f"{base}/zapisnici/662405", *common]) == 0
+        assert main(["watch", "--parent", "662405", "--once", "--baseline", "--base-url", base,
+                     *common]) == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+    out = capsys.readouterr().out
+    assert "[HIGH]" not in out
+    assert "[baseline] RG-9: 1 document(s) recorded" in out
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM findings").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM documents WHERE doc_type=9").fetchone()[0] == 1

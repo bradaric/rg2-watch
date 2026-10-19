@@ -37,7 +37,10 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("url", nargs="?", help="zapisnici URL (alternative to --parent after add)")
     s.add_argument("--parent", help="election id registered with `add`")
     s.add_argument("--base-url", help="override the RIK base URL")
-    s.add_argument("--once", action="store_true", help="bootstrap, run every lane once, exit")
+    s.add_argument("--once", action="store_true",
+                   help="bootstrap, run every lane once (full passes, no page budget), exit")
+    s.add_argument("--baseline", action="store_true",
+                   help="record what is already published silently on each lane's first full pass")
 
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
@@ -128,6 +131,8 @@ def _store_finding(store: Store, parent: str, f: Finding) -> None:
 
 def _cmd_watch(args) -> int:
     cfg = _config(args)
+    if args.once:
+        cfg.sweep_pages_per_tick = 10**9  # a single tick must finish every pass
     store = _open_store(cfg)
     try:
         if args.url:
@@ -149,7 +154,8 @@ def _cmd_watch(args) -> int:
         notifier = Notifier(cfg, _notifier_http(), out=sys.stdout)
 
         on_events, deliver = _handlers(store, notifier, parent)
-        watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once)
+        watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once,
+                          on_status=notifier.status, baseline=args.baseline)
         try:
             while True:
                 try:
