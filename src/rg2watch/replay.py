@@ -1,5 +1,7 @@
 """Fixture cache fetcher and replay server (re-enacts a past election from cached data)."""
 import json
+import logging
+import os
 import random
 import threading
 import time
@@ -18,10 +20,18 @@ from .rik_parse import parse_listing
 
 RG9_LABEL = "Решење о поништавању гласања на бирачком месту (Образац РГ-9)"
 _FMT = "%Y-%m-%d %H:%M:%S"
+log = logging.getLogger(__name__)
+MAX_BODY = 1_000_000  # bytes
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
 
 
 def _write_json(path: Path, data) -> None:
-    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    _atomic_write(path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
 
 def _read_json(path: Path):
@@ -68,10 +78,19 @@ def fetch_fixtures(client: RikClient, out_dir: Path, with_pdfs: bool = False,
         for mid in munis:
             for rec in _sweep(client, Filters(municipality_id=mid)):
                 muni_of[_station_key(rec)] = mid
+        unique: dict[tuple[str, str], dict] = {}
+        for rec in records:
+            unique.setdefault(_station_key(rec), rec)
+        records = list(unique.values())
+        unmatched = 0
         for rec in records:
             mid = muni_of.get(_station_key(rec))
-            if mid is not None:
+            if mid is None:
+                unmatched += 1
+            else:
                 rec["_municipality_id"] = mid
+        if unmatched:
+            log.warning("%d record(s) have no matched _municipality_id", unmatched)
         _write_json(root / "listing.json", records)
 
     if with_pdfs:
@@ -84,7 +103,11 @@ def _fetch_pdfs(client: RikClient, root: Path, limit: int | None) -> None:
     pdf_dir.mkdir(exist_ok=True)
     base = client.election.base_url
     seen = 0
+    failed: list[str] = []
+    done = False
     for rec in _read_json(root / "listing.json"):
+        if done:
+            break
         for doc in parse_listing({"records": [rec], "pagination": ""}, base).docs:
             # Hrefs are untrusted: stay on the election's host and never leave pdf_dir.
             if not doc.url.startswith(base + "/"):
@@ -94,7 +117,8 @@ def _fetch_pdfs(client: RikClient, root: Path, limit: int | None) -> None:
             if name in ("", ".", ".."):
                 continue
             if limit is not None and seen >= limit:
-                return
+                done = True
+                break
             seen += 1
             target = pdf_dir / name
             if target.exists():
@@ -103,8 +127,11 @@ def _fetch_pdfs(client: RikClient, root: Path, limit: int | None) -> None:
                 resp = _send(client.http, client.limiter, client.timeout_s, "GET",
                              base + quote(path, safe="/%@:+,;=~!$&'()*"))
             except RikError:
-                continue  # not written, so a re-run retries it
-            target.write_bytes(resp.content)
+                failed.append(name)  # not written, so a re-run retries it
+                continue
+            _atomic_write(target, resp.content)
+    if failed:
+        log.warning("%d PDF(s) failed to download: %s", len(failed), ", ".join(failed))
 
 
 class ReplayClock:
@@ -150,15 +177,14 @@ def load_fake(fixture_dir: Path, clock: Callable[[], str] | None) -> FakeRik:
 
 
 def fault_plan(records: list[dict], seed: int = 7) -> list[dict]:
-    """Deterministic fault schedule at 25/50/75% of [first, last] upload."""
+    """Deterministic fault schedule at the 25/50/75% ranks of the sorted upload times."""
     uploads = _uploads(records)
     if not uploads:
         return []
-    first, last = (datetime.strptime(u, _FMT) for u in (uploads[0], uploads[-1]))
     rng = random.Random(seed)
     plan = []
     for frac, kind in ((0.25, "replace"), (0.5, "remove"), (0.75, "add")):
-        when = (first + (last - first) * frac).strftime(_FMT)
+        when = uploads[int(len(uploads) * frac)]
         visible = [(r, d) for r in records for d in r["_docs"] if d["uploaded"] <= when]
         if kind == "replace":
             visible = [(r, d) for r, d in visible if d["type"] == 6]
@@ -197,26 +223,45 @@ def make_replay_server(fixture_dir: Path, host: str = "127.0.0.1", port: int = 8
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
-        def _serve(self) -> None:
-            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-            request = httpx.Request(self.command, f"http://{host}{self.path}", content=body)
-            with lock:
-                now = clock.now_str()
-                while pending and pending[0]["at"] <= now:
-                    apply_fault(fake, pending.pop(0))
-                resp = fake.handle(request)
-            self.send_response(resp.status_code)
-            self.send_header("Content-Type", resp.headers.get("Content-Type", "text/plain"))
-            self.send_header("Content-Length", str(len(resp.content)))
+        def _reply(self, status: int, content: bytes, ctype: str = "text/plain") -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(resp.content)
+            self.wfile.write(content)
+
+        def _serve(self) -> None:
+            try:
+                raw_len = self.headers.get("Content-Length") or "0"
+                if not raw_len.isascii() or not raw_len.isdigit() or int(raw_len) > MAX_BODY:
+                    return self._reply(400, b"bad content-length")
+                if "\x00" in unquote(self.path):
+                    return self._reply(400, b"bad path")
+                body = self.rfile.read(int(raw_len))
+                body.decode("utf-8")
+                request = httpx.Request(self.command, f"http://{host}{self.path}", content=body)
+                with lock:
+                    now = clock.now_str()
+                    while pending and pending[0]["at"] <= now:
+                        apply_fault(fake, pending.pop(0))
+                    resp = fake.handle(request)
+                self._reply(resp.status_code, resp.content,
+                            resp.headers.get("Content-Type", "text/plain"))
+            except (ValueError, httpx.InvalidURL):  # incl. UnicodeDecodeError, bad page number
+                self._reply(400, b"bad request")
+            except Exception:
+                log.exception("replay server error")
+                self._reply(500, b"internal error")
 
         do_GET = do_POST = _serve
 
         def log_message(self, *args) -> None:
             pass
 
-    return ThreadingHTTPServer((host, port), Handler)
+    server = ThreadingHTTPServer((host, port), Handler)
+    server.fake = fake
+    return server
 
 
 def serve_replay(fixture_dir: Path, host: str = "127.0.0.1", port: int = 8765,

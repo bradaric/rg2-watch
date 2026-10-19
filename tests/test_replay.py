@@ -156,3 +156,51 @@ def test_fetch_fixtures_limit_pdfs(tmp_path):
                        httpx.Client(transport=httpx.MockTransport(fake.handle)))
     root = fetch_fixtures(client, tmp_path / "out", with_pdfs=True, limit_pdfs=3)
     assert len(list((root / "pdfs").iterdir())) == 3
+
+
+def test_fault_points_use_upload_rank_not_wall_clock(tmp_path):
+    recs = load_fake(make_fixture_dir(tmp_path), None).records
+    for i, rec in enumerate(recs):
+        for j, d in enumerate(rec["_docs"]):
+            d["uploaded"] = f"2025-06-08 2{i}:0{j}:00"
+    recs[0]["_docs"][0]["uploaded"] = "2025-12-17 10:00:00"  # months-long tail
+    recs[1]["_docs"][0]["uploaded"] = "2025-11-01 10:00:00"
+    plan = fault_plan(recs)
+    assert len(plan) == 3
+    assert all(f["at"].startswith("2025-06-08") for f in plan)
+
+
+def _raw(port, payload: bytes) -> bytes:
+    import socket
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+        sock.sendall(payload)
+        sock.shutdown(socket.SHUT_WR)
+        out = b""
+        while chunk := sock.recv(4096):
+            out += chunk
+    return out
+
+
+def test_replay_server_rejects_malformed_requests(tmp_path):
+    root = make_fixture_dir(tmp_path)
+    server = make_replay_server(root, port=0)
+    assert server.fake.election.parent == "662405"
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        post = b"POST /get-election HTTP/1.0\r\n%s\r\n\r\n%s"
+        bad = [
+            post % (b"Content-Length: -5", b""),
+            post % (b"Content-Length: abc", b""),
+            post % (b"Content-Length: 99999999", b""),
+            post % (b"Content-Length: 2", b"\xff\xfe"),
+            post % (b"Content-Length: 6", b"page=x"),
+            b"GET /a%00b HTTP/1.0\r\n\r\n",
+        ]
+        for payload in bad:
+            assert _raw(port, payload).startswith(b"HTTP/1.0 400"), payload
+        ok = _raw(port, post % (b"Content-Length: 6", b"page=1"))
+        assert ok.startswith(b"HTTP/1.0 200")
+    finally:
+        server.shutdown()
+        server.server_close()
