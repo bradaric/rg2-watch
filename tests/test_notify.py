@@ -129,3 +129,17 @@ def test_title_with_newline_delivers_clean_header():
 def test_to_ascii_strips_control_chars():
     from rg2watch.notify import to_ascii
     assert to_ascii("Град\x00Зајечар\x1b[31m\x7fX\t") == "Grad Zajecar [31m X"
+
+
+def test_d2_alert_and_digest_show_previous_url():
+    f = fin()
+    f = Finding(f.rule, f.severity, f.doc, f.summary, previous_url="https://x/old.pdf")
+    assert format_alert(f)[1].split("\n")[-1] == "was: https://x/old.pdf"
+    reqs = []
+    clock = Clock()
+    n, _ = make(lambda r: reqs.append(r) or httpx.Response(200), clock=clock)
+    m = Finding(f.rule, "MEDIUM", f.doc, f.summary, previous_url="https://x/old.pdf")
+    n.send([(1, m)])
+    clock.t = 600
+    assert n.send([(1, m)]) == [1]
+    assert reqs[0].content.decode().endswith("https://x/a.pdf was: https://x/old.pdf")

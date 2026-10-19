@@ -124,3 +124,31 @@ def test_added_for_existing_key_leaves_one_active_row():
     assert s.known_docs(P, Scope()) == {doc_key(b): b, doc_key(u2): u2}
     n = s._db.execute("SELECT COUNT(*) FROM documents WHERE active=1").fetchone()[0]
     assert n == 2
+
+
+def test_events_store_previous_url_and_finding_keeps_it():
+    s = store()
+    old, new = doc("https://x/old.pdf"), doc("https://x/new.pdf")
+    sid = s.start_sweep(P, "rg2")
+    s.apply_events(P, sid, [Event("added", old)])
+    s.apply_events(P, sid, [Event("replaced", new, previous_url=old.url)])
+    rows = s._db.execute("SELECT kind, previous_url FROM events ORDER BY id").fetchall()
+    assert [tuple(r) for r in rows] == [("added", None), ("replaced", old.url)]
+    s.add_finding(P, Finding("D2", "HIGH", new, "RG-2 file replaced", previous_url=old.url), new.url)
+    assert s.unalerted(P, {"HIGH"})[0][1].previous_url == old.url
+
+
+def test_old_events_table_is_migrated(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE events(id INTEGER PRIMARY KEY, sweep_id INTEGER, parent TEXT, kind TEXT, "
+                "document_id INTEGER, station_key TEXT, doc_type INTEGER, url TEXT, uploaded_at TEXT, "
+                "detected_at TEXT)")
+    con.commit()
+    con.close()
+    s = Store(path)
+    s.apply_events(P, s.start_sweep(P, "l"), [Event("replaced", doc(), previous_url="https://x/0.pdf")])
+    assert s._db.execute("SELECT previous_url FROM events").fetchone()[0] == "https://x/0.pdf"
+    s.close()
+    Store(path).close()  # re-opening an already migrated DB is fine

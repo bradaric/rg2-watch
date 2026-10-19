@@ -17,7 +17,8 @@ def findings_for(events: list[Event]) -> list[Finding]:
             out.append(Finding("D1", sev, e.doc, f"{_name(e)} published"))
         elif e.kind == "replaced":
             sev = "HIGH" if t == 6 else "MEDIUM"
-            out.append(Finding("D2", sev, e.doc, f"{_name(e)} file replaced"))
+            out.append(Finding("D2", sev, e.doc, f"{_name(e)} file replaced",
+                               previous_url=e.previous_url))
         elif e.kind == "removed":
             out.append(Finding("D4", "MEDIUM", e.doc, "document removed from listing"))
     return out

@@ -32,3 +32,10 @@ def test_added_rg2_no_finding():
 def test_removed_d4():
     [f] = findings_for([Event("removed", doc(6))])
     assert (f.rule, f.severity, f.summary) == ("D4", "MEDIUM", "document removed from listing")
+
+
+def test_d2_carries_previous_url():
+    from rg2watch.models import Doc, Event
+    d = Doc("M", "1", "S", "x", 6, "https://x/new.pdf", "2025-06-08T23:00")
+    (f,) = findings_for([Event("replaced", d, previous_url="https://x/old.pdf")])
+    assert f.rule == "D2" and f.previous_url == "https://x/old.pdf"

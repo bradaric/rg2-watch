@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -26,7 +27,8 @@ CREATE TABLE IF NOT EXISTS sweeps(
     pages INTEGER, records INTEGER, added INTEGER, replaced INTEGER, removed INTEGER);
 CREATE TABLE IF NOT EXISTS events(
     id INTEGER PRIMARY KEY, sweep_id INTEGER, parent TEXT, kind TEXT, document_id INTEGER,
-    station_key TEXT, doc_type INTEGER, url TEXT, uploaded_at TEXT, detected_at TEXT);
+    station_key TEXT, doc_type INTEGER, url TEXT, uploaded_at TEXT, detected_at TEXT,
+    previous_url TEXT);
 CREATE TABLE IF NOT EXISTS municipalities(
     parent TEXT, id TEXT, name TEXT, PRIMARY KEY(parent, id));
 CREATE TABLE IF NOT EXISTS stations(
@@ -39,6 +41,13 @@ CREATE TABLE IF NOT EXISTS counts(
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _previous_url(details_json: str | None) -> str | None:
+    try:
+        return json.loads(details_json).get("previous_url") if details_json else None
+    except (ValueError, AttributeError):
+        return None
 
 
 def _doc(row) -> Doc:
@@ -54,6 +63,10 @@ class Store:
         if str(path) != ":memory:":
             self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(SCHEMA)
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(events)")}
+        if "previous_url" not in cols:
+            with self._db:
+                self._db.execute("ALTER TABLE events ADD COLUMN previous_url TEXT")
 
     def close(self) -> None:
         with self._lock:
@@ -125,9 +138,10 @@ class Store:
                 row = self._db.execute("SELECT id FROM documents WHERE url=?", (d.url,)).fetchone()
                 self._db.execute(
                     "INSERT INTO events(sweep_id, parent, kind, document_id, station_key, "
-                    "doc_type, url, uploaded_at, detected_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    "doc_type, url, uploaded_at, detected_at, previous_url) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (sweep_id, parent, ev.kind, row["id"] if row else None, d.station_key,
-                     d.doc_type, d.url, d.uploaded_at, now))
+                     d.doc_type, d.url, d.uploaded_at, now, ev.previous_url))
 
     def start_sweep(self, parent: str, lane: str) -> int:
         return self._write("INSERT INTO sweeps(parent, lane, started_at) VALUES(?,?,?)",
@@ -188,9 +202,10 @@ class Store:
                 raise KeyError(f"unknown document url: {document_url}")
             cur = self._db.execute(
                 "INSERT OR IGNORE INTO findings(document_id, parent, municipality, station_no, "
-                "rule, severity, summary, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                "rule, severity, summary, created_at, details_json) VALUES(?,?,?,?,?,?,?,?,?)",
                 (row["id"], parent, f.doc.municipality, f.doc.station_no, f.rule, f.severity,
-                 f.summary, _now()))
+                 f.summary, _now(),
+                 json.dumps({"previous_url": f.previous_url}) if f.previous_url else None))
             return cur.rowcount == 1
 
     def unalerted(self, parent: str, severities: set[str]) -> list[tuple[int, Finding]]:
@@ -199,11 +214,12 @@ class Store:
         marks = ",".join("?" * len(severities))
         with self._lock:
             rows = self._db.execute(
-                "SELECT f.id AS fid, f.rule, f.severity, f.summary, d.* FROM findings f "
+                "SELECT f.id AS fid, f.rule, f.severity, f.summary, f.details_json, d.* FROM findings f "
                 "JOIN documents d ON d.id=f.document_id "
                 f"WHERE f.parent=? AND f.alerted_at IS NULL AND f.severity IN ({marks}) "
                 "ORDER BY f.id", [parent, *sorted(severities)]).fetchall()
-        return [(r["fid"], Finding(r["rule"], r["severity"], _doc(r), r["summary"])) for r in rows]
+        return [(r["fid"], Finding(r["rule"], r["severity"], _doc(r), r["summary"],
+                                   _previous_url(r["details_json"]))) for r in rows]
 
     def mark_alerted(self, ids: list[int]) -> None:
         if not ids:

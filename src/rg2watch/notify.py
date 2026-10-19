@@ -37,7 +37,10 @@ def _uploaded(f: Finding) -> str:
 def format_alert(f: Finding) -> tuple[str, str]:
     d = f.doc
     title = f"[{f.severity}] {f.rule} {d.municipality} BM {d.station_no}"
-    body = "\n".join([f.summary, d.station_name, f"uploaded {_uploaded(f)}", d.url])
+    lines = [f.summary, d.station_name, f"uploaded {_uploaded(f)}", d.url]
+    if f.previous_url:
+        lines.append(f"was: {f.previous_url}")
+    body = "\n".join(lines)
     return title, body
 
 
@@ -98,6 +101,7 @@ class Notifier:
                 lines.append(
                     f"{f.rule} {f.doc.municipality} BM {f.doc.station_no} "
                     f"{f.doc.station_name}: {f.summary} {f.doc.url}"
+                    + (f" was: {f.previous_url}" if f.previous_url else "")
                 )
             n = len(lines)
             if self._post(f"[MEDIUM] {n} finding{'s' if n != 1 else ''}", "\n".join(lines), "default", "warning"):

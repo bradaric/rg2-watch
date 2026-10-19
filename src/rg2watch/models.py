@@ -100,6 +100,7 @@ class Finding:
     severity: Literal["HIGH", "MEDIUM", "LOW"]
     doc: Doc
     summary: str
+    previous_url: str | None = None
 
 
 @dataclass(frozen=True)
