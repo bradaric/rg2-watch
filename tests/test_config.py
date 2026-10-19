@@ -23,6 +23,7 @@ def test_defaults_without_file(monkeypatch):
     assert c.ntfy_topic is None
     assert c.medium_digest_s == 600
     assert c.request_timeout_s == 20.0
+    assert c.outside_share_medium == 0.10
 
 
 def test_toml_overrides(tmp_path, monkeypatch):

@@ -76,8 +76,9 @@ assisted_share = 0.05
 min_registered_for_ratio = 50
 unsigned_rows_threshold = 2
 # High outside-station voting (A9): share of voted. Initial values, to be tuned after calibration.
+# outside_share_medium raised from 5% to 10% by operator decision (2026-10-19).
 outside_share_high = 0.15
-outside_share_medium = 0.05
+outside_share_medium = 0.10
 # Large correction (V12): original vs final value differ by at least this many, and by this share of the original
 large_correction_abs = 5
 large_correction_share = 0.3

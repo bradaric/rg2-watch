@@ -153,7 +153,7 @@ CASES = [
     ("A7", lambda r: r["numbers"]["list_votes"].__setitem__(0, {"row": 1, "field": nf(710)}), "MEDIUM"),
     ("A8", lambda r: r["numbers"]["assisted"].update(value=41), "LOW"),
     ("A9", lambda r: r["numbers"]["outside_voted"].update(value=120), "HIGH"),
-    ("A9", lambda r: r["numbers"]["outside_voted"].update(value=47), "MEDIUM"),
+    ("A9", lambda r: r["numbers"]["outside_voted"].update(value=80), "MEDIUM"),
 ]
 
 
@@ -327,15 +327,32 @@ def test_a9_summary_and_thresholds():
             r["numbers"]["voted"].update(value=voted)
             r["numbers"]["outside_voted"].update(value=v, **kw)
         return rules(mutated(fn)).get("A9")
-    assert out(47).summary == "outside-station voting 47 of 600 (7.8%)"
+    assert out(60).summary == "outside-station voting 60 of 600 (10.0%)"
     assert out(90).severity == "HIGH"
-    assert out(30).severity == "MEDIUM"
-    assert out(9, voted=100) is None  # share 9% but under 10 voters
+    assert out(60).severity == "MEDIUM"
+    assert out(9, voted=80) is None  # share 11% but under 10 voters
     assert out(10, voted=100).severity == "MEDIUM"
     assert out(20) is None  # 3.3% below medium
     assert out(None, legible=False) is None
     assert out(None, mark="dash") is None  # dash = 0
-    assert out(47, voted=0) is None
+    assert out(60, voted=0) is None
+
+
+def test_a9_seven_percent_does_not_fire():
+    fn = mutated(lambda r: (r["numbers"]["voted"].update(value=600),
+                            r["numbers"]["outside_voted"].update(value=42)))
+    assert "A9" not in rules(fn)
+
+
+def test_v8_fires_for_illegible_outside_voted():
+    found = rules(mutated(lambda r: r["numbers"]["outside_voted"].update(legible=False)))
+    assert found["V8"].severity == "MEDIUM"
+    assert found["V8"].summary == "12 outside_voted illegible"
+
+
+def test_v8_silent_for_empty_outside_voted():
+    found = rules(mutated(lambda r: r["numbers"]["outside_voted"].update(value=None, legible=False, mark="empty")))
+    assert "V8" not in found
 
 
 @pytest.mark.parametrize("close,done,fires", [

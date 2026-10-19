@@ -47,7 +47,7 @@ class Config:
     min_registered_for_ratio: int = 50
     unsigned_rows_threshold: int = 2
     outside_share_high: float = 0.15  # initial value, tune after calibration
-    outside_share_medium: float = 0.05  # initial value, tune after calibration
+    outside_share_medium: float = 0.10  # initial value, tune after calibration
     large_correction_abs: int = 5
     large_correction_share: float = 0.3
 

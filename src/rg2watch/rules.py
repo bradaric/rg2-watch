@@ -119,6 +119,8 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
           for k in ("registered",) + _RESULT_FIELDS if not _ok(nums[k])]
     v8 += [f"list row {r['row']} {'illegible' if not r['field']['legible'] else 'empty'}"
            for r in lists if not _ok(r["field"])]
+    v8 += [f"{_LABELS[k]} {k} illegible" for k in ("outside_voted", "outside_confirmations")
+           if not nums[k]["legible"] and nums[k]["mark"] != "empty"]
     if v8:
         add("V8", "MEDIUM", v8)
 
