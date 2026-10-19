@@ -101,6 +101,8 @@ def test_digest_failure_then_retry():
     clock.t = 600
     assert n.send(m) == []
     ok[0] = True
+    assert n.send(m) == []  # backing off after the failure
+    clock.t = 605
     assert n.send(m) == [5]
     assert len(reqs) == 2
 
@@ -143,3 +145,99 @@ def test_d2_alert_and_digest_show_previous_url():
     clock.t = 600
     assert n.send([(1, m)]) == [1]
     assert reqs[0].content.decode().endswith("https://x/a.pdf was: https://x/old.pdf")
+
+
+def test_unreachable_ntfy_backs_off_exponentially():
+    attempts = []
+
+    def boom(request):
+        attempts.append(1)
+        raise httpx.ConnectError("down")
+
+    clock = Clock()
+    n, out = make(boom, clock=clock)
+    pending = [(1, fin(no="1")), (2, fin(no="2")), (3, fin(no="3"))]
+    per_tick = []
+    for t in range(0, 40):
+        clock.t = float(t)
+        before = len(attempts)
+        assert n.send(pending) == []
+        per_tick.append(len(attempts) - before)
+    assert max(per_tick) == 1
+    assert [t for t, k in enumerate(per_tick) if k] == [0, 5, 15, 35]  # 5, 10, 20 s windows
+    assert out.getvalue().count("[HIGH]") == 3  # printing is unaffected
+
+
+def test_backoff_caps_at_60s_and_resets_on_success():
+    ok = [False]
+    attempts = []
+
+    def h(r):
+        attempts.append(1)
+        return httpx.Response(200 if ok[0] else 503)
+
+    clock = Clock()
+    n, _ = make(h, clock=clock)
+    times = []
+    for t in range(0, 400):
+        clock.t = float(t)
+        before = len(attempts)
+        n.send([(1, fin())])
+        if len(attempts) > before:
+            times.append(t)
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert gaps[:4] == [5, 10, 20, 40] and set(gaps[4:]) == {60}
+    ok[0] = True
+    clock.t = 1000.0
+    assert n.send([(1, fin())]) == [1]
+    ok[0] = False
+    clock.t = 1001.0
+    n.send([(2, fin())])
+    before = len(attempts)
+    clock.t = 1006.0
+    n.send([(2, fin())])
+    assert len(attempts) == before + 1  # backoff restarted at 5 s
+
+
+def test_status_alert_printed_and_pushed_without_store():
+    reqs = []
+    n, out = make(lambda r: reqs.append(r) or httpx.Response(200))
+    n.status("[rg2-watch] RIK unreachable/blocking since 21:05")
+    assert "[rg2-watch] RIK unreachable/blocking since 21:05" in out.getvalue()
+    assert len(reqs) == 1 and reqs[0].headers["Priority"] == "high"
+    assert reqs[0].headers["Title"] == "[rg2-watch] RIK unreachable/blocking since 21:05"
+
+
+def test_status_alert_retried_after_backoff():
+    ok = [False]
+    reqs = []
+
+    def h(r):
+        reqs.append(r)
+        return httpx.Response(200 if ok[0] else 503)
+
+    clock = Clock()
+    n, out = make(h, clock=clock)
+    n.status("[rg2-watch] RIK reachable again")
+    ok[0] = True
+    n.send([])
+    assert len(reqs) == 1
+    clock.t = 5
+    n.send([])
+    n.send([])
+    assert len(reqs) == 2
+    assert out.getvalue().count("RIK reachable again") == 1
+
+
+def test_printed_alerts_are_flushed():
+    class Out(io.StringIO):
+        flushes = 0
+
+        def flush(self):
+            Out.flushes += 1
+
+    cfg = Config(ntfy_topic=None)
+    out = Out()
+    n = Notifier(cfg, None, out, Clock())
+    n.send([(1, fin())])
+    assert Out.flushes >= 1

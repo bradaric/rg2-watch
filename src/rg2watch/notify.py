@@ -44,6 +44,10 @@ def format_alert(f: Finding) -> tuple[str, str]:
     return title, body
 
 
+BACKOFF_START_S = 5.0
+BACKOFF_CAP_S = 60.0
+
+
 class Notifier:
     def __init__(self, cfg: Config, http: httpx.Client, out=sys.stdout, clock=time.monotonic):
         self.cfg = cfg
@@ -53,8 +57,14 @@ class Notifier:
         self._printed: set[int] = set()
         self._pending: dict[int, Finding] = {}
         self._pending_since: float | None = None
+        self._status: list[str] = []
+        self._backoff = 0.0
+        self._backoff_until = 0.0
 
     def _post(self, title: str, body: str, priority: str, tags: str, click: str | None = None) -> bool:
+        """Push one message; after a failure, skip pushes until the backoff window ends."""
+        if self.clock() < self._backoff_until:
+            return False
         headers = {"Title": to_ascii(title), "Priority": priority, "Tags": to_ascii(tags)}
         if click:
             headers["Click"] = quote(click, safe=":/?&=%#@+,;~-._")
@@ -66,7 +76,10 @@ class Notifier:
             )
             r.raise_for_status()
         except httpx.HTTPError:
+            self._backoff = min(BACKOFF_CAP_S, self._backoff * 2 or BACKOFF_START_S)
+            self._backoff_until = self.clock() + self._backoff
             return False
+        self._backoff = 0.0
         return True
 
     def _print(self, fid: int, f: Finding) -> None:
@@ -74,11 +87,23 @@ class Notifier:
             return
         self._printed.add(fid)
         title, body = format_alert(f)
-        print(f"{title}\n{body}\n", file=self.out)
+        print(f"{title}\n{body}\n", file=self.out, flush=True)
+
+    def status(self, text: str) -> None:
+        """Self-alert about the watcher itself (HIGH, not stored): printed now, pushed until delivered."""
+        print(f"{text}\n", file=self.out, flush=True)
+        if self.cfg.ntfy_topic:
+            self._status.append(text)
+            self._flush_status()
+
+    def _flush_status(self) -> None:
+        while self._status and self._post(self._status[0], self._status[0], "high", "warning"):
+            self._status.pop(0)
 
     def send(self, findings_with_ids: list[tuple[int, Finding]]) -> list[int]:
         delivered: list[int] = []
         push = bool(self.cfg.ntfy_topic)
+        self._flush_status()
         for fid, f in findings_with_ids:
             self._print(fid, f)
             if f.severity == "LOW" or not push:
