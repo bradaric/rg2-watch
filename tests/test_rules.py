@@ -193,20 +193,78 @@ def test_arithmetic_skipped_when_illegible():
     assert not {"A1", "A2", "A4", "A5", "A6"} & set(found)
 
 
-def test_illegible_report_only_v8_v10():
+def _adversarial(quality, confidence, many_illegible):
     r = clean_report()
-    for k, f in r["numbers"].items():
-        if k != "list_votes":
-            f.update(value=None, legible=False, mark="empty")
+    if many_illegible:
+        for k in ("registered", "voted", "ballots_in_box"):
+            r["numbers"][k].update(value=None, legible=False, mark="empty")
+    else:
+        for k, f in r["numbers"].items():
+            if k != "list_votes":
+                f.update(value=None, legible=False, mark="empty")
     r["numbers"]["list_votes"] = [{"row": 1, "field": nf(None, False, "empty")}]
     for k in r["yesno"]:
         r["yesno"][k]["answer"] = "unclear"
     r["times"] = {"open_time": None, "close_time": None, "completed_at": None}
-    r["header"].update(form_code=None, station_no=None, date=None)
-    r["visual"]["page_quality"] = "unreadable"
-    r["confidence"] = "low"
+    r["header"].update(form_code=None, station_no=None, date=None, sections_present=[],
+                       pages_match_same_form=False)
+    r["signatures"].update(president_signed=False, signatures_look_same_hand=True)
+    r["visual"].update(results_block_different_pen=True, results_block_different_hand=True,
+                       pasted_or_patched_area=True, page_quality=quality)
+    r["confidence"] = confidence
     _check(r, SCHEMA)
-    assert set(rules(r)) == {"V8", "V10"}
+    return r
+
+
+@pytest.mark.parametrize("confidence", ["medium", "low"])
+@pytest.mark.parametrize("quality,many", [("unreadable", False), ("good", True), ("unreadable", True)])
+def test_illegible_report_only_v8_v10(quality, many, confidence):
+    found = set(rules(_adversarial(quality, confidence, many)))
+    assert found <= {"V8", "V10"} and "V8" in found
+    assert ("V10" in found) == (quality != "good")
+
+
+def test_poor_quality_caps_physical_rules_at_medium():
+    def fn(r):
+        r["visual"].update(page_quality="poor", pasted_or_patched_area=True,
+                           results_block_different_pen=True)
+        r["signatures"].update(president_signed=False, signatures_look_same_hand=True)
+        r["header"].update(sections_present=["I"])
+    found = rules(mutated(fn))
+    for rule in ("V3", "V5", "V6", "V7", "V9"):
+        assert found[rule].severity == "MEDIUM"
+    assert rules(mutated(lambda r: (r["visual"].update(page_quality="poor"),
+                                    r["header"].update(station_no="99"))))["V9"].severity == "HIGH"
+
+
+def test_v1_not_fired_for_unreadable_field():
+    r = mutated(lambda r: r["numbers"]["voted"].update(mark="overwritten", value=None, legible=False))
+    found = rules(r)
+    assert "V1" not in found and "V8" in found
+
+
+@pytest.mark.parametrize("close,done,fires", [
+    ("20:00", "01:30", False), ("20:00", "19:30", True), ("20:00", "07:59", False),
+    ("20:00", "08:00", True), ("20:00", "20:00", False)])
+def test_p4_completed_before_close(close, done, fires):
+    f = rules(mutated(lambda r: r["times"].update(close_time=close, completed_at=done)))
+    assert ("P4" in f) == fires
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("24:00", None), ("8", None), ("", None), ("20.00h", 1200), ("20h00", 1200),
+    ("20:00:00", 1200), ("2000", 1200), ("20 00", 1200), ("20:00 ч", 1200), (None, None)])
+def test_parse_time(text, expected):
+    from rg2watch.rules import _parse_time
+    assert _parse_time(text) == expected
+
+
+@pytest.mark.parametrize("form,listing,fires", [
+    ("12/1", "12", False), (" 012 ", "12", False), ("abc", "12", False), ("13", "12", True)])
+def test_station_normalisation(form, listing, fires):
+    doc = Doc("Test", listing, "School", "label", 6, "http://x/a.pdf", "2026-10-19")
+    fs = {f.rule for f in evaluate_report(mutated(lambda r: r["header"].update(station_no=form)), doc, CFG)}
+    assert ("V9" in fs) == fires
 
 
 def test_low_confidence_downgrades_high():
@@ -225,6 +283,10 @@ def test_summary_truncated():
             {"row": i, "field": nf(i, True, "overwritten")} for i in range(1, 60)]
     s = rules(mutated(fn))["V1"].summary
     assert len(s) <= 300 and s.endswith("...")
+    r = mutated(fn)
+    r["confidence"] = "low"
+    s = rules(r)["V1"].summary
+    assert len(s) <= 300 and s.endswith("... (low-confidence read)")
 
 
 def test_thresholds_configurable():

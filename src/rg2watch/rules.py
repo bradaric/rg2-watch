@@ -25,15 +25,20 @@ def _ok(f: dict) -> bool:
 def _parse_time(text) -> int | None:
     if not isinstance(text, str):
         return None
-    m = re.fullmatch(r"\s*(\d{1,2})\s*[:. ]?\s*(\d{2})\s*", text)
+    m = re.fullmatch(r"\s*(\d{1,2})\s*[:.hчč ]?\s*(\d{2})(?::\d{2})?\s*[hчč]?\s*", text.lower())
     if not m:
         return None
     h, mi = int(m.group(1)), int(m.group(2))
     return h * 60 + mi if h < 24 and mi < 60 else None
 
 
-def _station(s) -> str:
-    return str(s).strip().lstrip("0")
+def _station(s) -> str | None:
+    m = re.match(r"\s*(\d+)", str(s))
+    return str(int(m.group(1))) if m else None
+
+
+_CORE = ("registered", "voted", "ballots_in_box", "invalid", "valid")
+_AFTER_MIDNIGHT = 8 * 60
 
 
 def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
@@ -48,30 +53,42 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
     lists = nums["list_votes"]
 
     # V1 / V2
+    def marked(f: dict) -> bool:
+        return f["mark"] in _BAD_MARKS and (bool(f["legible"]) or f["value"] is not None)
+
     v1 = [f"{_LABELS[k]} {k} {nums[k]['mark']} ({nums[k]['value']})"
-          for k in _RESULT_FIELDS if nums[k]["mark"] in _BAD_MARKS]
+          for k in _RESULT_FIELDS if marked(nums[k])]
     v1 += [f"list row {r['row']} {r['field']['mark']} ({r['field']['value']})"
-           for r in lists if r["field"]["mark"] in _BAD_MARKS]
+           for r in lists if marked(r["field"])]
     if v1:
         add("V1", "HIGH", v1)
     v2 = [f"{_LABELS[k]} {k} {nums[k]['mark']} ({nums[k]['value']})"
-          for k in _OTHER_FIELDS if nums[k]["mark"] in _BAD_MARKS]
+          for k in _OTHER_FIELDS if marked(nums[k])]
     if v2:
         add("V2", "MEDIUM", v2)
 
-    # V3-V7
+    # V3-V7: unreliable reads must not produce false HIGH
+    illegible_core = sum(1 for k in _CORE if not nums[k]["legible"])
+    unreliable = vis["page_quality"] == "unreadable" or illegible_core * 2 > len(_CORE)
+    poor = vis["page_quality"] == "poor"
+    phys = "MEDIUM" if poor else "HIGH"
+
+    def add_phys(rule: str, text: str) -> None:
+        if not unreliable:
+            add(rule, phys, text)
+
     if not sig["president_signed"]:
-        add("V3", "HIGH", "president did not sign")
+        add_phys("V3", "president did not sign")
     if sig["rows_name_without_signature"] >= cfg.unsigned_rows_threshold:
         add("V4", "MEDIUM", f"{sig['rows_name_without_signature']} named committee rows without signature")
     if sig["signatures_look_same_hand"]:
-        add("V5", "HIGH", "signatures look like the same hand")
+        add_phys("V5", "signatures look like the same hand")
     v6 = [n for n, flag in (("pen", vis["results_block_different_pen"]),
                             ("hand", vis["results_block_different_hand"])) if flag]
     if v6:
-        add("V6", "HIGH", "results block in different " + " and ".join(v6))
+        add_phys("V6", "results block in different " + " and ".join(v6))
     if vis["pasted_or_patched_area"]:
-        add("V7", "HIGH", "pasted or patched area")
+        add_phys("V7", "pasted or patched area")
 
     # V8
     v8 = [f"{_LABELS[k]} {k} {'illegible' if not nums[k]['legible'] else 'empty'}"
@@ -83,16 +100,19 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
 
     # V9
     v9 = []
-    if hdr["station_no"] is not None and _station(hdr["station_no"]) != _station(doc.station_no):
+    form_st, list_st = _station(hdr["station_no"]) if hdr["station_no"] is not None else None, _station(doc.station_no)
+    station_bad = form_st is not None and list_st is not None and form_st != list_st
+    if station_bad:
         v9.append(f"station_no on form {hdr['station_no']} differs from listing {doc.station_no}")
-    missing = [s for s in _SECTIONS if s not in hdr["sections_present"]]
-    if missing:
-        extra = " (no committee/signatures)" if "V" in missing else ""
-        v9.append("missing sections " + ",".join(missing) + extra)
-    if not hdr["pages_match_same_form"]:
-        v9.append("pages do not match the same form")
+    if not unreliable:
+        missing = [s for s in _SECTIONS if s not in hdr["sections_present"]]
+        if missing:
+            extra = " (no committee/signatures)" if "V" in missing else ""
+            v9.append("missing sections " + ",".join(missing) + extra)
+        if not hdr["pages_match_same_form"]:
+            v9.append("pages do not match the same form")
     if v9:
-        add("V9", "HIGH", v9)
+        add("V9", "HIGH" if station_bad else phys, v9)
 
     if vis["page_quality"] in ("poor", "unreadable"):
         add("V10", "LOW", f"page quality {vis['page_quality']}")
@@ -119,7 +139,7 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
     p4 = []
     if close is not None and close < 20 * 60:
         p4.append(f"8 close_time {times['close_time']} before 20:00")
-    if close is not None and done is not None and done < close:
+    if close is not None and done is not None and _AFTER_MIDNIGHT <= done < close:
         p4.append(f"completed_at {times['completed_at']} before close_time {times['close_time']}")
     if p4:
         add("P4", "MEDIUM", p4)
@@ -150,11 +170,11 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
     low = report["confidence"] == "low"
     out = []
     for rule, sev, text in hits:
-        if low:
-            if sev == "HIGH":
-                sev = "MEDIUM"
-            text += " (low-confidence read)"
-        if len(text) > _MAX_SUMMARY:
-            text = text[:_MAX_SUMMARY - 3] + "..."
+        suffix = " (low-confidence read)" if low else ""
+        if low and sev == "HIGH":
+            sev = "MEDIUM"
+        if len(text) + len(suffix) > _MAX_SUMMARY:
+            text = text[:_MAX_SUMMARY - len(suffix) - 3] + "..."
+        text += suffix
         out.append(Finding(rule, sev, doc, text))
     return out
