@@ -46,6 +46,7 @@ Watch the Republic Electoral Commission (RIK) site for newly published polling-s
 - Known listings: `662405` (local 2025, round 660578, type 3), `677084` (local 2026, round 668522), `779676` (parliamentary 2026, round 680072, type 2, currently 0 RG-2 records).
 - Results app: `POST /get_results/` (`type`, `election_round`, `region`, `municipality`, `election_station`) needs a session cookie + `X-Requested-With: XMLHttpRequest`; `POST /get-elections/`, `/get-regions/`, `/get-election-stations/`. Returns tabulated results; per-station use not yet verified.
 - PDFs: scanned, 2 pages, A3 landscape, one 200 dpi JPEG per page (3306x2338), no text layer. Page 1 = sections I-III (+ IV item 11), page 2 = items 12-15 and section V (committee names + signatures, completion date/time).
+- **Layouts vary by municipality** (70 RG-2s from 662405, checked 19/10/2026): 2-page A3 landscape 200 dpi (38), 2-page A3 portrait 300 dpi (10), 8-13-page A4 portrait (17), 1-page A3 rotated 90 degrees (5). Analysis must not assume a fixed layout (see Phase 1b plan: generic oriented tiles).
 - Form header code varies per election (e.g. `Образац РГ-2/25-ЗАЈ`); the number of lists varies per election/municipality.
 - The site loads Google reCAPTCHA on the page but the JSON endpoints above did not require it.
 
