@@ -136,7 +136,6 @@ CASES = [
     ("V9", lambda r: r["header"].update(pages_match_same_form=False), "HIGH"),
     ("V10", lambda r: r["visual"].update(page_quality="poor"), "LOW"),
     ("V11", lambda r: r["yesno"]["interruption"].update(answer="both"), "MEDIUM"),
-    ("V11", lambda r: r["yesno"]["committee_remarks"].update(answer="none"), "MEDIUM"),
     ("P1", lambda r: r["yesno"]["control_sheet_found"].update(answer="NE"), "HIGH"),
     ("P1", lambda r: r["yesno"]["control_sheet_signed"].update(answer="NE"), "HIGH"),
     ("P2", lambda r: r["yesno"]["interruption"].update(answer="DA"), "MEDIUM"),
@@ -152,6 +151,8 @@ CASES = [
     ("A6", lambda r: r["numbers"]["registered"].update(value=840), "MEDIUM"),
     ("A7", lambda r: r["numbers"]["list_votes"].__setitem__(0, {"row": 1, "field": nf(710)}), "MEDIUM"),
     ("A8", lambda r: r["numbers"]["assisted"].update(value=41), "LOW"),
+    ("A9", lambda r: r["numbers"]["outside_voted"].update(value=120), "HIGH"),
+    ("A9", lambda r: r["numbers"]["outside_voted"].update(value=47), "MEDIUM"),
 ]
 
 
@@ -312,6 +313,28 @@ def test_v11_none_on_follow_up_not_anomalous_when_parent_is_ne():
         r["yesno"]["observers_present"]["answer"] = "NE"
         r["yesno"]["observer_form_filled"]["answer"] = "both"
     assert "V11" in rules(mutated(both))
+
+
+@pytest.mark.parametrize("answer", ["none", "both"])
+def test_v11_never_fires_for_committee_remarks(answer):
+    assert "V11" not in rules(mutated(lambda r: r["yesno"]["committee_remarks"].update(answer=answer)))
+
+
+def test_a9_summary_and_thresholds():
+    def out(v, voted=600, **kw):
+        def fn(r):
+            r["numbers"]["voted"].update(value=voted)
+            r["numbers"]["outside_voted"].update(value=v, **kw)
+        return rules(mutated(fn)).get("A9")
+    assert out(47).summary == "outside-station voting 47 of 600 (7.8%)"
+    assert out(90).severity == "HIGH"
+    assert out(30).severity == "MEDIUM"
+    assert out(9, voted=100) is None  # share 9% but under 10 voters
+    assert out(10, voted=100).severity == "MEDIUM"
+    assert out(20) is None  # 3.3% below medium
+    assert out(None, legible=False) is None
+    assert out(None, mark="dash") is None  # dash = 0
+    assert out(47, voted=0) is None
 
 
 @pytest.mark.parametrize("close,done,fires", [

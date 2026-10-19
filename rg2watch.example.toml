@@ -70,3 +70,6 @@ leader_share_high = 0.90
 assisted_share = 0.05
 min_registered_for_ratio = 50
 unsigned_rows_threshold = 2
+# High outside-station voting (A9): share of voted. Initial values, to be tuned after calibration.
+outside_share_high = 0.15
+outside_share_medium = 0.05

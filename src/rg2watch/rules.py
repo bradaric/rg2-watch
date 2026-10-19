@@ -128,7 +128,7 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
     not_asked = {follow for parent, follow in (("control_sheet_found", "control_sheet_signed"),
                                                ("observers_present", "observer_form_filled"))
                  if yn[parent]["answer"] == "NE"}
-    v11 = [f"{_YESNO_LABELS[k]} {k} {yn[k]['answer']}" for k in _YESNO_LABELS
+    v11 = [f"{_YESNO_LABELS[k]} {k} {yn[k]['answer']}" for k in _YESNO_LABELS if k != "committee_remarks"  # item 14: operator decided it is noise
            if yn[k]["answer"] == "both" or (yn[k]["answer"] == "none" and k not in not_asked)]
     if v11:
         add("V11", "MEDIUM", v11)
@@ -178,6 +178,14 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
         add("A7", "MEDIUM", f"one list {max(list_vals)} of valid {n['valid']} ({max(list_vals) / n['valid']:.1%})")
     if "assisted" in n and "voted" in n and n["assisted"] > cfg.assisted_share * n["voted"]:
         add("A8", "LOW", f"assisted {n['assisted']} > {cfg.assisted_share:.0%} of voted {n['voted']}")
+
+    if "outside_voted" in n and "voted" in n and n["voted"] > 0:
+        share = n["outside_voted"] / n["voted"]
+        text = f"outside-station voting {n['outside_voted']} of {n['voted']} ({share:.1%})"
+        if share >= cfg.outside_share_high:
+            add("A9", "HIGH", text)
+        elif share >= cfg.outside_share_medium and n["outside_voted"] >= 10:
+            add("A9", "MEDIUM", text)
 
     low = report["confidence"] == "low"
     out = []

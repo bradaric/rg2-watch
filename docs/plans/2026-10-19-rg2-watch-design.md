@@ -181,6 +181,7 @@ Arithmetic (secondary; only when all involved fields legible):
 | A6 | turnout >= 95% (registered > 50) | MEDIUM |
 | A7 | one list >= 90% of valid (valid > 50) | MEDIUM |
 | A8 | assisted > 5% of voted | LOW |
+| A9 | outside_voted / voted >= 15% (HIGH), or >= 5% with outside_voted >= 10 (MEDIUM); initial thresholds, tune after calibration | HIGH / MEDIUM |
 
 Document-level:
 | D1 | RG-7 / RG-8 / RG-9 / Примедба published for a station | MEDIUM (RG-8/RG-9 HIGH) |

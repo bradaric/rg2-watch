@@ -43,6 +43,8 @@ class Config:
     assisted_share: float = 0.05
     min_registered_for_ratio: int = 50
     unsigned_rows_threshold: int = 2
+    outside_share_high: float = 0.15  # initial value, tune after calibration
+    outside_share_medium: float = 0.05  # initial value, tune after calibration
 
 
 def load_config(path: Path | None) -> Config:

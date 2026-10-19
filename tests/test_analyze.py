@@ -307,4 +307,4 @@ def test_prompt_v2_dash_paragraph_before_names():
     assert para in analyze.PROMPT
     assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
     from rg2watch.pipeline import PROMPT_VERSION
-    assert PROMPT_VERSION == "v3"
+    assert PROMPT_VERSION == "v4"
