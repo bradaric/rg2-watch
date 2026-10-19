@@ -56,7 +56,7 @@
 {"file": "@Zapisnik BM 4_8dded55263eef1d477226cc591983d79.pdf", "municipality": "Мионица", "station_no": "4", "expect": {}, "verified": false, "note": "random sample, no follow-up docs; 2 page(s)"}
 {"file": "@BM-26_8a8cd42d2beb5e82b7af42f4ef4d2c4a.pdf", "municipality": "Град Зајечар", "station_no": "26", "expect": {}, "verified": false, "note": "random sample, no follow-up docs; 2 page(s)"}
 {"file": "@bm6_ad6d21e5bbe31a840ce96b0cf609e460.pdf", "municipality": "Неготин", "station_no": "6", "expect": {}, "verified": false, "note": "random sample, no follow-up docs; 2 page(s)"}
-{"file": "@LO 28_15de51f38769c1cfa552531de7c3a5d9.pdf", "municipality": "Косјерић", "station_no": "28", "expect": {}, "verified": false, "note": "random sample, no follow-up docs; 1 page(s)"}
+{"file": "@LO 28_15de51f38769c1cfa552531de7c3a5d9.pdf", "municipality": "Косјерић", "station_no": "28", "expect": {"V2": true, "A9": true, "V12": true}, "verified": true, "note": "user-verified: item 12 and 12.1 corrected 44 -> 10 (initialled) of 417 voted; original outside-voting share 10.6%; random sample, no follow-up docs; 1 page(s)"}
 {"file": "@Zapisnik BM 12_3ded90324e9b3f0432f67e6663d9072c.pdf", "municipality": "Мионица", "station_no": "12", "expect": {}, "verified": false, "note": "random sample, no follow-up docs; 2 page(s)"}
 {"file": "@bm57_55ae9ab1bcf22285979c0752c00c7996.pdf", "municipality": "Неготин", "station_no": "57", "expect": {}, "verified": false, "note": "random sample, no follow-up docs; 2 page(s)"}
 {"file": "@BM-19_96f3edb78553bbe9e8e72639c5367f3c.pdf", "municipality": "Град Зајечар", "station_no": "19", "expect": {}, "verified": false, "note": "random sample, no follow-up docs; 2 page(s)"}
