@@ -10,6 +10,13 @@
 
 **Spec:** `docs/plans/2026-10-19-rg2-watch-design.md` (sections 1, 4.2, 4.3, 5, 6, 7, 9, 10a). Phase 1a plan: `docs/plans/2026-10-19-rg2-watch-phase1a-plan.md` (interfaces it produces are consumed here).
 
+**Phase 1a interfaces as built (read the code; these supersede anything older in this plan):**
+- `cli._handlers(store, notifier, parent)` returns `(deliver, on_events)`: `on_events` only stores findings (per-finding guarded); `deliver()` is called once per tick by the watch loop. Phase 1b hooks `AnalysisPipeline.submit(events)` into `on_events` (guarded) - workers store findings via the same guarded `_store_finding`, and the watch loop's `deliver()` pushes them.
+- `Notifier.status(text)` is the self-alert path (print + push, backoff-aware, bypasses the findings store) - use it for the spend-cap alert.
+- `Finding` has optional `previous_url`. Notifier backs off failed pushes; stdout flushed per alert.
+- `RikClient` shares one `AdaptiveLimiter` (thread-safe) and tracks last success; PDF downloads must go through it.
+- Watcher lanes are page-budgeted (`sweep_pages_per_tick`); analysis must never run on the watcher thread.
+
 ## Global Constraints
 
 - All Phase 1a Global Constraints apply.
