@@ -379,3 +379,9 @@ def test_cli_tally_municipal_prints_list_table_per_municipality(tmp_path, capsys
     assert "Alpha: votes per list" in out and "Beta: votes per list" in out and "List 3" in out
     head = out.split("Alpha: votes per list")[0]
     assert "List 1" not in head
+
+
+def test_page_handles_municipal_scope():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'T.scope === "municipal"' in html and "pick a municipality for list results" in html
+    assert '"Share %"' in html and "listsOf(" in html and 'id="tscope"' in html

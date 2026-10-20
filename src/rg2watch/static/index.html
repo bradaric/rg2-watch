@@ -130,6 +130,12 @@ td.disagree{color:var(--hi);font-weight:700}
 #toverall th:first-child,#toverall td:first-child{text-align:left}
 .wrapx{padding:0 var(--s3)}
 #tnotes{margin:0;padding-left:var(--s5)}
+#tmhint{margin:0 0 var(--s2)}
+table.lists{border-collapse:collapse;margin:var(--s1) 0 var(--s2) var(--s5);font-variant-numeric:tabular-nums}
+table.lists th,table.lists td{padding:3px var(--s3);text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+table.lists th{color:var(--mut);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+table.lists th:first-child,table.lists td:first-child{text-align:left;font-weight:600}
+table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 /* hero: results-graphic look */
 #hero{border:1px solid var(--line);border-radius:10px;padding:var(--s4) var(--s5) var(--s5);margin-bottom:var(--s4);background:var(--panel);box-shadow:var(--shadow)}
 #herobar{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;margin-bottom:var(--s3)}
@@ -156,7 +162,7 @@ td.disagree{color:var(--hi);font-weight:700}
 .hrow .val{text-align:right;font-variant-numeric:tabular-nums;white-space:pre;font-weight:700;letter-spacing:-.01em}
 #heronote{font-size:clamp(1rem,1.5vw,1.7rem);font-weight:700;color:var(--md);margin:var(--s2) 0}
 #heronote:empty{display:none}
-#heronames{margin-top:var(--s3)}
+#heronames{margin-top:var(--s3);font-size:clamp(.9rem,1.2vw,1.45rem)}
 #herofoot{margin-top:var(--s3);padding-top:var(--s2);border-top:1px solid var(--line2);font-size:clamp(.8rem,1.05vw,1.3rem);color:var(--fg);font-weight:500}
 #herofoot .stale{display:inline-block;margin-left:var(--s1);padding:0 .45em;border-radius:4px;background:var(--hi);color:#fff;font-weight:700}
 @keyframes flash{from{background:rgba(230,159,0,.45)}to{background:transparent}}
@@ -230,10 +236,11 @@ body.hero .hrow{font-size:clamp(1.1rem,2vw,2.4rem);padding:.2em 0}
 <div id="herofoot"></div>
 </section>
 <p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
+<p id="tscope" class="warnbox" hidden></p>
 <div id="tctl"><label>totals over <select id="tmode"><option value="cl">clean forms only</option><option value="all" selected>all counted forms</option></select></label>
 <button id="csv">Download CSV</button></div>
 <h3>Overall</h3><div id="toverall"></div>
-<h3>Per municipality</h3><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
+<h3>Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
 <h3>Excluded forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
 <h3 id="tnoteshead" hidden>Notes (not excluded)</h3><ul id="tnotes"></ul>
 </div>
@@ -515,10 +522,21 @@ function csvCell(x) {  // text starting with = + - @ would run as a spreadsheet 
   return /[",\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x;
 }
 function tallyCsv() {
-  const cols = resultCols($("tmode").value), rows = [...T.munis, T.overall];
+  const mode = $("tmode").value, cols = resultCols(mode), rows = [...T.munis, T.overall];
   // header is row 1 (pandas/Excel read it cleanly); the unofficial note is a last column, first data row
   const note = "Unofficial - numbers read by " + T.model + " from the scanned forms; " +
-    ($("tmode").value === "cl" ? "clean forms only" : "all counted forms");
+    (mode === "cl" ? "clean forms only" : "all counted forms");
+  if (T.scope === "municipal") {  // long format: one row per (municipality, list), shared totals repeated
+    const shared = cols.slice(1), out = [];
+    for (const r of rows) {
+      const t = r[mode], tot = shared.map(c => csvCell(c.c(r)));
+      const ls = r.names && r.names.length ? r.names.map((n, i) => [n, t.lists[i],
+        ratio(t.lists[i], t.lists_valid) == null ? "" : (100 * t.lists[i] / t.lists_valid).toFixed(1)]) : [["", "", ""]];
+      for (const l of ls) out.push([csvCell(r.m), ...l.map(csvCell), ...tot, out.length ? "" : csvCell(note)].join(","));
+    }
+    const head = ["Municipality", "List", "Votes", "Share %", ...shared.map(c => c.t), "Note"].map(csvCell).join(",");
+    return [head, ...out].join("\r\n") + "\r\n";
+  }
   const head = [...cols.map(c => csvCell(c.t)), "Note"].join(",");
   const lines = rows.map((r, i) => [...cols.map(c => csvCell(c.c(r))), i ? "" : csvCell(note)].join(","));
   return [head, ...lines].join("\r\n") + "\r\n";
@@ -534,6 +552,25 @@ function showForm(id, label) {
   redraw();
 }
 let tkey = "", tcols = "";
+function listsOf(r) {  // municipal scope: this municipality's own lists, in ballot order
+  const t = r[$("tmode").value], tbl = mk("table", null, "lists"), hr = mk("tr"), box = mk("div");
+  hr.append(mk("th", "List"), mk("th", "Votes"), mk("th", "Share"));
+  tbl.append(hr);
+  r.names.forEach((n, i) => {
+    const tr = mk("tr");
+    tr.append(mk("td", n), mk("td", num(t.lists[i])), mk("td", pc(ratio(t.lists[i], t.lists_valid))));
+    tbl.append(tr);
+  });
+  box.append(tbl);
+  if (r.names_note) box.append(mk("p", "Warning: " + r.names_note, "warnbox"));
+  return box;
+}
+$("tmunis").addEventListener("click", ev => {
+  const td = ev.target.closest("td.dt-control");
+  if (!td || !tmTable) return;
+  const row = tmTable.row(td.parentElement);
+  row.child.isShown() ? row.child.hide() : row.child(listsOf(row.data())).show();
+});
 function renderTally() {
   $("hmode").value = $("tmode").value;
   $("tabres").hidden = !T;
@@ -543,6 +580,10 @@ function renderTally() {
     return;
   }
   $("tmeta").textContent = "Model: " + T.model + ". " + T.title + ". Repeat-vote forms are not included.";
+  const muniScope = T.scope === "municipal";
+  $("tscope").hidden = !T.scope_note;
+  $("tscope").textContent = T.scope_note ? "Warning: " + T.scope_note : "";
+  $("tmhint").hidden = !muniScope;
   renderHero();
   const key = $("tmode").value + JSON.stringify(T);
   if (key === tkey) return;  // unchanged: keep the tables (search, sort, page) as they are
@@ -552,16 +593,21 @@ function renderTally() {
   for (const c of cols) { hr.append(mk("th", c.t)); dr.append(mk("td", c.f(c.v(T.overall)))); }
   tbl.append(hr, dr);
   ov.replaceChildren(none ? mk("p", "no analysed forms yet", "mut") : tbl);
-  const sig = $("tmode").value + "\n" + T.names.join("\n");
+  const sig = $("tmode").value + "\n" + T.scope + "\n" + T.names.join("\n");
   if (tmTable && sig === tcols) {
+    const open = new Set();  // keep open list rows across updates
+    tmTable.rows().every(function () { if (this.child.isShown()) open.add(this.data().m); });
     tmTable.clear().rows.add(T.munis).draw(false);
+    tmTable.rows().every(function () { if (open.has(this.data().m) && this.data().nlists) this.child(listsOf(this.data())).show(); });
   } else {
     tcols = sig;
     if (tmTable) { tmTable.destroy(); $("tmunis").replaceChildren(); }
     tmTable = new DataTable("#tmunis", {
-      data: T.munis, paging: false, order: [[0, "asc"]], layout: {topStart: "search", topEnd: null, bottomStart: "info"},
-      columns: cols.map((c, i) => ({title: esc(c.t), type: i ? "num" : "string", className: i ? "dt-right" : "",
-        render: {_: (d, t, r) => { const v = c.v(r); return v == null ? -1 : v; }, display: (d, t, r) => esc(c.f(c.v(r)))}}))});
+      data: T.munis, paging: false, order: [[muniScope ? 1 : 0, "asc"]], layout: {topStart: "search", topEnd: null, bottomStart: "info"},
+      columns: [...(muniScope ? [{data: null, orderable: false, className: "dt-control", defaultContent: "",
+        createdCell: (td, d, r) => { if (!r.nlists) td.classList.remove("dt-control"); }}] : []),
+        ...cols.map((c, i) => ({title: esc(c.t), type: i ? "num" : "string", className: i ? "dt-right" : "",
+        render: {_: (d, t, r) => { const v = c.v(r); return v == null ? -1 : v; }, display: (d, t, r) => esc(c.f(c.v(r)))}}))]});
   }
   if (teTable) {
     teTable.clear().rows.add(T.excluded).draw(false);
@@ -581,7 +627,7 @@ function renderTally() {
 // ---- hero display -------------------------------------------------------------------------
 const OKABE = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"];
 const TOP_LISTS = 8;
-let heroMuni = "", slots = [];
+let heroMuni = "", heroPicked = false, slots = [];
 function put(id, text) {  // set text; flash when it changed
   const el = $(id);
   if (el.textContent === text) return;
@@ -605,9 +651,13 @@ function initHero() {
 }
 function heroMunis() {
   const sel = $("hmuni"), names = T ? T.munis.map(m => m.m) : [];
-  if ([...sel.options].slice(1).map(o => o.value).join("\n") === names.join("\n") && sel.options.length) return;
-  sel.replaceChildren(new Option("All municipalities", ""), ...names.map(n => new Option(n, n)));
+  if ([...sel.options].slice(1).map(o => o.value).join("\n") !== names.join("\n") || !sel.options.length)
+    sel.replaceChildren(new Option("All municipalities", ""), ...names.map(n => new Option(n, n)));
   if (!names.includes(heroMuni)) heroMuni = "";
+  if (!heroPicked && !heroMuni && T && T.scope === "municipal") {  // default: most counted forms
+    const best = T.munis.reduce((a, m) => m.counted > (a ? a.counted : 0) ? m : a, null);
+    if (best) heroMuni = best.m;
+  }
   sel.value = heroMuni;
 }
 function renderHero() {
@@ -618,11 +668,13 @@ function renderHero() {
     ($("tmode").value === "cl" ? "Clean forms only. " : "All counted forms. ") +
     "As of " + epoch(Date.parse(D.built) / 1000).slice(-5) + " (Serbian time)." : "UNOFFICIAL - no results yet.";
   foot.replaceChildren(label, ...(stale ? [mk("span", " Watcher not running: numbers may be out of date.", "stale")] : []));
-  $("heronames").hidden = !(T && T.names_note);
-  if (T && T.names_note) $("heronames").textContent = T.names_note;
-  if (!T) { $("herotitle").textContent = ""; $("heronote").textContent = "No analysed forms yet."; for (const s of slots) s.row.hidden = true; return; }
+  if (!T) { $("heronames").hidden = true; $("herotitle").textContent = ""; $("heronote").textContent = "No analysed forms yet."; for (const s of slots) s.row.hidden = true; return; }
   const r = (heroMuni && T.munis.find(m => m.m === heroMuni)) || T.overall, t = r[$("tmode").value], none = !r.counted;
   const cover = r.stations ? r.counted / r.stations : null;
+  const muniScope = T.scope === "municipal", allMunis = r === T.overall, names = muniScope ? r.names || [] : T.names;
+  const warn = [T.scope_note, muniScope ? r.names_note : T.names_note].filter(Boolean);
+  $("heronames").hidden = !warn.length;
+  $("heronames").textContent = warn.length ? "Warning: " + warn.join(". ") : "";
   put("herotitle", (r === T.overall ? "All municipalities" : r.m) + " - " + T.title);
   put("hv-turn", none ? "-" : pc(t.turnout));
   put("hs-turn", none ? "" : num(t.voted) + " of " + num(t.registered) + " registered");
@@ -633,8 +685,9 @@ function renderHero() {
   put("hv-valid", none ? "-" : num(t.valid));
   put("hs-valid", none || !t.registered ? "" : "valid votes counted");
   $("heronote").textContent = none ? "No forms counted yet - no results to show."
-    : cover != null && cover < 0.1 ? "Very early - few stations counted. Do not read these shares as a result." : "";
-  const rows = none || !t.lists_valid ? [] : T.names.map((n, i) => ({n, i, v: t.lists[i]}))
+    : [muniScope && allMunis ? "Local election - lists differ per municipality; pick a municipality for list results." : "",
+      cover != null && cover < 0.1 ? "Very early - few stations counted. Do not read these shares as a result." : ""].filter(Boolean).join(" ");
+  const rows = none || (muniScope && allMunis) || !t.lists_valid ? [] : names.map((n, i) => ({n, i, v: t.lists[i]}))
     .sort((a, b) => b.v - a.v || a.i - b.i);
   const shown = rows.slice(0, TOP_LISTS), rest = rows.slice(TOP_LISTS);
   if (rest.length) shown.push({n: "Others (" + rest.length + " lists)", i: -1, v: rest.reduce((a, x) => a + x.v, 0)});
@@ -656,7 +709,7 @@ function setHero(on) {
 }
 $("herobtn").onclick = () => setHero(!document.body.classList.contains("hero"));
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") setHero(false); });
-$("hmuni").addEventListener("input", () => { heroMuni = $("hmuni").value; if (T) renderHero(); });
+$("hmuni").addEventListener("input", () => { heroMuni = $("hmuni").value; heroPicked = true; if (T) renderHero(); });
 $("hmode").addEventListener("input", () => { $("tmode").value = $("hmode").value; if (T) renderTally(); });
 initHero();
 if (new URLSearchParams(location.search).get("hero") === "1") setHero(true);
