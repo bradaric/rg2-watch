@@ -514,6 +514,15 @@ def _sgn(v: int) -> str:
     return "." if v == 0 else f"{v:+,}"
 
 
+def _gap(t: dict) -> int | None:
+    return None if t["turnout"] is None else t["voted"] - t["valid"] - t["invalid"]
+
+
+def _fgap(t: dict) -> str:
+    gap = _gap(t)
+    return "-" if gap is None else _sgn(gap)
+
+
 def _list_table(names: list[str], rows: list[dict], key: str, diff: bool = False) -> list[str]:
     if diff:
         body = [[r["m"], *(_sgn(v) for v in r[key]["lists"])] for r in rows]
@@ -553,7 +562,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
              *(num(r[key][k]) for k in ("registered", "voted")), pp(r[key]["turnout"]),
               *(num(r[key][k]) for k in ("ballots_in_box", "invalid", "valid", "outside_voted")),
               *([] if diff else [num(r[key]["vote_forms"]), num(r[key]["withheld_valid"]),
-                                 _sgn(r[key]["voted"] - r[key]["valid"] - r[key]["invalid"])]),
+                                 _fgap(r[key])]),
              *([f"+{r['pair'][key]['in']} / -{r['pair'][key]['out']}"] if diff else [])]
             for r in rows]
     out += _table(head, body)
@@ -588,7 +597,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
                  f"{o['pair_not_contributing']} not paired ({o['corrected_only_vote_forms']} corrected-only eligible, "
                  f"{o['filed_only_vote_forms']} filed-only eligible, {neither} neither)",
                  f"Like-for-like withheld readable valid difference: {_sgn(d['withheld_valid'])}; "
-                 f"unreconciled turnout gap difference: {_sgn(d['voted'] - d['valid'] - d['invalid'])}",
+                 f"unreconciled turnout gap difference: {_fgap(d)}",
                  f"forms with terms present only in corrected/filed view: +{o['in']} / -{o['out']}; unmatched terms "
                  "are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)"]
     else:
@@ -597,7 +606,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
         out += ["", f"{totals['vote_forms']} of {selected} selected forms contributed reconciled vote totals; "
                  f"{totals['withheld_valid']:,} readable valid votes withheld (known partial amount); "
                  f"reported invalid is limited to those contributing forms. Unreconciled turnout gap: "
-                 f"{_sgn(totals['voted'] - totals['valid'] - totals['invalid'])}"]
+                 f"{_fgap(totals)}"]
     if t["corrected"] and view != "filed":
         out += ["", "* corrected by RG-7 decisions (corrected numbers counted):"]
         out += [f"  {c['m']} BM {c['no']}: " + "; ".join(f"RG-7 {d['d']}: {', '.join(d['ch'])}" for d in c["rg7"])

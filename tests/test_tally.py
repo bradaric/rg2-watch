@@ -232,7 +232,9 @@ def test_cli_tally_prints_all_then_clean(tmp_path, capsys):
 
 def test_format_tally_empty():
     s = store()
-    assert "0 form(s) counted" in format_tally(tally(s))
+    text = format_tally(tally(s))
+    assert "0 form(s) counted" in text
+    assert "Unreconciled turnout gap: -" in text
 
 
 def test_hero_markup_labelled_and_safe():
@@ -476,3 +478,4 @@ def test_page_diff_view_uses_paired_numbers_and_explains_unmatched_terms():
     assert "deltaOf(r.pair.all.c, r.pair.all.f)" in html and "terms only in corrected/filed view" in html
     assert "vote-reconciliation eligibility" in html and "deltaOf(r.all, r.fall)" not in html
     assert "pair_selected" in html and "pair_vote_forms" in html and "pair_not_contributing" in html
+    assert "t(r).turnout == null ? null" in html

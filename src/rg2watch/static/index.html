@@ -889,7 +889,7 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come
     ["Turnout" + (dg ? " (pp)" : ""), r => t(r).turnout, p, r => t(r).turnout == null ? "" : (100 * t(r).turnout).toFixed(1)],
     ["In box", r => t(r).ballots_in_box, n], ["Invalid (reconciled forms)", r => t(r).invalid, n],
     ["Reconciled valid", r => t(r).valid, n], ["Outside", r => t(r).outside_voted, n]];
-  const gap = r => t(r).voted - t(r).valid - t(r).invalid;
+  const gap = r => t(r).turnout == null ? null : t(r).voted - t(r).valid - t(r).invalid;
   if (dg) c.push(
     ["Withheld readable valid (difference)", r => t(r).withheld_valid, dnum],
     ["Unreconciled turnout gap (difference)", gap, dnum],
@@ -1112,7 +1112,7 @@ function renderHero() {
     put("hs-forms", num(r.clean) + " clean · " + num(r.excluded) + " flagged");
   }
   put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));
-  const gap = t.voted - t.valid - t.invalid;
+  const gap = t.turnout == null ? null : t.voted - t.valid - t.invalid;
   const noComparableLists = (muniScope && allMunis) || !raw[mode].lists;
   if (none) put("hs-valid", "");
   else if (dg) {

@@ -745,6 +745,31 @@ def test_rg7_vote_reconciliation_change_is_one_sided_in_paired_difference():
     assert "vote-reconciliation eligibility" in text
 
 
+def test_rg7_can_make_corrected_vote_terms_ineligible_while_filed_stays_eligible():
+    s = bstore()
+    station(s, clean_report(), [(rg7([("list:2", 380, 370)]), "2026-10-20T10:00:00Z")])
+    o = tally(s)["overall"]
+    assert o["all"]["valid"] == 0 and o["all"]["withheld_valid"] == 780
+    assert o["fall"]["valid"] == o["fall"]["lists_valid"] == 780
+    p = o["pair"]["all"]
+    assert (p["pair_selected"], p["pair_vote_forms"], p["pair_not_contributing"]) == (1, 0, 1)
+    assert (p["corrected_only_vote_forms"], p["filed_only_vote_forms"]) == (0, 1)
+    assert p["c"]["valid"] == p["f"]["valid"] == 0
+
+
+def test_paired_invalid_is_omitted_when_unreadable_on_one_side_only():
+    s = bstore()
+    station(s, clean_report(), [(rg7(table=[("invalid", 20)]), "2026-10-20T10:00:00Z")],
+            invalid=nf(None, legible=False))
+    o = tally(s)["overall"]
+    assert o["all"]["invalid"] == 20 and o["fall"]["invalid"] == 0
+    p = o["pair"]["all"]
+    assert p["pair_vote_forms"] == 1
+    assert p["c"]["valid"] == p["f"]["valid"] == 780
+    assert p["c"]["lists_valid"] == p["f"]["lists_valid"] == 780
+    assert p["c"]["invalid"] == p["f"]["invalid"] == 0
+
+
 def test_repeated_identical_correction_is_agreement_and_applied_once():
     from rg2watch.rules import rg7_mismatch
     from rg2watch.tally import apply_rg7
