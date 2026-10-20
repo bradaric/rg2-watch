@@ -688,7 +688,7 @@ class Store:
         with self._lock:
             return self._db.execute(
                 "SELECT f.created_at, f.severity, f.rule, f.municipality, f.station_no, f.summary, "
-                "f.alerted_at, d.url FROM findings f JOIN documents d ON d.id=f.document_id "
+                "f.alerted_at, d.url, d.doc_type FROM findings f JOIN documents d ON d.id=f.document_id "
                 "WHERE f.parent=? ORDER BY f.id DESC LIMIT ?", (parent, limit)).fetchall()
 
     def last_alert_at(self, parent: str) -> str | None:

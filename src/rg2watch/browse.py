@@ -6,14 +6,13 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
 
 from .analyze import stored_model
 from .config import Config
 from .models import Doc
 from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
 from .rules import RULE_INFO, change_text, decision_label, decision_sort_key, evaluate_report
-from .status import build_status, to_belgrade
+from .status import _rik_link, build_status, to_belgrade
 from .store import Store, _doc
 from .tally import build_tally
 
@@ -30,11 +29,6 @@ def _ast(d) -> str:
     if s == "failed" and d["analysis_next_at"] is not None:
         return "retrying"
     return {"new": "pending", "running": "pending", "failed": "failed", "done": "done"}.get(s, "off")
-
-
-def _rik_link(url: str, base: str | None) -> str | None:
-    full = urljoin(base + "/", url) if base else url
-    return full if urlsplit(full).scheme in ("http", "https") else None
 
 
 def _opinions(store: Store, docs: dict[int, Doc], arows: list, cfg: Config,
@@ -220,11 +214,12 @@ def default_parent(store: Store, parent: str | None) -> str:
     return els[-1].parent if els else store.latest_document_parent() or ""
 
 
-def write_status(store: Store, out_path: Path, parent: str | None, live: dict | None = None) -> None:
+def write_status(store: Store, out_path: Path, parent: str | None, live: dict | None = None,
+                 cache_dir: Path | None = None) -> None:
     out_dir = Path(out_path).resolve().parent
     parent = default_parent(store, parent)
     out_dir.mkdir(parents=True, exist_ok=True)
-    _write_pair(out_dir, "status", "RG2_STATUS", build_status(store, parent, live))
+    _write_pair(out_dir, "status", "RG2_STATUS", build_status(store, parent, live, cache_dir))
 
 
 def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None = None,
@@ -245,7 +240,7 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
         _atomic(Path(out_path), (STATIC / "index.html").read_bytes())
     _write_pair(out_dir, "data", "RG2_DATA", data)
     if with_status:
-        write_status(store, out_path, parent)
+        write_status(store, out_path, parent, cache_dir=cache_dir)
     log.info("browse page built: %d form(s), %d second opinion(s); data %.2f s, total %.2f s",
              len(data["rows"]), sum(len(r["ops"]) for r in data["rows"]), t1 - t0,
              time.monotonic() - t0)

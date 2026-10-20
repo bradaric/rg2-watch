@@ -1,12 +1,20 @@
 """Snapshot of what the watcher is doing, for the status panel of the browse page."""
+import hashlib
 import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
-from .store import Store
+from .store import RG7_TYPES, Store
 
 RS = ZoneInfo("Europe/Belgrade")
+
+
+def _rik_link(url: str, base: str | None) -> str | None:
+    full = urljoin(base + "/", url) if base else url
+    return full if urlsplit(full).scheme in ("http", "https") else None
 
 
 def to_belgrade(utc_iso: str | None) -> str | None:
@@ -19,7 +27,8 @@ def to_belgrade(utc_iso: str | None) -> str | None:
     return t.astimezone(RS).strftime("%Y-%m-%dT%H:%M")
 
 
-def build_status(store: Store, parent: str, live: dict | None = None) -> dict:
+def build_status(store: Store, parent: str, live: dict | None = None,
+                 cache_dir: Path | None = None) -> dict:
     """`live` (watch process only) holds the in-memory snapshots: watcher, analysis, ntfy, url, only.
     Without it the DB-derived parts are filled and the watcher is reported as not running."""
     live = live or {}
@@ -31,6 +40,15 @@ def build_status(store: Store, parent: str, live: dict | None = None) -> dict:
     a = live.get("analysis")
     queued = ast.get("new", 0) + retrying
     avg = a["avg_s"] if a else None
+    def alert(r) -> list:
+        links = [None, None]
+        if r["doc_type"] in RG7_TYPES:
+            digest = hashlib.sha256(r["url"].encode()).hexdigest()
+            pdf = digest if cache_dir is not None and (Path(cache_dir) / (digest + ".pdf")).is_file() else None
+            links = [pdf, _rik_link(r["url"], e.base_url if e else None)]
+        return [to_belgrade(r["created_at"]), r["severity"], r["rule"], r["municipality"] or "",
+                r["station_no"] or "", r["summary"], r["alerted_at"] is not None, r["url"], *links]
+
     return {
         "ts": round(time.time(), 1), "db": store.name, "watching": "watcher" in live, "parent": parent,
         "title": e.title if e else parent, "url": live.get("url"),
@@ -43,9 +61,7 @@ def build_status(store: Store, parent: str, live: dict | None = None) -> dict:
             "skipped": ast.get("skipped", 0), "paused": a["paused"] if a else None,
             "spend": spend, "cap": a["cap"] if a else None, "avg_s": avg,
             "eta_s": round(queued * avg / a["workers"]) if a and avg and queued else None},
-        "alerts": [[to_belgrade(r["created_at"]), r["severity"], r["rule"], r["municipality"] or "",
-                    r["station_no"] or "", r["summary"], r["alerted_at"] is not None, r["url"]]
-                   for r in store.recent_findings(parent, 20)],
+        "alerts": [alert(r) for r in store.recent_findings(parent, 20)],
         "ntfy": live.get("ntfy"),
     }
 

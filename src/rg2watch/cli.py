@@ -800,7 +800,7 @@ def _run_watch(args, cfg: Config) -> int:
                     print(f"page: {url}", flush=True)
                 live = _live(watcher, pipeline, notifier, url)
                 threads.append(_background("status", stop, STATUS_EVERY_S, lambda: write_status(
-                    store, _browse_path(cfg), parent, live()),
+                    store, _browse_path(cfg), parent, live(), _cache_dir(cfg)),
                     first=lambda: copy_static(_browse_path(cfg).parent)))
                 if cfg.browse_interval_s > 0:
                     opinions: dict = {}  # evaluated second opinions, kept between builds
@@ -856,7 +856,8 @@ def _run_watch(args, cfg: Config) -> int:
                         live = {"ntfy": notifier.status_snapshot(), "url": None}
                         if pipeline is not None:
                             live["analysis"] = pipeline.status_snapshot()
-                        write_status(store, _browse_path(cfg), parent, live)  # no "watcher": stopped
+                        write_status(store, _browse_path(cfg), parent, live,
+                                     _cache_dir(cfg))  # no "watcher": stopped
                         if cfg.browse_interval_s > 0:
                             build_page(store, _browse_path(cfg), _cache_dir(cfg), None, cfg,
                                        cfg.browse_interval_s, False, opinions)

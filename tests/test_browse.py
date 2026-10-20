@@ -143,6 +143,9 @@ def test_rg7_decisions_carry_links_wherever_shown():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert html.count("linksOf(x)") >= 3  # child row, forms-table badges, results list
     assert "row.r7.find(y => y.u === d.u)" in html and "showForm(c.id" in html
+    assert "for (const v of r.r7)" in html and "return [r, v]" in html
+    assert "showForm(r.id" in html
+    assert "x[8]" in html and "x[9]" in html
 
 
 def test_static_files_ship_and_are_copied_only_when_changed(tmp_path):
@@ -277,6 +280,7 @@ def test_status_for_browse_says_watcher_not_running_with_db_counts(tmp_path):
     assert st["analysis"]["on"] is False and st["analysis"]["queued"] == 1
     assert st["alerts"][0][1:3] == ["HIGH", "X9"]
     assert st["alerts"][0][7].startswith(BASE)  # document URL: the panel links to the form
+    assert st["alerts"][0][8:] == [None, None]
     assert (tmp_path / "status.js").read_text().startswith("window.RG2_STATUS = {")
 
 
@@ -330,24 +334,26 @@ def _watch(tmp_path, monkeypatch, interval, ticks, extra=(), run_once=lambda sel
             raise KeyboardInterrupt
 
     monkeypatch.setattr(cli, "build_page", build or (lambda *a: built.append(a)))
-    monkeypatch.setattr(cli, "write_status", lambda *a: built.append(("status",)))
+    monkeypatch.setattr(cli, "write_status", lambda *a, **k: built.append(("status", a, k)))
     monkeypatch.setattr(cli.time, "sleep", fake_sleep)
     monkeypatch.setattr(cli.Watcher, "run_once", run_once)
     assert main(["watch", "--parent", P, "--db", str(tmp_path / "w.sqlite"),
                  "--config", str(cfg), "--serve-port", "0", *extra]) == 0
     real_sleep(0.2)  # the daemon threads' first runs
-    return [b for b in built if b != ("status",)], built
+    return [b for b in built if not (isinstance(b, tuple) and b[0] == "status")], built
 
 
 def test_watch_builds_in_background_at_start_and_status_is_written(tmp_path, monkeypatch):
     pages, everything = _watch(tmp_path, monkeypatch, 120, 3)
-    assert len(pages) == 1 and ("status",) in everything
+    status = [x for x in everything if x[0] == "status"]
+    assert len(pages) == 1 and status
+    assert status[0][1][4] == tmp_path / "pdfs"
     assert pages[0][3] is None and pages[0][6] is False  # all elections' rows; the status thread owns status
 
 
 def test_watch_browse_off_with_zero(tmp_path, monkeypatch):
     pages, everything = _watch(tmp_path, monkeypatch, 0, 3)
-    assert pages == [] and ("status",) in everything
+    assert pages == [] and any(x[0] == "status" for x in everything)
 
 
 def test_watch_once_builds_and_serves_nothing(tmp_path, monkeypatch):
@@ -573,6 +579,7 @@ def test_page_banner_on_status_data_db_mismatch():
 def test_alert_links_are_built_from_url_in_status_and_data():
     html = (STATIC / "index.html").read_text()
     assert "alertForm(x[7])" in html and 'link("PDF", loc)' in html and "showForm(r.id" in html
+    assert "v ? v.pdf : x[8]" in html and "v ? v.rik : x[9]" in html
 
 
 def test_browse_leaves_a_live_watchers_status_alone(tmp_path):

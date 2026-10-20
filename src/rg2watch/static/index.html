@@ -376,7 +376,10 @@ function setTitle() {
 }
 function alertForm(url) {  // [row, version] of the form an alert is about (from the data), or null
   if (!url) return null;
-  for (const r of D.rows) for (const v of [r, ...r.v]) if (v.u === url) return [r, v];
+  for (const r of D.rows) {
+    for (const v of [r, ...r.v]) if (v.u === url) return [r, v];
+    for (const v of r.r7) if (v.u === url) return [r, v];
+  }
   return null;
 }
 function renderStatus() {
@@ -429,11 +432,12 @@ function renderStatus() {
     rc.append(ruleEl(x[2]));
     sv.append(mk("span", x[1], "b " + (SEV.includes(x[1]) ? x[1] : "")));
     tr.append(mk("td", when(x[0]), "mut"), sv, rc, mk("td", x[3] + (x[4] ? " BM " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
-    const hit = alertForm(x[7]), lk = mk("td", null, "lk");
+    const hit = alertForm(x[7]), v = hit && hit[1], lk = mk("td", null, "lk");
+    const loc = localHref(v ? v.pdf : x[8]), rik = rikHref(v ? v.rik : x[9]);
+    if (loc) lk.append(link("PDF", loc));
+    if (rik) lk.append(link("RIK", rik));
     if (hit) {
-      const [r, v] = hit, loc = localHref(v.pdf), rik = rikHref(v.rik);
-      if (loc) lk.append(link("PDF", loc));
-      if (rik) lk.append(link("RIK", rik));
+      const r = hit[0];
       const b = mk("button", "show", "chip"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); lk.append(b);
     }
     tr.append(lk);

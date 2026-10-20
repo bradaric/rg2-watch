@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ from rg2watch.models import Event
 from rg2watch.pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from rg2watch.rules import RULE_INFO, evaluate_rg7
 from rg2watch.store import Store
+from rg2watch.status import build_status
 from rg2watch.tally import build_tally
 from test_browse import P as BP
 from test_browse import add, doc as bdoc, store as bstore
@@ -271,6 +273,53 @@ def test_page_data_marks_corrections(tmp_path):
         ("14/10/2026", ["10.2 180->178", "10.4 177->175", "list:1 146->144"]), ("21/10/2026", None)]
     assert r7[0]["f"] == [["R1", "HIGH", "RG-7 corrected x"]] and r7[0]["rik"].endswith("rg7-1-0.pdf")
     assert "R1" in data["rules"]
+
+
+def test_rg7_alert_links_nested_orphan_and_other_types(tmp_path):
+    s = bstore()
+    station(s, clean_report(), [(NEGOTIN, "2026-10-20T10:00:00Z")], no="1", **NEG_RG2)
+    nested_url = "/e/rg7-1-0.pdf"
+    nested = d7("1", url=nested_url)
+    s.add_finding(BP, Finding("R1", "HIGH", nested, "nested"), nested_url)
+
+    orphan_url = "/e/orphan.pdf"
+    orphan = d7("99", url=orphan_url)
+    add(s, orphan)
+    s.add_finding(BP, Finding("R1", "HIGH", orphan, "orphan"), orphan_url)
+    unsafe = d7("98", url="javascript:alert(1)")
+    add(s, unsafe)
+    s.add_finding(BP, Finding("R1", "HIGH", unsafe, "unsafe"), unsafe.url)
+    rg8 = d7("97", dt=8, url="/e/rg8.pdf")
+    add(s, rg8)
+    s.add_finding(BP, Finding("X8", "LOW", rg8, "rg8"), rg8.url)
+    rg2 = bdoc("/e/rg2-plain.pdf", no="96")
+    add(s, rg2)
+    s.add_finding(BP, Finding("X2", "LOW", rg2, "rg2"), rg2.url)
+
+    tmp_path.mkdir(exist_ok=True)
+    cached = {}
+    for url in (nested_url, orphan_url, rg8.url):
+        digest = hashlib.sha256(url.encode()).hexdigest()
+        (tmp_path / (digest + ".pdf")).write_bytes(b"%PDF")
+        cached[url] = digest
+
+    data = build_data(s, tmp_path)
+    nested_row = next(r for r in data["rows"] if r["no"] == "1")
+    decision = next(x for x in nested_row["r7"] if x["u"] == nested_url)
+    assert decision["rik"] == "https://rik.example/e/rg7-1-0.pdf"
+    assert decision["pdf"] == cached[nested_url]
+    assert not any(x["u"] in (orphan_url, unsafe.url) for r in data["rows"] for x in r["r7"])
+
+    alerts = {x[5]: x for x in build_status(s, BP, cache_dir=tmp_path)["alerts"]}
+    assert alerts["nested"][7:] == [nested_url, cached[nested_url], "https://rik.example/e/rg7-1-0.pdf"]
+    assert alerts["orphan"][7:] == [orphan_url, cached[orphan_url], "https://rik.example/e/orphan.pdf"]
+    assert alerts["unsafe"][8:] == [None, None]
+    assert alerts["rg8"][8:] == [None, None]
+    assert alerts["rg2"][8:] == [None, None] and len(alerts["rg2"]) == 10
+
+    (tmp_path / (cached[orphan_url] + ".pdf")).unlink()
+    alerts = {x[5]: x for x in build_status(s, BP, cache_dir=tmp_path)["alerts"]}
+    assert alerts["orphan"][8] is None
 
 
 # pipeline ---------------------------------------------------------------------------------

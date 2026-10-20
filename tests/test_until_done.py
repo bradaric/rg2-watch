@@ -53,15 +53,20 @@ def test_exits_after_full_passes_without_analysis(rehearsal, capsys):
 
 def test_final_status_says_stopped_and_digest_flushed(rehearsal, monkeypatch):
     argv, db = rehearsal
-    calls = []
+    calls, status_calls = [], []
     real = cli._handlers
+    real_write_status = cli.write_status
 
     def handlers(*a):
         on_events, deliver = real(*a)
         return on_events, lambda flush=False, **kw: (calls.append(flush), deliver(flush, **kw))[1]
     monkeypatch.setattr(cli, "_handlers", handlers)
+    monkeypatch.setattr(cli, "write_status", lambda *a, **kw: (
+        status_calls.append((a, kw)), real_write_status(*a, **kw))[1])
     assert main([*argv, "--until-done"]) == 0
     assert calls[-1] is True and not any(calls[:-1])
+    assert len(status_calls) >= 2
+    assert all(a[4] == db.parent / "pdfs" for a, _ in status_calls)
     status = next(db.parent.rglob("status.json")).read_text()
     assert '"watching": false' in status
 
