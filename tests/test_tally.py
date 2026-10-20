@@ -287,6 +287,8 @@ def test_hero_markup_labelled_and_safe():
     assert "оригинални бројеви (RG-2)" in html
     assert "разлика (са исправкама − оригинални)" in html
     assert "#hs-valid{white-space:pre-line}" in html
+    assert "#hs-forms{white-space:pre-line}" in html
+    assert "Од оних за проверу, прихваћено после прегледа: " in html
     assert "У збиру: " in html
     assert "Ван заједничког збира: " in html
     assert "Неусаглашена разлика излазности" in html
@@ -619,6 +621,9 @@ def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
     hero = html[html.index("const OKABE") : html.index('$("herobtn").onclick')]
+    assert "function paintHero" in html
+    paint = html[html.index("function paintHero"):html.index("// ---- table")]
+    refresh = html[html.index("function rowOf"):html.index("function escalatedCsv")]
     script = r'''
 const assert = require("assert");
 const els = {};
@@ -626,18 +631,37 @@ function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "",
   classList: {remove() {}, add() {}, toggle() {}}, append(...x) { this.children.push(...x); },
   replaceChildren(...x) { this.children = x; }, get options() { return this.children; }}; }
 const $ = el;
-function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}}; }
+function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}, append(...nodes) { this.children = this.children || []; this.children.push(...nodes); }}; }
 function epoch() { return "20:00"; }
 function shortTitle(x) { return x; }
 function Option(text, value) { this.textContent = text; this.value = value; }
 const STALE_S = 999999;
-let S = null, D = {built: "2026-10-20T18:00:00Z"};
+let S = null, D = {built: "2026-10-20T18:00:00Z", rows: []};
 let bodyHero = false, selectedTab = "";
-const document = {body: {classList: {toggle(name, on) { if (name === "hero") bodyHero = on; }, contains() { return bodyHero; }}}};
+const document = {activeElement: null, body: {classList: {toggle(name, on) { if (name === "hero") bodyHero = on; }, contains() { return bodyHero; }}}};
+let REV = null;
+const LOCAL = {};
+function rvOf(v) {
+  return v.u in LOCAL ? LOCAL[v.u] : REV ? REV[v.u] || null : v.rv || null;
+}
+const HTTP = true;
+let revKey = "";
+let table = null;
+let rows = [];
+function setTitle() {}
+function card() {}
+function ago() {}
+function dur() {}
+function ruleEl() {}
+function when() {}
+function reviewCounts() {}
+function alertForm() {}
+function localHref() {}
+function rikHref() {}
 function setTab(name) { selectedTab = name; }
 els.tview = {value: "corrected"};
 els.tmode = {value: "all"};
-''' + helpers + hero + r'''
+''' + helpers + hero + paint + refresh + r'''
 for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, nm: {}, fill: {style: {}}, val: {}});
 function totals(valid, lists) {
   const o = {registered: 1000, voted: 100, turnout: .1, ballots_in_box: 100, invalid: 0,
@@ -706,7 +730,10 @@ els.tview.value = "corrected";
 els.tmode.value = "all";
 renderHero();
 assert(els.herotitle.textContent.endsWith(" — са исправкама (RG-7)"));
-assert.equal(els["hs-forms"].textContent, "10 без уочених проблема · 5 за проверу");
+assert.deepEqual(els["hs-forms"].textContent.split("\n"), [
+  "10 без уочених проблема · 5 за проверу",
+  "Од оних за проверу, прихваћено после прегледа: 0",
+]);
 assert.deepEqual(els["hs-valid"].textContent.split("\n"), [
   "Неважећи: 9",
   "Није урачунато: 11 важећих гласова — подаци по листама нису потпуни или усаглашени",
@@ -719,7 +746,10 @@ for (const absent of ["opaque-model-v1", "Сви обрађени записни
   assert(!els.herofoot.children[0].includes(absent));
 els.tmode.value = "cl";
 renderHero();
-assert.equal(els["hs-forms"].textContent, "без уочених проблема · 5 за проверу изостављено");
+assert.deepEqual(els["hs-forms"].textContent.split("\n"), [
+  "без уочених проблема · 5 за проверу изостављено",
+  "Од оних за проверу, прихваћено после прегледа: 0",
+]);
 assert(els["hs-valid"].textContent.split("\n").includes("У збиру: 6 од 10 записника"));
 
 els.tview.value = "filed";
@@ -727,13 +757,108 @@ r.fclean = 8; r.fexcluded = 7; r.fcl = {...r.fcl}; r.fall.vote_forms = 4; r.fcl.
 els.tmode.value = "all";
 renderHero();
 assert.equal(els.herotitle.textContent, "Све општине — Избори Ћирилица");
-assert.equal(els["hs-forms"].textContent, "8 без уочених проблема · 7 за проверу");
+assert.deepEqual(els["hs-forms"].textContent.split("\n"), [
+  "8 без уочених проблема · 7 за проверу",
+  "Од оних за проверу, прихваћено после прегледа: 0",
+]);
 assert(els["hs-valid"].textContent.split("\n").includes("У збиру: 4 од 15 записника"));
 els.tmode.value = "cl";
 renderHero();
-assert.equal(els["hs-forms"].textContent, "без уочених проблема · 7 за проверу изостављено");
+assert.deepEqual(els["hs-forms"].textContent.split("\n"), [
+  "без уочених проблема · 7 за проверу изостављено",
+  "Од оних за проверу, прихваћено после прегледа: 0",
+]);
 assert(els["hs-valid"].textContent.split("\n").includes("У збиру: 3 од 8 записника"));
 assert(!els.herofoot.children[0].includes("оригинални"));
+
+const acceptedAlpha = row([60, 40], [55, 45]);
+acceptedAlpha.excluded = 5;
+const acceptedBeta = row([60, 40], [55, 45]);
+acceptedBeta.m = "Beta";
+acceptedBeta.excluded = 5;
+const acceptedOverall = row([60, 40], [55, 45]);
+acceptedOverall.m = "(all)";
+acceptedOverall.excluded = 5;
+setData(acceptedOverall);
+T.munis = [acceptedAlpha, acceptedBeta];
+T.excluded = [
+  {id: 1, m: "Alpha"}, {id: 2, m: "Alpha"}, {id: 4, m: "Alpha"}, {id: 3, m: "Beta"}
+];
+T.excluded_filed = [
+  {id: 1, m: "Alpha"}, {id: 5, m: "Alpha"}
+];
+D.rows = [
+  {id: 1, u: "u1", rv: {v: "ok"}, v: [{u: "old1", rv: {v: "escalate"}}]},
+  {id: 2, u: "u2", rv: {v: "escalate"}, v: []},
+  {id: 3, u: "u3", rv: {v: "ok"}, v: []},
+  {id: 4, u: "u4", rv: null, v: [{u: "old4", rv: {v: "ok"}}]},
+  {id: 5, u: "u5", rv: {v: "ok"}, v: []},
+  {id: 9, u: "u9", rv: {v: "ok"}, v: []}
+];
+const smallExcluded = T.excluded, smallFiled = T.excluded_filed, smallRows = D.rows;
+heroPicked = true;
+heroMuni = "";
+els.tview.value = "corrected";
+els.tmode.value = "all";
+renderHero();
+assert.deepEqual(els["hs-forms"].textContent.split("\n").slice(1), ["Од оних за проверу, прихваћено после прегледа: 2"]);
+heroMuni = "Alpha";
+els.tmode.value = "cl";
+renderHero();
+assert(els["hs-forms"].textContent.split("\n")[0].startsWith("без уочених проблема ·"));
+assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 1");
+els.tmode.value = "all";
+renderHero();
+assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 1");
+els.tview.value = "filed";
+renderHero();
+assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 2");
+REV = {u1: {v: "unsure"}};
+els.tview.value = "corrected";
+renderHero();
+assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 0");
+LOCAL.u4 = {v: "ok", pending: true};
+renderHero();
+assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 1");
+delete LOCAL.u4;
+renderHero();
+assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 0");
+const bulkExcluded = [], bulkRows = [];
+for (let i = 0; i < 1000; i++) {
+  bulkExcluded.push({id: i, m: "Alpha"});
+  bulkRows.push({id: i, u: "bulk" + i, rv: {v: "ok"}, v: []});
+}
+T.excluded = bulkExcluded;
+D.rows = bulkRows;
+REV = null;
+els.tview.value = "corrected";
+renderHero();
+assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 1,000");
+T.excluded = smallExcluded;
+T.excluded_filed = smallFiled;
+D.rows = smallRows;
+els.tview.value = "diff";
+renderHero();
+assert.equal(els["hs-forms"].textContent, "промене броја: без уочених проблема / за проверу");
+assert(!els["hs-forms"].textContent.includes("прихваћено"));
+els.tview.value = "corrected";
+heroMuni = "Alpha";
+heroPicked = true;
+T.excluded = [{id: 404, m: "Alpha"}];
+D.rows = [{id: 1, u: "u1", rv: {v: "ok"}, v: []}];
+renderHero();
+assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 0");
+delete T.excluded;
+renderHero();
+assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 0");
+delete T.excluded_filed;
+D.rows = [];
+REV = null;
+for (const k of Object.keys(LOCAL)) delete LOCAL[k];
+heroMuni = "";
+heroPicked = false;
+els.tview.value = "corrected";
+els.tmode.value = "all";
 
 r = row([60, 40], null);
 setData(r);
@@ -789,6 +914,7 @@ els.tmode.value = "all";
 renderHero();
 assert(els.herotitle.textContent.endsWith(" — РАЗЛИКА (са исправкама RG-7 − оригинални RG-2)"));
 assert.equal(els["hs-forms"].textContent, "промене броја: без уочених проблема / за проверу");
+assert(!els["hs-forms"].textContent.includes("прихваћено"));
 assert.deepEqual(els["hs-valid"].textContent.split("\n"), [
   "Разлика неважећих: +7",
   "У оба приказа у збиру: 5 од 13 упарених записника",
@@ -927,7 +1053,126 @@ setHero(true);
 assert(bodyHero && selectedTab === "results" && els.herobtn.textContent === "Излаз (Esc)");
 setHero(false);
 assert(!bodyHero && els.herobtn.textContent === "Режим презентације");
-console.log(JSON.stringify({ok: true}));
+
+async function flushTurns() {
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+}
+function acceptedCaption() {
+  return els["hs-forms"].textContent.split("\n")[1];
+}
+function installReviewTable(id) {
+  const api = {
+    data() { return {id}; },
+    index() { return 0; },
+    child: {isShown() { return false; }}
+  };
+  table = {
+    rows() { return {every(fn) { fn.call(api); }}; },
+    cell() { return {invalidate() {}}; },
+    cells() { return {invalidate() {}}; },
+    draw() {}
+  };
+}
+async function refreshCases() {
+  const id = 7, url = "u-current";
+  const base = row([60, 40], [60, 40]);
+  base.counted = 15; base.clean = 10; base.excluded = 5;
+  setData(base);
+  T.excluded = [{id, m: "Alpha"}];
+  T.excluded_filed = [{id, m: "Alpha"}];
+  D.rows = [{id, u: url, rv: null, v: []}];
+  heroMuni = "";
+  heroPicked = true;
+  els.tview.value = "corrected";
+  els.tmode.value = "all";
+  S = null;
+  REV = null;
+  revKey = "";
+  for (const k of Object.keys(LOCAL)) delete LOCAL[k];
+  rows = [];
+  installReviewTable(id);
+  const realRenderHero = renderHero;
+  let heroPaints = 0;
+  renderHero = function () { heroPaints++; return realRenderHero(); };
+
+  let gate;
+  fetch = () => new Promise((resolve, reject) => { gate = {resolve, reject}; });
+  heroPaints = 0;
+  submitReview({id, u: url}, "ok", "", null);
+  assert.equal(heroPaints, 1, "submit paints the hero once before fetch settles");
+  assert.equal(LOCAL[url].pending, true);
+  assert.equal(acceptedCaption(), "Од оних за проверу, прихваћено после прегледа: 1");
+
+  gate.reject(new Error("save failed"));
+  await flushTurns();
+  assert.equal(heroPaints, 2, "failed save paints the hero once more");
+  assert.equal(url in LOCAL, false);
+  assert.equal(acceptedCaption(), "Од оних за проверу, прихваћено после прегледа: 0");
+
+  table = null;
+  const body = {[url]: {v: "ok"}};
+  fetch = () => Promise.resolve({ok: true, json: () => Promise.resolve(body)});
+  heroPaints = 0;
+  loadReviews();
+  await flushTurns();
+  assert.equal(heroPaints, 1, "changed poll paints once when the table is missing");
+  assert.equal(acceptedCaption(), "Од оних за проверу, прихваћено после прегледа: 1");
+  heroPaints = 0;
+  loadReviews();
+  await flushTurns();
+  assert.equal(heroPaints, 0, "unchanged poll does not paint");
+
+  const id2 = 8, url2 = "u-pending";
+  T.excluded = [{id, m: "Alpha"}, {id: id2, m: "Alpha"}];
+  D.rows = [{id, u: url, rv: null, v: []}, {id: id2, u: url2, rv: null, v: []}];
+  LOCAL[url2] = {v: "ok", pending: true, t: 0};
+  loadReviews();
+  await flushTurns();
+  assert.equal(LOCAL[url2].pending, true, "poll must not delete a pending verdict");
+  assert.equal(acceptedCaption(), "Од оних за проверу, прихваћено после прегледа: 2");
+
+  for (const k of Object.keys(LOCAL)) delete LOCAL[k];
+  REV = null;
+  revKey = "";
+  T.excluded = [{id, m: "Alpha"}];
+  D.rows = [{id, u: url, rv: null, v: []}];
+  S = {
+    ts: Date.now() / 1000, watching: true, db: "election.sqlite",
+    watcher: null,
+    docs: {rg2_seen: 1, stations: 1, rg2_rik: null, new10: 0, new60: 0, replaced: 0, removed: 0, rg7: null, rare: {}},
+    analysis: {on: false, paused: null, done: 0, failed: 0, spend: 0},
+    ntfy: null, alerts: []
+  };
+  D.db = S.db;
+  rows = [];
+  installReviewTable(id);
+  let settle;
+  fetch = () => new Promise((resolve, reject) => { settle = {resolve, reject}; });
+  heroPaints = 0;
+  submitReview({id, u: url}, "ok", "", null);
+  assert.equal(heroPaints, 1, "status-present submit paints once");
+  settle.reject(new Error("unused"));
+  await flushTurns();
+
+  table = null;
+  for (const k of Object.keys(LOCAL)) delete LOCAL[k];
+  REV = null;
+  revKey = "";
+  fetch = () => Promise.resolve({ok: true, json: () => Promise.resolve({[url]: {v: "ok"}})});
+  heroPaints = 0;
+  loadReviews();
+  await flushTurns();
+  assert.equal(heroPaints, 1, "status-present changed poll paints once, even without a table");
+}
+(async () => {
+  try {
+    await refreshCases();
+    console.log(JSON.stringify({ok: true}));
+  } catch (e) {
+    console.error(e);
+    process.exit(1);
+  }
+})();
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
