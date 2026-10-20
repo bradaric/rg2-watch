@@ -208,7 +208,8 @@ def reasons(ex: dict, dis: list[dict], rows: list[int]) -> list[str]:
 
 
 def _acc(nlists: int) -> dict:
-    return {**{k: 0 for k in COUNTED}, "lists": [0] * nlists, "lv": 0, "tv": 0, "tr": 0}
+    return {**{k: 0 for k in COUNTED}, "vote_forms": 0, "withheld_valid": 0,
+            "lists": [0] * nlists, "lv": 0, "tv": 0, "tr": 0}
 
 
 def _contrib(ex: dict, rows: list[int]) -> dict:
@@ -216,12 +217,20 @@ def _contrib(ex: dict, rows: list[int]) -> dict:
     are known, so ratios share a denominator: registered and voted ("rv") come from forms with both,
     list votes plus valid ("lists") from forms with every list row (of the expected set) and valid."""
     n = ex["n"]
-    c = {k: n[k] for k in ("ballots_in_box", "invalid", "valid", "outside_voted") if n[k] is not None}
+    c = {k: n[k] for k in ("ballots_in_box", "outside_voted") if n[k] is not None}
     if n["voted"] is not None and n["registered"] is not None:
         c["rv"] = (n["registered"], n["voted"])
     vals = [ex["l"].get(r) for r in rows]
-    if sorted(ex["l"]) == rows and rows and None not in vals and n["valid"] is not None:
+    eligible = (bool(rows) and sorted(ex["l"]) == rows and None not in vals
+                and n["valid"] is not None and sum(vals) == n["valid"])
+    if eligible:
+        c["valid"] = n["valid"]
         c["lists"] = (vals, n["valid"])
+        c["vote_forms"] = 1
+        if n["invalid"] is not None:
+            c["invalid"] = n["invalid"]
+    elif n["valid"] is not None:
+        c["withheld_valid"] = n["valid"]
     return c
 
 
@@ -244,8 +253,36 @@ def _add(acc: dict, ex: dict, rows: list[int]) -> None:
 
 
 def _tot(acc: dict) -> dict:
-    return {**{k: acc[k] for k in COUNTED}, "lists": acc["lists"], "lists_valid": acc["lv"],
+    return {**{k: acc[k] for k in COUNTED},
+            **{k: acc[k] for k in ("vote_forms", "withheld_valid")},
+            "lists": acc["lists"], "lists_valid": acc["lv"],
             "turnout": acc["voted"] / acc["registered"] if acc["registered"] else None}
+
+
+def _pair_acc(nlists: int) -> dict:
+    return {"c": _acc(nlists), "f": _acc(nlists), "in": 0, "out": 0,
+            "pair_selected": 0, "pair_vote_forms": 0,
+            "corrected_only_vote_forms": 0, "filed_only_vote_forms": 0}
+
+
+def _paired_terms(cc: dict, cf: dict) -> set[str]:
+    """Terms comparable on both sides, keeping reconciled vote terms atomic."""
+    both = cc.keys() & cf.keys()
+    vote_terms = {"valid", "lists", "vote_forms"}
+    if not vote_terms <= both:
+        both -= vote_terms | {"invalid"}
+    return both
+
+
+def _pair_tot(p: dict) -> dict:
+    missing = p["pair_selected"] - p["pair_vote_forms"]
+    assert p["pair_vote_forms"] <= p["pair_selected"]
+    assert p["corrected_only_vote_forms"] + p["filed_only_vote_forms"] <= missing
+    return {"c": _tot(p["c"]), "f": _tot(p["f"]), "in": p["in"], "out": p["out"],
+            "pair_selected": p["pair_selected"], "pair_vote_forms": p["pair_vote_forms"],
+            "pair_not_contributing": missing,
+            "corrected_only_vote_forms": p["corrected_only_vote_forms"],
+            "filed_only_vote_forms": p["filed_only_vote_forms"]}
 
 
 def expected_rows(exs: list[dict]) -> list[int]:
@@ -371,7 +408,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     nl = len(rows) if national else 0
     overall = {k: _acc(nl) for k in ("all", "cl", "fall", "fcl")}  # f*: as filed on the RG-2s
     # like-for-like difference: each term only over the stations present in it in BOTH views
-    opair = {k: {"c": _acc(nl), "f": _acc(nl), "in": 0, "out": 0} for k in ("all", "cl")}
+    opair = {k: _pair_acc(nl) for k in ("all", "cl")}
     counts = {"stations": 0, "counted": 0, "clean": 0, "unanalysed": 0}
     munis = []
     for name in names:
@@ -380,17 +417,24 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         mixed = not national and name == UNKNOWN_MUNI
         mrows = rows if national else [] if mixed else rows_of.get(name, [])
         acc = {k: _acc(len(mrows)) for k in overall}
-        pair = {k: {"c": _acc(len(mrows)), "f": _acc(len(mrows)), "in": 0, "out": 0} for k in opair}
+        pair = {k: _pair_acc(len(mrows)) for k in opair}
         for f in mine:
             filed = as_filed(f["ex"])
             for key, take_c, take_f in (("all", True, True), ("cl", not f["why"], not f["why_f"])):
                 cc = _contrib(f["ex"], mrows) if take_c else {}
                 cf = _contrib(filed, mrows) if take_f else {}
-                both = cc.keys() & cf.keys()
+                both = _paired_terms(cc, cf)
                 _put(pair[key]["c"], cc, both)
                 _put(pair[key]["f"], cf, both)
                 _put(opair[key]["c"], cc, both if national else both - {"lists"})
                 _put(opair[key]["f"], cf, both if national else both - {"lists"})
+                if take_c and take_f:
+                    c_vote, f_vote = "vote_forms" in cc, "vote_forms" in cf
+                    for p in (pair[key], opair[key]):
+                        p["pair_selected"] += 1
+                        p["pair_vote_forms"] += int(c_vote and f_vote)
+                        p["corrected_only_vote_forms"] += int(c_vote and not f_vote)
+                        p["filed_only_vote_forms"] += int(f_vote and not c_vote)
                 joined, left = int(bool(cc.keys() - cf.keys())), int(bool(cf.keys() - cc.keys()))
                 pair[key]["in"] += joined
                 pair[key]["out"] += left
@@ -399,15 +443,15 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             for key, take, ex in (("all", True, f["ex"]), ("cl", not f["why"], f["ex"]),
                                   ("fall", True, as_filed(f["ex"])), ("fcl", not f["why_f"], as_filed(f["ex"]))):
                 if take:
-                    _add(acc[key], ex, mrows)
-                    _add(overall[key], ex, rows if national else [])
+                    contribution = _contrib(ex, mrows)
+                    _put(acc[key], contribution)
+                    _put(overall[key], contribution, None if national else contribution.keys() - {"lists"})
         row = {"m": name, "stations": stations.get(name, 0), "counted": len(mine),
                "corrected": sum(1 for f in mine if f["ex"]["rg7"]),
                "clean": sum(1 for f in mine if not f["why"]), "unanalysed": unanalysed.get(name, 0),
                "fclean": sum(1 for f in mine if not f["why_f"]),
                **{k: _tot(acc[k]) for k in acc},
-               "pair": {k: {"c": _tot(p["c"]), "f": _tot(p["f"]), "in": p["in"], "out": p["out"]}
-                        for k, p in pair.items()}}
+                "pair": {k: _pair_tot(p) for k, p in pair.items()}}
         if mixed:
             row.update({"nlists": 0, "names": [], "names_note": UNKNOWN_MUNI_NOTE})
             for key in acc:
@@ -423,8 +467,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         munis.append(row)
     total = {"m": "(all)", **counts, "corrected": sum(r["corrected"] for r in munis), "fclean": sum(r["fclean"] for r in munis),
              **{k: _tot(overall[k]) for k in overall},
-             "pair": {k: {"c": _tot(p["c"]), "f": _tot(p["f"]), "in": p["in"], "out": p["out"]}
-                      for k, p in opair.items()}}
+              "pair": {k: _pair_tot(p) for k, p in opair.items()}}
     if not national:
         for key in overall:
             del total[key]["lists"], total[key]["lists_valid"]
@@ -459,6 +502,7 @@ def _table(head: list[str], rows: list[list[str]]) -> list[str]:
 def _delta(t: dict, f: dict) -> dict:
     """corrected - as filed, for one totals block (turnout in percentage points)."""
     out = {k: t[k] - f[k] for k in COUNTED}
+    out.update({k: t[k] - f[k] for k in ("vote_forms", "withheld_valid")})
     out["turnout"] = None if t["turnout"] is None or f["turnout"] is None else t["turnout"] - f["turnout"]
     if "lists" in t:
         out["lists"] = [a - b for a, b in zip(t["lists"], f["lists"])]
@@ -497,21 +541,25 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
            f"{t['title']} ({t['parent']}): "
            + ("all counted forms" if all_forms else "clean forms only (leave out flagged)") + "; numbers " + label, ""]
     head = ["municipality", "stations", "counted", "clean", "flagged", "cover", "registered", "voted",
-            "turnout", "in box", "invalid", "valid", "outside"]
+            "turnout", "in box", "invalid*", "reconciled valid", "outside"]
+    if not diff:
+        head += ["vote forms", "withheld valid", "gap"]
     if diff:
-        head.append("newly counted/removed")
+        head.append("terms corrected-only/filed-only")
     pp = (lambda v: "-" if v is None else f"{v * 100:+.1f}") if diff else _pct
     num = (lambda v: _sgn(v)) if diff else (lambda v: f"{v:,}")
     body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if r["corrected"] and view != "filed" else ""), str(r["clean"]), str(r["excluded"]),
              _pct(r["counted"] / r["stations"] if r["stations"] else None),
              *(num(r[key][k]) for k in ("registered", "voted")), pp(r[key]["turnout"]),
-             *(num(r[key][k]) for k in ("ballots_in_box", "invalid", "valid", "outside_voted")),
+              *(num(r[key][k]) for k in ("ballots_in_box", "invalid", "valid", "outside_voted")),
+              *([] if diff else [num(r[key]["vote_forms"]), num(r[key]["withheld_valid"]),
+                                 _sgn(r[key]["voted"] - r[key]["valid"] - r[key]["invalid"])]),
              *([f"+{r['pair'][key]['in']} / -{r['pair'][key]['out']}"] if diff else [])]
             for r in rows]
     out += _table(head, body)
     if t["scope"] == "national":
         if t["nlists"]:
-            out += ["", "votes per list (share of valid votes)"]
+            out += ["", "votes per list (share of reconciled valid votes)"]
             out += _list_table(t["names"], rows, key, diff)
         if t["names_note"]:
             out += ["", "warning: " + t["names_note"]]
@@ -520,7 +568,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
             out += ["", "warning: " + t["scope_note"]]
         for r in t["munis"]:
             if r["nlists"]:
-                out += ["", f"{r['m']}: votes per list (share of valid votes)"]
+                out += ["", f"{r['m']}: votes per list (share of reconciled valid votes)"]
                 out += _list_table(r["names"], [{**r, key: _delta(r["pair"][key]["c"], r["pair"][key]["f"])} if diff else r],
                                    key, diff)
                 if r["names_note"]:
@@ -533,8 +581,23 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
             f"{o['excluded']} flagged, {pending} not analysed by {t['model']}"]
     if diff:
         o = t["overall"]["pair"][key]
-        out += ["", f"stations newly counted: +{o['in']}, removed: -{o['out']} (a correction made a number readable or "
-                "changed a form's clean/flagged status; they are left out of the differences above)"]
+        neither = o["pair_not_contributing"] - o["corrected_only_vote_forms"] - o["filed_only_vote_forms"]
+        d = _delta(o["c"], o["f"])
+        out += ["", f"{o['pair_vote_forms']} of {o['pair_selected']} forms selected in both views contributed to "
+                 "compared vote totals; "
+                 f"{o['pair_not_contributing']} not paired ({o['corrected_only_vote_forms']} corrected-only eligible, "
+                 f"{o['filed_only_vote_forms']} filed-only eligible, {neither} neither)",
+                 f"Like-for-like withheld readable valid difference: {_sgn(d['withheld_valid'])}; "
+                 f"unreconciled turnout gap difference: {_sgn(d['voted'] - d['valid'] - d['invalid'])}",
+                 f"forms with terms present only in corrected/filed view: +{o['in']} / -{o['out']}; unmatched terms "
+                 "are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)"]
+    else:
+        totals = o[key]
+        selected = o["counted"] if all_forms else o["clean"]
+        out += ["", f"{totals['vote_forms']} of {selected} selected forms contributed reconciled vote totals; "
+                 f"{totals['withheld_valid']:,} readable valid votes withheld (known partial amount); "
+                 f"reported invalid is limited to those contributing forms. Unreconciled turnout gap: "
+                 f"{_sgn(totals['voted'] - totals['valid'] - totals['invalid'])}"]
     if t["corrected"] and view != "filed":
         out += ["", "* corrected by RG-7 decisions (corrected numbers counted):"]
         out += [f"  {c['m']} BM {c['no']}: " + "; ".join(f"RG-7 {d['d']}: {', '.join(d['ch'])}" for d in c["rg7"])

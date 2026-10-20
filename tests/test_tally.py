@@ -8,7 +8,7 @@ from rg2watch.config import Config, load_config
 from rg2watch.browse import STATIC, build_data
 from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.store import Store
-from rg2watch.tally import build_tally, disagreements, extract, format_tally
+from rg2watch.tally import _contrib, build_tally, disagreements, extract, format_tally
 from rg2watch.models import Event
 from test_browse import BASE, P, add, doc, store
 from test_rules import clean_report, nf
@@ -268,6 +268,43 @@ def test_all_mode_denominators_are_paired():
     assert a["lists"] == [400, 380] and a["lists_valid"] == 780
 
 
+def test_vote_totals_only_include_reconciled_forms_but_turnout_stays_independent():
+    s = store()
+    form(s, 1, clean_report())
+    form(s, 2, report(valid=nf(770)))
+    t = tally(s)
+    a = t["overall"]["all"]
+    assert a["voted"] == 1600
+    assert a["valid"] == a["lists_valid"] == sum(a["lists"]) == 780
+    assert a["invalid"] == 20
+    assert a["vote_forms"] == 1
+    assert a["withheld_valid"] == 770
+    assert t["overall"]["counted"] == 2
+    assert any(reason.startswith("arithmetic") and "A3" in reason for reason in why(t)["2"])
+    text = format_tally(t)
+    assert "1 of 2 selected forms contributed reconciled vote totals" in text
+    assert "770 readable valid votes withheld" in text
+    assert "Unreconciled turnout gap: +800" in text
+
+
+def test_vote_eligibility_edge_cases_and_non_vote_flags():
+    rows = [1, 2]
+    missing_valid = extract(report(valid=nf(None, legible=False)), doc(BASE + "/mv.pdf"), Config())
+    unreadable_list = extract(report(list_votes=[{"row": 1, "field": nf(400)},
+                                                  {"row": 2, "field": nf(None, legible=False)}]),
+                              doc(BASE + "/ul.pdf"), Config())
+    wrong_rows = extract(report(list_votes=[{"row": 1, "field": nf(780)}]), doc(BASE + "/wr.pdf"), Config())
+    unreadable_invalid = extract(report(invalid=nf(None, legible=False)), doc(BASE + "/ui.pdf"), Config())
+    non_vote_flag = extract({**clean_report(), "confidence": "low"}, doc(BASE + "/nf.pdf"), Config())
+
+    assert "withheld_valid" not in _contrib(missing_valid, rows)
+    assert _contrib(unreadable_list, rows)["withheld_valid"] == 780
+    assert _contrib(wrong_rows, rows)["withheld_valid"] == 780
+    assert _contrib(unreadable_invalid, rows)["vote_forms"] == 1
+    assert "invalid" not in _contrib(unreadable_invalid, rows)
+    assert _contrib(non_vote_flag, rows)["vote_forms"] == 1
+
+
 def test_malformed_row_set_is_excluded_and_never_widens_the_table():
     s = store()
     form(s, 1, clean_report())
@@ -338,6 +375,10 @@ def test_municipal_scope_per_municipality_lists_and_overall_without_lists():
     for k in ("all", "cl"):
         assert "lists" not in t["overall"][k] and "lists_valid" not in t["overall"][k]
     assert t["overall"]["counted"] == 3 and t["excluded"] == []  # row sets are per municipality
+    assert t["overall"]["all"]["valid"] == sum(m["all"]["valid"] for m in t["munis"])
+    assert t["overall"]["all"]["vote_forms"] == 3
+    assert t["overall"]["pair"]["all"]["pair_selected"] == 3
+    assert t["overall"]["pair"]["all"]["pair_vote_forms"] == 3
 
 
 def test_municipal_row_set_is_modal_per_municipality():
@@ -414,7 +455,8 @@ def test_municipal_unknown_municipality_gets_no_list_totals():
     t = tally(s, cfg=muni_cfg())
     u = next(m for m in t["munis"] if m["m"] == "(unknown)")
     assert u["nlists"] == 0 and u["names"] == [] and "different ballots" in u["names_note"]
-    assert u["counted"] == 1 and u["all"]["valid"] and "lists" not in u["all"] and "lists" not in u["cl"]
+    assert u["counted"] == 1 and u["all"]["valid"] == 0 and u["all"]["withheld_valid"] == 780
+    assert "lists" not in u["all"] and "lists" not in u["cl"]
     assert "(unknown): warning: municipality unknown" in format_tally(t)
     nat = next(m for m in tally(s)["munis"] if m["m"] == "(unknown)")
     assert "lists" in nat["all"]  # national scope: one ballot, lists kept

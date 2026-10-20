@@ -214,7 +214,8 @@ def test_tally_latest_decision_wins_and_table_is_final():
         (rg7([("10.3", 19, 18)], [("10.4", 782)]), "2026-10-27T10:00:00Z")],
         invalid=nf(20), valid=nf(780), ballots_in_box=nf(800))
     t = tally(s)
-    assert (t["overall"]["all"]["invalid"], t["overall"]["all"]["valid"]) == (18, 782)
+    assert (t["overall"]["all"]["invalid"], t["overall"]["all"]["valid"]) == (0, 0)
+    assert t["overall"]["all"]["withheld_valid"] == 782
     assert [d["d"] for d in t["corrected"][0]["rg7"]] == ["20/10/2026", "27/10/2026"]
 
 
@@ -246,7 +247,8 @@ def test_tally_cache_follows_new_decisions():
     x = d7("1", url="/e/late.pdf")
     add(s, x)
     put(s, x, rg7([("10.4", 780, 700), ("10.3", 20, 100), ("10.2", 800, 800)]), version=RG7_PROMPT_VERSION)
-    assert build_tally(s, c, BP, M, cache=cache)["overall"]["all"]["valid"] == 700
+    changed = build_tally(s, c, BP, M, cache=cache)["overall"]["all"]
+    assert changed["valid"] == 0 and changed["withheld_valid"] == 700
 
 
 def test_cli_format_marks_corrected_with_star():
@@ -479,7 +481,8 @@ def test_correction_does_not_rescue_an_illegible_field_unless_the_table_gives_it
     station(s2, clean_report(), [(rg7([("10.4", None, 700)], [("10.4", 700)]), "2026-10-20T10:00:00Z")],
             valid=nf(None, legible=False))
     t2 = tally(s2)
-    assert t2["overall"]["all"]["valid"] == 700 and [c["rg7"][0]["ch"] for c in t2["corrected"]] == [["10.4 table 700"]]
+    assert t2["overall"]["all"]["valid"] == 0 and t2["overall"]["all"]["withheld_valid"] == 700
+    assert [c["rg7"][0]["ch"] for c in t2["corrected"]] == [["10.4 table 700"]]
 
 
 def test_decisions_are_ordered_by_decision_date_not_upload_order():
@@ -701,8 +704,8 @@ def test_diff_is_like_for_like_stations_joining_a_total_are_counted_separately()
     assert p["c"]["voted"] == p["f"]["voted"]
     assert t["overall"]["pair"]["all"]["in"] == 1
     text = format_tally(t, view="diff")
-    assert "newly counted/removed" in text and "+1 / -0" in text
-    assert "stations newly counted: +1, removed: -0" in text
+    assert "terms corrected-only/filed-only" in text and "+1 / -0" in text
+    assert "terms present only in corrected/filed view: +1 / -0" in text
     row = next(r for r in text.splitlines() if r.startswith(m["m"]))
     assert "+500" not in row and "+400" not in row  # not shown as voter deltas
 
@@ -716,6 +719,30 @@ def test_diff_clean_view_status_flip_is_a_station_change_not_a_delta():
     assert (o["cl"]["in"], o["cl"]["out"]) == (1, 0) and o["cl"]["c"]["valid"] == o["cl"]["f"]["valid"] == 0
     assert (o["all"]["in"], o["all"]["out"]) == (0, 0) and o["all"]["c"]["ballots_in_box"] == 178
     assert o["all"]["f"]["ballots_in_box"] == 180
+
+
+def test_rg7_vote_reconciliation_change_is_one_sided_in_paired_difference():
+    from rg2watch.tally import format_tally
+
+    s = bstore()
+    station(s, clean_report(), [(rg7([("list:2", 370, 380)]), "2026-10-20T10:00:00Z")],
+            list_votes=[{"row": 1, "field": nf(400)}, {"row": 2, "field": nf(370)}])
+    o = tally(s)["overall"]
+    assert o["all"]["valid"] == 780 and o["fall"]["valid"] == 0
+    assert o["fall"]["withheld_valid"] == 780
+    p = o["pair"]["all"]
+    assert (p["pair_selected"], p["pair_vote_forms"], p["pair_not_contributing"]) == (1, 0, 1)
+    assert (p["corrected_only_vote_forms"], p["filed_only_vote_forms"]) == (1, 0)
+    assert p["c"]["valid"] == p["f"]["valid"] == 0
+    assert p["c"]["lists_valid"] == p["f"]["lists_valid"] == 0
+    assert (p["in"], p["out"]) == (1, 1)
+    clean = o["pair"]["cl"]
+    assert clean["pair_selected"] == clean["pair_not_contributing"] == 0
+    text = format_tally(tally(s), view="diff")
+    assert "0 of 1 forms selected in both views contributed to compared vote totals" in text
+    assert "1 not paired (1 corrected-only eligible, 0 filed-only eligible, 0 neither)" in text
+    assert "terms present only in corrected/filed view" in text
+    assert "vote-reconciliation eligibility" in text
 
 
 def test_repeated_identical_correction_is_agreement_and_applied_once():
