@@ -322,11 +322,22 @@ def _prior_new(item: str, prior: list[dict]) -> int | None:
     return out
 
 
+def repeats(c: dict, prior: list[dict]) -> bool:
+    """True when an earlier decision already made this very change (same field, old and new): a
+    supplementary decision repeating a correction agrees with it."""
+    return c["old"] is not None and c["new"] is not None and any(
+        rg7_field(p["item"]) == rg7_field(c["item"]) and p["old"] == c["old"] and p["new"] == c["new"]
+        for rep in prior for p in rep["changes"])
+
+
 def rg7_mismatch(report: dict, rg2: dict | None, prior: list[dict] | None = None) -> list[str]:
     """Changes whose `old` differs from what is already established: the previous decisions' value
-    for that item when there is one, else the RG-2 reading (when there is an RG-2 report)."""
+    for that item when there is one, else the RG-2 reading (when there is an RG-2 report). A change
+    that repeats an earlier decision's change exactly is not a mismatch."""
     out = []
     for c in report["changes"]:
+        if repeats(c, prior or []):
+            continue
         before = _prior_new(c["item"], prior or [])
         if before is not None:
             src, read = "previous decision new", before

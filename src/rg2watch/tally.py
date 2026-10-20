@@ -10,7 +10,7 @@ from .models import Doc
 from .names import to_cyrillic
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from .rules import (RG7_FIELDS, _dash_zero, _ok, change_text, decision_label, decision_sort_key, evaluate_report,
-                    rg2_value, rg7_field, rg7_mismatch)
+                    repeats, rg2_value, rg7_field, rg7_mismatch)
 from .store import Store, _doc
 
 log = logging.getLogger("rg2watch.tally")
@@ -102,7 +102,8 @@ def apply_rg7(report: dict, decisions: list[dict]) -> tuple[dict, list[dict], li
             unverified.append(f"{dec['d']}: " + "; ".join(bad))
             continue
         used.append(rep)
-        ch = [change_text(c) for c in rep["changes"] if put(c["item"], c["new"], False)]
+        ch = [change_text(c) for c in rep["changes"]
+              if not repeats(c, used[:-1]) and put(c["item"], c["new"], False)]
         for e in rep["table"]:
             before = rg2_value(out, e["item"])
             if put(e["item"], e["value"], True) and before != e["value"]:

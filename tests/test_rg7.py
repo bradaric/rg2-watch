@@ -661,3 +661,20 @@ def test_diff_clean_view_status_flip_is_a_station_change_not_a_delta():
     assert (o["cl"]["in"], o["cl"]["out"]) == (1, 0) and o["cl"]["c"]["valid"] == o["cl"]["f"]["valid"] == 0
     assert (o["all"]["in"], o["all"]["out"]) == (0, 0) and o["all"]["c"]["ballots_in_box"] == 178
     assert o["all"]["f"]["ballots_in_box"] == 180
+
+
+def test_repeated_identical_correction_is_agreement_and_applied_once():
+    from rg2watch.rules import rg7_mismatch
+    from rg2watch.tally import apply_rg7
+
+    first = rg7([("10.1", 470, 471)], date="01.10.2026")
+    again = rg7([("10.1", 470, 471)], date="02.10.2026")  # Bor BM29: RG-7-2 and a supplementary RG-7-3
+    rg2 = clean_report()
+    rg2["numbers"]["voted"] = nf(470)
+    assert rg7_mismatch(again, rg2, [first]) == []
+    assert rg7_mismatch(rg7([("10.1", 470, 472)]), rg2, [first]) != []  # a different new value still mismatches
+    out, applied, unverified = apply_rg7(rg2, [{"d": "a", "rep": first}, {"d": "b", "rep": again}])
+    assert out["numbers"]["voted"]["value"] == 471 and unverified == []
+    assert [a["d"] for a in applied] == ["a"]
+    f = evaluate_rg7(again, bdoc("/e/r7.pdf", no="29"), cfg(), rg2, [first])
+    assert [x.rule for x in f] == ["R1"]  # no R2
