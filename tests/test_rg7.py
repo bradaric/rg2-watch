@@ -490,16 +490,19 @@ def test_rg7_analysed_with_the_rg2_prompt_is_reread_and_bogus_findings_removed(t
     s = Store(":memory:")
     s.upsert_election(ELECTION)
     P = ELECTION.parent
-    bad, ok, failed, rg2 = (pdoc("a.pdf", dt=20, no="1"), pdoc("b.pdf", dt=19, no="2"),
-                            pdoc("c.pdf", dt=21, no="3"), pdoc("d.pdf", dt=6, no="4"))
-    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", x) for x in (bad, ok, failed, rg2)])
+    bad, ok, failed, rg2, wrong_failed = (pdoc("a.pdf", dt=20, no="1"), pdoc("b.pdf", dt=19, no="2"),
+                                          pdoc("c.pdf", dt=21, no="3"), pdoc("d.pdf", dt=6, no="4"),
+                                          pdoc("e.pdf", dt=22, no="5"))
+    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", x) for x in (bad, ok, failed, rg2, wrong_failed)])
     s.enable_analysis(P)
     # a half-applied run: the RG-7 went through the RG-2 prompt and was marked done
     s.save_analysis(bad.url, AnalysisResult(clean_report(), 1, 1, 0.0, "claude-opus-5-5", "stop"), PROMPT_VERSION)
     s.save_analysis(ok.url, AnalysisResult(NEGOTIN, 1, 1, 0.0, "claude-opus-5-5", "stop"), RG7_PROMPT_VERSION)
     for x in (bad, ok, rg2):
         s.mark_analysis(x.url, "done")
-    s.mark_analysis(failed.url, "failed", "boom")  # permanently failed, no retry time
+    s.mark_analysis(failed.url, "failed", "boom")  # genuinely failed RG-7: stays failed
+    s.save_failed_analysis(wrong_failed.url, "m", PROMPT_VERSION, 0.1, "x")  # wrong-path signature
+    s.mark_analysis(wrong_failed.url, "failed", "boom")
     for rule, sev in (("V3", "HIGH"), ("V9", "HIGH"), ("D1", "MEDIUM"), ("R3", "LOW"), ("X1", "LOW")):
         s.add_finding(P, Finding(rule, sev, bad, rule), bad.url)
     s.add_finding(P, Finding("V3", "HIGH", rg2, "real"), rg2.url)
@@ -507,11 +510,13 @@ def test_rg7_analysed_with_the_rg2_prompt_is_reread_and_bogus_findings_removed(t
     e.pipe = AnalysisPipeline(e.rik, s, e.notifier, e.ai, e.cfg, e.on_findings, tmp_path / "c", clock=e.clock)
     e.pipe._stop.set()
     e.pipe.start()
-    assert e.status(bad.url)[0] == "new" and e.status(failed.url) == ("new", 0)
+    assert e.status(bad.url)[0] == "new" and e.status(wrong_failed.url) == ("new", 0)
+    assert e.status(failed.url)[0] == "failed"  # not retried (and billed) on every start
     assert e.status(ok.url)[0] == "done" and e.status(rg2.url)[0] == "done"  # r1-read and RG-2 left alone
     e.pipe._stop.clear()
     with caplog.at_level("WARNING", logger="rg2watch.pipeline"):
-        assert e.drain() == 2
+        e.drain()
+    assert e.ai.calls == 1  # the v7-read decision (the wrong-path failed one has no PDF in the fake: D3)
     rules = lambda d: sorted(r[0] for r in s._db.execute(
         "SELECT rule FROM findings WHERE document_id=(SELECT id FROM documents WHERE url=?)", (d.url,)))
     assert rules(bad) == ["D1", "R1", "R3", "X1"] and rules(rg2) == ["V3"]  # R1 from the re-read
