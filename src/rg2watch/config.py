@@ -23,6 +23,7 @@ class Config:
     probe_cost_guard: bool = True
     watchlist: list[str] = field(default_factory=list)
     only_municipalities: list[str] = field(default_factory=list)
+    list_names: dict[str, list[str]] = field(default_factory=dict)  # parent -> names of list rows 1..N
     ntfy_url: str = "https://ntfy.sh"
     ntfy_topic: str | None = None
     medium_digest_s: int = 600
@@ -78,6 +79,10 @@ def load_config(path: Path | None) -> Config:
     if not (isinstance(cfg.only_municipalities, list)
             and all(isinstance(n, str) for n in cfg.only_municipalities)):
         raise ValueError("only_municipalities must be a list of strings")
+    if not (isinstance(cfg.list_names, dict) and all(
+            isinstance(k, str) and isinstance(v, list) and all(isinstance(n, str) for n in v)
+            for k, v in cfg.list_names.items())):
+        raise ValueError("list_names must map an election id to a list of strings")
     if cfg.browse_interval_s < 0:
         raise ValueError(f"browse_interval_s must be >= 0: {cfg.browse_interval_s}")
     if not 0 <= cfg.serve_port <= 65535:

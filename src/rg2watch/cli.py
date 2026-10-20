@@ -14,7 +14,7 @@ import httpx
 
 from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
 from .batch import ADHOC, describe_estimate, run_batch, select_forms
-from .browse import build_page, copy_static, write_status
+from .browse import build_page, copy_static, default_parent, write_status
 from .config import Config, load_config
 from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
 from .evaluate import PARENT as EVAL_PARENT
@@ -31,6 +31,7 @@ from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, downlo
 from .rules import evaluate_report
 from .server import start_server
 from .store import Store
+from .tally import build_tally, format_tally
 from .watcher import Watcher, filter_request_rate
 
 log = logging.getLogger("rg2watch.cli")
@@ -132,6 +133,14 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("browse", parents=[common], help="write the local HTML page of RG-2 forms")
     s.add_argument("--parent", help="only this election")
     s.add_argument("--out", type=Path, help="HTML path (default: index.html next to the DB)")
+
+    s = sub.add_parser("tally", parents=[common],
+                       help="unofficial totals read by the model from the stored forms")
+    s.add_argument("--parent", help="election (default: the newest registered)")
+    s.add_argument("--municipality", help="comma-separated municipality names")
+    s.add_argument("--model", help="model whose readings are counted (default: config model)")
+    s.add_argument("--all", action="store_true", help="show totals over all counted forms "
+                   "(default: clean forms only)")
 
     s = sub.add_parser("serve", parents=[common], help="serve the browse page on 127.0.0.1 (no watching)")
     s.add_argument("--port", type=_port, help="port (config serve_port, default 8770)")
@@ -264,6 +273,28 @@ def _background(name: str, stop: threading.Event, period: float, fn, first=None)
     t = threading.Thread(target=run, name=name, daemon=True)
     t.start()
     return t
+
+
+def _cmd_tally(args) -> int:
+    cfg = _config(args)
+    store = _open_store(cfg)
+    try:
+        parent = default_parent(store, args.parent)
+        only = None
+        if args.municipality:
+            known = {d["municipality"] or "(unknown)": "" for d in store.browse_rows(parent)[0]}
+            try:
+                only = set(resolve_municipalities(known, _csv(args.municipality) or []))
+            except MunicipalityError as exc:
+                print(exc, file=sys.stderr)
+                for name in exc.candidates:
+                    print(f"  {name}", file=sys.stderr)
+                return 2
+        t = build_tally(store, cfg, parent, stored_model(cfg.model), only)
+    finally:
+        store.close()
+    print(format_tally(t, args.all))
+    return 0
 
 
 def _cmd_serve(args) -> int:
@@ -731,7 +762,7 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO if args.cmd in ("watch", "serve") else logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
-               "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve}[args.cmd]
+               "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "tally": _cmd_tally}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay", "serve"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
         previous = signal.signal(signal.SIGTERM, _sigterm)

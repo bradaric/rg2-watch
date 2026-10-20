@@ -31,11 +31,21 @@ input,select,button{font:inherit;color:inherit;background:var(--card);border:1px
 #wrap{overflow-x:auto}
 table.dataTable>tbody>tr>*{box-shadow:none!important;background:var(--bg)!important;color:var(--fg);vertical-align:top}
 table.dataTable>thead>tr>*{color:var(--fg);white-space:nowrap}
-table.dataTable th,table.dataTable td{text-align:left!important}
+#forms th,#forms td{text-align:left!important}
+table.dataTable td.dt-right,table.dataTable th.dt-right{text-align:right}
 table.dataTable td.scol{min-width:11em}
 table.dataTable td.nw{white-space:nowrap}
 table.dataTable td.fcol{min-width:28em;width:42%;white-space:normal;overflow-wrap:anywhere}
 table.dataTable th.dt-orderable-none .dt-column-order{display:none}
+#texcl td button{white-space:nowrap}
+.warnbox{margin:0 0 8px;padding:6px 10px;border:2px solid var(--md);border-radius:4px;font-weight:600}
+#tabs{display:flex;gap:6px;margin:0 0 8px}
+#tabs button.on{border-color:var(--link);font-weight:600}
+#toverall{overflow-x:auto;margin-bottom:10px}
+#toverall table{border-collapse:collapse}
+#toverall th,#toverall td{padding:4px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+#toverall th:first-child,#toverall td:first-child{text-align:left}
+#resview h3{margin-top:14px}
 .note{display:block;color:var(--mut);font-size:12px}
 @media (max-width:700px){body{padding:8px}#status{grid-template-columns:1fr}table.dataTable td.fcol{min-width:16em}#rules,#cols{grid-template-columns:repeat(2,auto)}}
 table.dataTable>tbody>tr.child>td{background:var(--card)!important}
@@ -52,6 +62,8 @@ td.disagree{color:var(--hi);font-weight:600}
 <h1>rg2-watch <span class="mut" id="built"></span></h1>
 <div id="banner"></div>
 <div id="status"></div>
+<div id="tabs"><button id="tabforms" class="on">Forms</button><button id="tabres">Results (unofficial)</button></div>
+<div id="formsview">
 <div id="ctl">
 <input id="q" type="search" placeholder="search">
 <select id="m"></select><select id="e"></select><select id="mod"></select>
@@ -66,7 +78,17 @@ td.disagree{color:var(--hi);font-weight:600}
 <details id="colbox"><summary>columns</summary><div id="cols"></div></details>
 <label><input type="checkbox" id="auto" checked> auto-refresh</label>
 </div>
+<div id="onlyid" class="warnbox" hidden><span id="onlytxt"></span> <button id="onlyclear">show all forms</button></div>
 <div id="wrap"><table id="forms" class="display" style="width:100%"></table></div>
+</div>
+<div id="resview" hidden>
+<p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
+<div id="tctl"><label>totals over <select id="tmode"><option value="cl">clean forms only</option><option value="all">all counted forms</option></select></label>
+<button id="csv">Download CSV</button></div>
+<h3>Overall</h3><div id="toverall"></div>
+<h3>Per municipality</h3><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
+<h3>Excluded forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
+</div>
 <script src="jquery.min.js"></script>
 <script src="dataTables.min.js"></script>
 <script>
@@ -171,6 +193,7 @@ function renderStatus() {
 }
 
 // ---- table --------------------------------------------------------------------------------
+let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
 const FILTERS = ["q", "m", "e", "mod", "sev", "fl", "rp", "rm", "fa", "loc", "dis", "auto"];
 
@@ -228,6 +251,7 @@ const txt = () => DataTable.render.text();
 const fmt = () => ({_: d => d, display: d => esc(when(d))});
 const sel = id => $(id).value;
 function keep(r) {
+  if (onlyId != null && r.id !== onlyId) return false;
   const q = $("q").value.trim().toLowerCase();
   const rs = chosenRules();
   return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
@@ -303,6 +327,8 @@ function applyData(data) {
     return l; }));
   $("rulesbox").hidden = !$("rules").children.length;
   rulesSummary();
+  T = D.tally;
+  renderTally();
   $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
   if (!table) { readHash(); initTable(); return; }
   const shown = new Set();
@@ -310,6 +336,92 @@ function applyData(data) {
   table.clear().rows.add(rows).draw(false);
   table.rows().every(function () { if (shown.has(this.data().id)) this.child(child(this.data())).show(); });
 }
+
+// ---- results (unofficial tally) -----------------------------------------------------------
+const nf = new Intl.NumberFormat("en-GB");
+const num = v => v == null ? "-" : nf.format(v);
+const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
+const ratio = (a, b) => b ? a / b : null;
+function resultCols(mode) {  // [title, raw value, display, csv cell]
+  const t = r => r[mode], c = [
+    ["Municipality", r => r.m, s => s, r => r.m],
+    ["Stations", r => r.stations, num], ["Counted", r => r.counted, num], ["Clean", r => r.clean, num],
+    ["Excluded", r => r.excluded, num],
+    ["Coverage", r => ratio(r.counted, r.stations), pc, r => ratio(r.counted, r.stations) == null ? "" : (100 * r.counted / r.stations).toFixed(1)],
+    ["Registered", r => t(r).registered, num], ["Voted", r => t(r).voted, num],
+    ["Turnout", r => t(r).turnout, pc, r => t(r).turnout == null ? "" : (100 * t(r).turnout).toFixed(1)],
+    ["In box", r => t(r).ballots_in_box, num], ["Invalid", r => t(r).invalid, num],
+    ["Valid", r => t(r).valid, num], ["Outside", r => t(r).outside_voted, num]];
+  T.names.forEach((n, i) => {
+    c.push([n + " votes", r => t(r).lists[i], num]);
+    c.push([n + " %", r => ratio(t(r).lists[i], t(r).valid), pc, r => ratio(t(r).lists[i], t(r).valid) == null ? "" : (100 * t(r).lists[i] / t(r).valid).toFixed(1)]);
+  });
+  return c.map(x => ({t: x[0], v: x[1], f: x[2], c: x[3] || x[1]}));
+}
+function csvCell(x) {  // text starting with = + - @ would run as a spreadsheet formula
+  if (x == null) return "";
+  if (typeof x === "number") return String(x);
+  x = String(x);
+  if (/^[=+\-@\t\r]/.test(x)) x = "'" + x;
+  return /[",\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x;
+}
+function tallyCsv() {
+  const cols = resultCols($("tmode").value), rows = [...T.munis, T.overall];
+  const head = cols.map(c => csvCell(c.t)).join(",");
+  const lines = rows.map(r => cols.map(c => csvCell(c.c(r))).join(","));
+  const note = csvCell("Unofficial - numbers read by " + T.model + " from the scanned forms; " +
+    ($("tmode").value === "cl" ? "clean forms only" : "all counted forms"));
+  return [note, head, ...lines].join("\r\n") + "\r\n";
+}
+function showForm(id, label) {
+  onlyId = id;
+  $("onlytxt").textContent = "showing only: " + label;
+  $("onlyid").hidden = false;
+  setTab("forms");
+  redraw();
+}
+function renderTally() {
+  const none = !T || !T.munis.length;
+  $("tmeta").textContent = T ? "Model: " + T.model + ". " + T.title + ". Repeat-vote forms are not included." : "";
+  $("tabres").hidden = !T;
+  if (!T) return;
+  const cols = resultCols($("tmode").value), ov = $("toverall");
+  const tbl = mk("table"), hr = mk("tr"), dr = mk("tr");
+  for (const c of cols) { hr.append(mk("th", c.t)); dr.append(mk("td", c.f(c.v(T.overall)))); }
+  tbl.append(hr, dr);
+  ov.replaceChildren(none ? mk("p", "no analysed forms yet", "mut") : tbl);
+  if (tmTable) { tmTable.destroy(); $("tmunis").replaceChildren(); }
+  tmTable = new DataTable("#tmunis", {
+    data: T.munis, paging: false, order: [[0, "asc"]], layout: {topStart: "search", topEnd: null, bottomStart: "info"},
+    columns: cols.map((c, i) => ({title: c.t, type: i ? "num" : "string", className: i ? "dt-right" : "",
+      render: {_: (d, t, r) => { const v = c.v(r); return v == null ? -1 : v; }, display: (d, t, r) => esc(c.f(c.v(r)))}}))});
+  if (teTable) { teTable.destroy(); $("texcl").replaceChildren(); }
+  teTable = new DataTable("#texcl", {
+    data: T.excluded, pageLength: 50, layout: {topStart: "search", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
+    columns: [{data: "m", title: "Municipality", render: DataTable.render.text()},
+      {data: "no", title: "BM", render: DataTable.render.text(), defaultContent: ""},
+      {data: "why", title: "Why excluded", render: {_: d => d.join("; "), display: d => esc(d.join("; "))}},
+      {data: null, title: "", orderable: false, defaultContent: "", createdCell: (td, d, r) => {
+        const b = mk("button", "show form"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); td.append(b); }}]});
+}
+function setTab(name) {
+  const res = name === "results";
+  $("formsview").hidden = res; $("resview").hidden = !res;
+  $("tabforms").classList.toggle("on", !res); $("tabres").classList.toggle("on", res);
+  if (res && tmTable) { tmTable.columns.adjust(); teTable.columns.adjust(); }
+}
+$("tabforms").onclick = () => setTab("forms");
+$("tabres").onclick = () => setTab("results");
+$("tmode").addEventListener("input", () => { if (T) renderTally(); });
+$("onlyclear").onclick = () => { onlyId = null; $("onlyid").hidden = true; redraw(); };
+$("csv").onclick = () => {
+  if (!T) return;
+  const a = mk("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + tallyCsv()], {type: "text/csv;charset=utf-8"}));
+  a.download = "rg2-unofficial-tally-" + T.parent + ".csv";
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
 
 // ---- filter state: URL hash first, saved state second; absent keys reset to defaults -------
 const chosenRules = () => [...$("rules").querySelectorAll("input:checked")].map(c => c.value);

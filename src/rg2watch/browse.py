@@ -8,12 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
+from .analyze import stored_model
 from .config import Config
 from .models import Doc
 from .pipeline import PROMPT_VERSION
 from .rules import evaluate_report
 from .status import build_status, to_belgrade
 from .store import Store, _doc
+from .tally import build_tally
 
 log = logging.getLogger("rg2watch.browse")
 SEV_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
@@ -92,7 +94,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     for f in findings:
         found.setdefault(f["document_id"], []).append(f)
     opinions = _opinions(store, {d["id"]: _doc(d) for d in docs}, parent, cfg or Config(),
-                         {} if cache is None else cache)
+                         {} if cache is None else cache.setdefault("ops", {}))
     elections = {e.parent: e for e in store.elections()}
     groups: dict[tuple, list] = {}
     for d in docs:  # a NULL station_key cannot be grouped: the document stands alone
@@ -112,8 +114,15 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             v=[_version(d, found, opinions, cache_dir, base) for d in ds if d is not main])
         row["dis"] = _disagreement(row["ops"])
         rows.append(row)
+    cfg = cfg or Config()
+    try:
+        tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
+                            cache=None if cache is None else cache.setdefault("tally", {}))
+    except Exception:
+        log.exception("tally could not be built")
+        tally = None
     return {"built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
-            "elections": {p: e.title for p, e in elections.items()}, "rows": rows}
+            "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally}
 
 
 def _json(data) -> str:

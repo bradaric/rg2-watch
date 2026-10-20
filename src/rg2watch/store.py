@@ -502,6 +502,15 @@ class Store:
             out.update((r["id"], r["result_json"]) for r in rows)
         return out
 
+    def station_counts(self, parent: str) -> dict[str, int]:
+        """Known stations (from the stations table) per municipality name."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT m.name, COUNT(*) FROM stations s JOIN municipalities m "
+                "ON m.parent=s.parent AND m.id=s.municipality_id WHERE s.parent=? GROUP BY m.name",
+                (parent,)).fetchall()
+        return {r[0]: r[1] for r in rows}
+
     def latest_document_parent(self) -> str | None:
         with self._lock:
             row = self._db.execute("SELECT parent FROM documents ORDER BY id DESC LIMIT 1").fetchone()

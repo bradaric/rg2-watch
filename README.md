@@ -73,6 +73,20 @@ watching. The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed 
   a file it re-injects the `.js` files. `rg2watch browse` writes everything once with the status
   "watcher not running".
 
+## Unofficial tally
+
+`rg2watch tally [--parent P] [--municipality NAME,...] [--model M] [--all]` and the "Results
+(unofficial)" tab of the browse page total what the watch model (`model`, or `--model`) read from the
+first-round RG-2 forms: registered, voted, ballots in box, invalid, valid, outside voted, turnout, and
+votes and share of valid votes per list, per municipality and overall, with coverage (forms counted
+of stations known). RIK's official results are never fetched. Forms are excluded from the "clean
+forms only" totals (shown by default; `--all` / the page switch show every counted form) when the
+confidence is low, the page quality is poor or unreadable, a counted number is illegible, another
+stored model read a counted number differently, or an arithmetic rule (A1-A5) fires; the reasons are
+listed, with a link to the form. List names are never read from the scans: set
+`[list_names]` `"<parent>" = ["Name 1", "Name 2"]` in the config, default "List N". The page offers a
+CSV download of the per-municipality table (cells starting with = + - @ are escaped).
+
 ## Visual analysis of RG-2 forms
 
 Analysis is opt-in because it calls a paid API: `watch` analyses only with `--analyze` or
