@@ -860,6 +860,7 @@ const NV = () => $("tview").value;  // numbers: corrected | filed | diff
 const NV_LABEL = {corrected: "With RG-7 corrections.", filed: "As filed on the RG-2 forms (RG-7 corrections not applied).",
   diff: "Difference: with RG-7 corrections minus as filed, over comparable terms. Forms with terms only in corrected/filed view are shown separately; unmatched terms are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)."};
 const dnum = v => v == null ? "-" : v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + nf.format(Math.abs(v));
+const snum = v => v == null ? "-" : v === 0 ? "0" : (v > 0 ? "+" : "\u2212") + nf.format(Math.abs(v));
 const dpp = x => { if (x == null) return "-"; const v = Math.round(x * 1000) / 10; return v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + Math.abs(v).toFixed(1); };
 function deltaOf(a, b) {  // totals block: corrected minus as filed (turnout and shares in fractions)
   const o = {};
@@ -878,6 +879,12 @@ function vrow(r) {  // the row as the chosen numbers view shows it
   if (v === "diff") return {...r, all: deltaOf(r.pair.all.c, r.pair.all.f), cl: deltaOf(r.pair.cl.c, r.pair.cl.f),
     clean: r.clean - r.fclean, excluded: r.excluded - r.fexcluded, nin: r.pair[$("tmode").value].in, nout: -r.pair[$("tmode").value].out};
   return r;
+}
+function listAvailability(r) {
+  if (r.nlists || (T.scope === "national" && T.names.length)) return "Available";
+  if (T.scope === "municipal" && r.m === T.overall.m) return "Unavailable - no universal ballot";
+  if ((r.names_note || T.names_note || "").startsWith("no expected ballot rows")) return "Unavailable - no expected ballot rows";
+  return T.scope === "municipal" ? "Unavailable - no comparable ballot" : "Unavailable - no expected ballot rows";
 }
 function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come through vrow()
   const dg = NV() === "diff", n = dg ? dnum : num, p = dg ? dpp : pc, t = r => r[mode], c = [
@@ -902,7 +909,9 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come
     ["Forms with terms only in filed view", r => r.nout, dnum]);
   else c.push(["Vote forms", r => t(r).vote_forms, num],
     ["Withheld readable valid", r => t(r).withheld_valid, num],
-    ["Unreconciled turnout gap (signed)", gap, dnum]);
+    ["Unreconciled turnout gap (signed)", gap, snum]);
+  if (T.scope === "municipal" || !T.names.length)
+    c.push(["List totals availability", listAvailability, s => s]);
   const share = (r, i) => dg ? t(r).sh[i] : ratio(t(r).lists[i], t(r).lists_valid);
   T.names.forEach((nm, i) => {
     c.push([(i + 1) + " \u00b7 " + nm + " votes", r => t(r).lists[i], n]);
@@ -929,7 +938,7 @@ function tallyCsv() {
     for (const r of rows) {
       const t = r[mode], tot = shared.map(c => csvCell(c.c(r)));
       const sh = i => NV() === "diff" ? t.sh[i] : ratio(t.lists[i], t.lists_valid);
-      const unavailable = r.m === T.overall.m ? "Unavailable - no universal ballot" : "Unavailable - no comparable ballot";
+      const unavailable = listAvailability(r);
       const ls = r.names && r.names.length ? r.names.map((n, i) => [i + 1, n, t.lists[i],
         sh(i) == null ? "" : (100 * sh(i)).toFixed(1)]) : [["", unavailable, "", ""]];
       for (const l of ls) out.push([csvCell(r.m), ...l.map(csvCell), ...tot, out.length ? "" : csvCell(note)].join(","));
@@ -982,7 +991,7 @@ function renderTally() {
   }
   $("tmeta").textContent = "Model: " + T.model + ". " + shortTitle(T.title) + ". Repeat-vote forms are not included.";
   const muniScope = T.scope === "municipal";
-  const sw = [T.scope_note, ...T.munis.filter(m => !m.nlists && m.names_note).map(m => m.m + ": " + m.names_note)].filter(Boolean);
+  const sw = [T.scope_note, ...(muniScope ? T.munis.filter(m => !m.nlists && m.names_note).map(m => m.m + ": " + m.names_note) : [T.names_note])].filter(Boolean);
   $("tscope").hidden = !sw.length;
   $("tscope").textContent = sw.length ? "Warning: " + sw.join(". ") : "";
   $("tmhint").hidden = !muniScope;
@@ -1114,7 +1123,7 @@ function renderHero() {
   }
   put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));
   const gap = t.turnout == null ? null : t.voted - t.valid - t.invalid;
-  const noComparableLists = (muniScope && allMunis) || !t.lists;
+  const noComparableLists = (muniScope && allMunis) || !t.lists || !names.length;
   if (none) put("hs-valid", "");
   else if (dg) {
     const p = raw.pair[mode], neither = p.pair_not_contributing - p.corrected_only_vote_forms - p.filed_only_vote_forms;
@@ -1128,7 +1137,7 @@ function renderHero() {
     const selected = mode === "cl" ? r.clean : r.counted;
     put("hs-valid", "Reported invalid: " + num(t.invalid) + ". " + t.vote_forms + " of " + selected +
       " selected forms contributed vote totals; " + num(t.withheld_valid) +
-      " readable valid votes withheld (known partial amount). Unreconciled turnout gap: " + dnum(gap) + "." +
+      " readable valid votes withheld (known partial amount). Unreconciled turnout gap: " + snum(gap) + "." +
       (noComparableLists ? " Comparable list totals are unavailable for this scope." : ""));
   }
   $("heronote").textContent = none ? "No forms counted yet - no results to show."

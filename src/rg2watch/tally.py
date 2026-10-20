@@ -23,6 +23,7 @@ FIRST_ROUND = 6  # repeat-vote forms (10, 15, 16) are another round: never mixed
 UNKNOWN_TYPE_NOTE = "unknown election type - set tally_scope"
 UNKNOWN_MUNI = "(unknown)"
 UNKNOWN_MUNI_NOTE = "municipality unknown - forms may be from different ballots, no list totals"
+EMPTY_BALLOT_NOTE = "no expected ballot rows - comparable list totals unavailable"
 
 
 def scope_of(store: Store, cfg: Config, parent: str) -> tuple[str, str | None]:
@@ -384,7 +385,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         key = "" if national else muni
         if key not in info:
             conf, shape = configured_names(cfg, parent, scope, None if national else muni)
-            note = shape
+            note = "; ".join(x for x in (shape, EMPTY_BALLOT_NOTE if not nrows else None) if x) or None
             if not note and conf and nrows and len(conf) != nrows:
                 note = f"list_names has {len(conf)} names, forms have {nrows} lists - check config"
             if note and (parent, key, len(conf), nrows) not in _warned:
@@ -518,9 +519,11 @@ def _gap(t: dict) -> int | None:
     return None if t["turnout"] is None else t["voted"] - t["valid"] - t["invalid"]
 
 
-def _fgap(t: dict) -> str:
+def _fgap(t: dict, diff: bool = False) -> str:
     gap = _gap(t)
-    return "-" if gap is None else _sgn(gap)
+    if gap is None:
+        return "-"
+    return _sgn(gap) if diff else ("0" if gap == 0 else f"{gap:+,}")
 
 
 def _list_table(names: list[str], rows: list[dict], key: str, diff: bool = False) -> list[str]:
@@ -597,7 +600,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
                  f"{o['pair_not_contributing']} not paired ({o['corrected_only_vote_forms']} corrected-only eligible, "
                  f"{o['filed_only_vote_forms']} filed-only eligible, {neither} neither)",
                  f"Like-for-like withheld readable valid difference: {_sgn(d['withheld_valid'])}; "
-                 f"unreconciled turnout gap difference: {_fgap(d)}",
+                  f"unreconciled turnout gap difference: {_fgap(d, diff=True)}",
                  f"forms with terms present only in corrected/filed view: +{o['in']} / -{o['out']}; unmatched terms "
                  "are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)"]
     else:

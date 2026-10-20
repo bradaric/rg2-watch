@@ -247,6 +247,25 @@ def test_format_tally_empty():
     assert "Unreconciled turnout gap: -" in text
 
 
+def test_snapshot_turnout_gap_formats_zero_and_signed_values():
+    s = store()
+    form(s, 1, clean_report())
+    zero = format_tally(tally(s))
+    assert "Unreconciled turnout gap: 0" in zero
+    assert "Unreconciled turnout gap: ." not in zero
+
+    positive = report(voted=nf(801), ballots_in_box=nf(800))
+    s = store()
+    form(s, 1, positive)
+    assert "Unreconciled turnout gap: +1" in format_tally(tally(s))
+
+    negative = report(voted=nf(799), ballots_in_box=nf(799))
+    s = store()
+    form(s, 1, negative)
+    assert "Unreconciled turnout gap: -1" in format_tally(tally(s))
+    assert "unreconciled turnout gap difference: ." in format_tally(tally(s), view="diff")
+
+
 def test_hero_markup_labelled_and_safe():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'id="hero"' in html and "UNOFFICIAL - numbers read by" in html and "Very early" in html
@@ -483,6 +502,23 @@ def test_municipal_unknown_municipality_gets_no_list_totals():
     assert "lists" in nat["all"]  # national scope: one ballot, lists kept
 
 
+def test_empty_expected_ballot_rows_are_explicitly_unavailable_in_national_and_named_municipal_scopes():
+    empty_ballot = report(list_votes=[])
+
+    s = store()
+    form(s, 1, empty_ballot)
+    national = tally(s)
+    assert national["nlists"] == 0
+    assert national["names_note"] == "no expected ballot rows - comparable list totals unavailable"
+    assert "warning: no expected ballot rows - comparable list totals unavailable" in format_tally(national)
+
+    municipal = tally(s, cfg=muni_cfg())
+    alpha = municipal["munis"][0]
+    assert alpha["m"] == "Alpha" and alpha["nlists"] == 0
+    assert alpha["names_note"] == "no expected ballot rows - comparable list totals unavailable"
+    assert "Alpha: warning: no expected ballot rows - comparable list totals unavailable" in format_tally(municipal)
+
+
 def test_page_diff_view_uses_paired_numbers_and_explains_unmatched_terms():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "deltaOf(r.pair.all.c, r.pair.all.f)" in html and "terms only in corrected/filed view" in html
@@ -552,6 +588,16 @@ assert.equal(vrow(r).all.valid, 100);
 let csv = tallyCsv();
 assert.equal(csvValue(csv, "Reconciled valid"), "100");
 assert.equal(csvValue(csv, "1 · A votes"), "60");
+assert.equal(csvValue(csv, "Unreconciled turnout gap (signed)"), "0");
+renderHero();
+assert(els["hs-valid"].textContent.includes("Unreconciled turnout gap: 0."));
+let gapCol = resultCols("all").find(x => x.t === "Unreconciled turnout gap (signed)");
+assert.equal(gapCol.f(gapCol.v(vrow(r))), "0");
+r.all.voted = r.cl.voted = 101;
+assert.equal(gapCol.f(gapCol.v(vrow(r))), "+1");
+r.all.voted = r.cl.voted = 99;
+assert.equal(gapCol.f(gapCol.v(vrow(r))), "−1");
+r.all.voted = r.cl.voted = 100;
 els.tview.value = "filed";
 assert.equal(vrow(r).all.valid, 0);
 csv = tallyCsv();
@@ -575,6 +621,8 @@ assert(els["hs-valid"].textContent.includes("selected in both views contributed"
 const diffCols = resultCols("all");
 const selected = diffCols.find(x => x.t === "Selected in both views");
 assert.equal(selected.f(selected.v(vrow(r))), "1");
+gapCol = diffCols.find(x => x.t === "Unreconciled turnout gap (difference)");
+assert.equal(gapCol.f(gapCol.v(vrow(r))), "·");
 csv = tallyCsv();
 assert.equal(csvValue(csv, "1 · A votes"), "5");
 assert(csv.includes("Paired cohort columns are unsigned actual sizes"));
@@ -598,6 +646,33 @@ csv = tallyCsv();
 assert(csv.includes("Alpha,1,A,60,60.0"), "municipal list rows must be long format");
 assert(csv.includes("Unavailable - no comparable ballot"), "unknown ballot must be explicit");
 assert(csv.includes("Unavailable - no universal ballot"), "municipal overall list fields must be explicit");
+
+els.tview.value = "corrected";
+const emptyNational = row(null, null);
+emptyNational.names = []; emptyNational.nlists = 0;
+emptyNational.names_note = "no expected ballot rows - comparable list totals unavailable";
+for (const k of ["all", "cl", "fall", "fcl"]) { emptyNational[k].lists = []; emptyNational[k].lists_valid = 0; }
+setData(emptyNational);
+T.names = []; T.names_note = emptyNational.names_note;
+renderHero();
+assert(els["hs-valid"].textContent.includes("Comparable list totals are unavailable for this scope."));
+let availability = resultCols("all").find(x => x.t === "List totals availability");
+assert(availability, "national empty ballot needs an explicit results column");
+assert(availability.f(availability.v(vrow(emptyNational))).includes("Unavailable - no expected ballot rows"));
+csv = tallyCsv();
+assert(csv.includes("List totals availability"));
+assert(csv.includes("Unavailable - no expected ballot rows"));
+
+const emptyMunicipal = row(null, null);
+emptyMunicipal.names = []; emptyMunicipal.nlists = 0;
+emptyMunicipal.names_note = "no expected ballot rows - comparable list totals unavailable";
+for (const k of ["all", "cl", "fall", "fcl"]) { delete emptyMunicipal[k].lists; delete emptyMunicipal[k].lists_valid; }
+T = {model: "test", title: "Local", scope: "municipal", scope_note: null, names: [], names_note: null,
+  munis: [emptyMunicipal], overall};
+availability = resultCols("all").find(x => x.t === "List totals availability");
+assert(availability.f(availability.v(vrow(emptyMunicipal))).includes("Unavailable - no expected ballot rows"));
+csv = tallyCsv();
+assert(csv.includes("Unavailable - no expected ballot rows"));
 console.log(JSON.stringify({ok: true}));
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
