@@ -72,7 +72,9 @@ CREATE TABLE IF NOT EXISTS publications(
     id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE, document_id INTEGER NOT NULL, parent TEXT NOT NULL,
     summary TEXT NOT NULL, summary_sha256 TEXT NOT NULL, staged_pdf_path TEXT NOT NULL,
     pdf_sha256 TEXT NOT NULL, case_json TEXT NOT NULL,
-    folder_id TEXT, pdf_file_id TEXT, text_file_id TEXT, final_url TEXT, viber_text TEXT,
+    folder_id TEXT, pdf_file_id TEXT, text_file_id TEXT, drive_account_id TEXT,
+    legacy_parent_recovery INTEGER NOT NULL DEFAULT 0,
+    final_url TEXT, viber_text TEXT,
     phase TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, published_at TEXT);
 CREATE TABLE IF NOT EXISTS ai_draft_costs(
     id INTEGER PRIMARY KEY, parent TEXT NOT NULL, url TEXT NOT NULL, model TEXT NOT NULL,
@@ -147,6 +149,17 @@ class Store:
                 # documents recorded before analysis existed are never analysed implicitly
                 # (`requeue --skipped` or `watch --analyze-backlog` opts them in)
                 self._db.execute("UPDATE documents SET analysis_status='skipped'")
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(publications)")}
+        if "drive_account_id" not in cols:
+            with self._db:
+                self._db.execute("ALTER TABLE publications ADD COLUMN drive_account_id TEXT")
+        if "legacy_parent_recovery" not in cols:
+            with self._db:
+                self._db.execute("ALTER TABLE publications ADD COLUMN legacy_parent_recovery "
+                                 "INTEGER NOT NULL DEFAULT 0")
+                self._db.execute("UPDATE publications SET legacy_parent_recovery=1 "
+                                 "WHERE drive_account_id IS NULL AND folder_id IS NOT NULL "
+                                 "AND phase<>'published'")
         self._db.executescript(INDEXES)
         self.case_locks = CaseLocks(path)
 
@@ -795,7 +808,38 @@ class Store:
 
     def save_drive_ids(self, url: str, folder_id: str, pdf_id: str, text_id: str) -> None:
         self._write("UPDATE publications SET folder_id=?,pdf_file_id=?,text_file_id=?,updated_at=? "
-                    "WHERE url=? AND folder_id IS NULL", (folder_id, pdf_id, text_id, _now(), url))
+                     "WHERE url=? AND folder_id IS NULL", (folder_id, pdf_id, text_id, _now(), url))
+
+    def bind_publication_account(self, url: str, account_id: str) -> None:
+        if not account_id:
+            raise ValueError("Google Drive account identity is required")
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT drive_account_id FROM publications WHERE url=?", (url,)).fetchone()
+            if row is None:
+                raise KeyError(url)
+            if row["drive_account_id"] not in (None, account_id):
+                raise ValueError("publication belongs to a different Google Drive account")
+            self._db.execute(
+                "UPDATE publications SET drive_account_id=?,updated_at=? "
+                "WHERE url=? AND drive_account_id IS NULL", (account_id, _now(), url))
+
+    def bind_legacy_publication_account(self, url: str, account_id: str) -> None:
+        """Bind a verified old pending folder and durably retain its manual-move recovery path."""
+        if not account_id:
+            raise ValueError("Google Drive account identity is required")
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT drive_account_id,folder_id FROM publications WHERE url=?", (url,)).fetchone()
+            if row is None:
+                raise KeyError(url)
+            if not row["folder_id"]:
+                raise ValueError("legacy publication requires an existing Drive folder ID")
+            if row["drive_account_id"] not in (None, account_id):
+                raise ValueError("publication belongs to a different Google Drive account")
+            self._db.execute(
+                "UPDATE publications SET drive_account_id=?,legacy_parent_recovery=1,updated_at=? "
+                "WHERE url=?", (account_id, _now(), url))
 
     def advance_publication(self, url: str, phase: str) -> None:
         if phase not in ("preparing", "uploaded"):

@@ -86,6 +86,7 @@ serve_port = 8770
 # keep it outside version control, set this path, then run `rg2watch drive-auth --config ...` once.
 # The app requests only drive.file and stores the operator account token locally (mode 0600).
 # drive_client_secrets = "data/google-oauth-client.json"
+# `rg2watch drive-root` derives a shared private root-state path from this token path.
 drive_token_path = "data/drive-token.json"
 # PDF downloads have their own rate limiter (requests/second), on top of max_rps for listings
 download_max_rps = 0.5

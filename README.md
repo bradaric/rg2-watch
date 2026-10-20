@@ -155,7 +155,7 @@ ntfy message is sent for a verdict.
 This is an optional, manual handoff for one escalated document version at a time. It never sends a
 Viber or Instagram message. The operator clicks **Prepare draft**, edits the Serbian Cyrillic public
 summary, explicitly confirms that anyone with the link can open the folder, then clicks **Publish**.
-Only that case folder is made public; the user's Drive root and other folders are not changed.
+Only that case folder is made public. The app-managed **RG2 Watch** parent remains private.
 
 ### One-time Google setup
 
@@ -175,6 +175,17 @@ Only that case folder is made public; the user's Drive root and other folders ar
    `https://www.googleapis.com/auth/drive.file` (files/folders this app creates) and saves the local
    token with mode 0600. `watch`, `serve`, and HTTP requests never start an OAuth flow. Missing or
    expired/revoked authorization disables publication without stopping the watcher or review page.
+4. Explicitly create or verify the private app root, and open the printed link to inspect it:
+
+       uv run rg2watch drive-root --config rg2watch.toml
+
+   This creates one private **RG2 Watch** root per OAuth token and verified Google account. Every
+   election database configured with that resolved token path shares it; there are no per-election
+   parent folders. The token-adjacent `drive-token.json.root.json` contains only the preallocated root
+   ID, creation phase and account permission ID, never OAuth credentials. Do not share the root.
+   `watch` and `serve` do not create it implicitly. Reauthorizing the same token path as a different
+   Google account is refused before Drive file operations; recover the original account or investigate
+   the state manually rather than allowing an automatic replacement root.
 
 A new publication requires the exact URL's latest verdict to be `escalate` and its PDF already cached
 under `<db dir>/pdfs/`. Manual review alone does not cache a PDF; analysis does. Publication never
@@ -190,6 +201,28 @@ again with the same text: preallocated Drive IDs prevent a second case. Verify t
 **Share / General access** panel: “Anyone with the link — Viewer”, and open both child files in a
 private browser window. A live smoke test is always operator-initiated; automated tests use fakes and
 never create public Drive files.
+
+### One-time recovery of the pending election 677084 case
+
+The previously attempted folder must be recovered manually; rg2watch never moves, adopts, deletes or
+replaces it. Treat the report that it is empty and currently in My Drive as unverified until checking:
+
+1. Run `uv run rg2watch drive-root --config rg2watch.toml`, open its printed URL, and confirm **RG2
+   Watch** is restricted.
+2. In the Google Drive UI, open the existing `RG2 предмет — Књажевац БМ 61` folder and inspect it for
+   **any** files. An app-visible listing is not proof of emptiness. Stop and investigate if it is not
+   empty.
+3. Immediately after confirming it is empty, use the Drive UI to move that same folder into **RG2
+   Watch**. Do not create a replacement. Confirm both the parent and case folder are still restricted.
+4. Restart the local `serve`, open the pending case, verify that the frozen Serbian text is approved,
+   explicitly confirm the warning, and click **Retry frozen publication**.
+5. In Drive, confirm `My Drive / RG2 Watch / RG2 предмет — Књажевац БМ 61` is the same folder and now
+   contains exactly the PDF and text file. The app checks the exact parent and original preallocated
+   IDs; if the folder is still at My Drive root or elsewhere it stops with a manual-move instruction.
+6. Before sending or pasting the Viber message, open the case link and both children in a logged-out
+   private browser. The case folder alone must have “Anyone with the link — Viewer”; **RG2 Watch** must
+   remain restricted. If Google policy blocks inherited child access, stop at the displayed error and
+   do not send the link.
 
 Preparation sends only the document context and the internal review note (not the PDF, stored analysis
 report, or personal names) to the configured Anthropic model, asking for cautious Cyrillic prose. It

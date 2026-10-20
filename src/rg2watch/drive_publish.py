@@ -54,24 +54,46 @@ class GoogleDriveAdapter:
         self.service = service
 
     def generate_ids(self, count: int) -> list[str]:
-        data = self.service.files().generateIds(count=count, space="drive", type="files").execute()
+        try:
+            data = self.service.files().generateIds(
+                count=count, space="drive", type="files").execute()
+        except Exception as exc:
+            raise DriveError("Drive file ID preallocation did not complete; retry safely") from exc
         ids = data.get("ids", [])
         if len(ids) != count:
             raise DriveError("Drive did not preallocate the requested file IDs")
         return ids
 
+    def account_permission_id(self) -> str:
+        try:
+            value = self.service.about().get(fields="user(permissionId)").execute()
+        except Exception as exc:
+            raise DriveError("Google Drive account identity could not be verified") from exc
+        permission_id = (value.get("user") or {}).get("permissionId")
+        if not permission_id:
+            raise DriveError("Google Drive did not provide an authorized account identity")
+        return permission_id
+
+    def get_my_drive_root_id(self) -> str:
+        root = self.get_file("root")
+        if root is None or not root.get("id"):
+            raise DriveError("Google Drive My Drive root could not be inspected")
+        return root["id"]
+
     def get_file(self, file_id: str):
         try:
             return self.service.files().get(
-                fileId=file_id, fields="id,name,mimeType,parents,md5Checksum,trashed").execute()
+                fileId=file_id,
+                fields="id,name,mimeType,parents,owners(permissionId),md5Checksum,trashed").execute()
         except Exception as exc:
             if getattr(getattr(exc, "resp", None), "status", None) == 404:
                 return None
             raise DriveError("Drive file metadata could not be inspected") from exc
 
-    def create_folder(self, file_id: str, name: str):
+    def create_folder(self, file_id: str, name: str, parent: str):
         try:
-            self.service.files().create(body={"id": file_id, "name": name, "mimeType": FOLDER_MIME},
+            self.service.files().create(body={"id": file_id, "name": name, "mimeType": FOLDER_MIME,
+                                              "parents": [parent]},
                                         fields="id").execute()
         except Exception as exc:
             raise DriveError("Drive folder creation did not complete; retry to reconcile it") from exc
@@ -86,14 +108,31 @@ class GoogleDriveAdapter:
         except Exception as exc:
             raise DriveError("Drive file upload did not complete; retry to reconcile it") from exc
 
+    def list_children(self, folder_id: str) -> list[dict]:
+        try:
+            children, page_token = [], None
+            while True:
+                value = self.service.files().list(
+                    q=f"'{folder_id}' in parents and trashed = false", spaces="drive",
+                    fields="nextPageToken,files(id,name,mimeType,parents,trashed)", pageSize=1000,
+                    **({"pageToken": page_token} if page_token else {})).execute()
+                children.extend(value.get("files", []))
+                page_token = value.get("nextPageToken")
+                if not page_token:
+                    return children
+        except Exception as exc:
+            raise DriveError("Drive case folder contents could not be inspected") from exc
+
     def _permissions(self, file_id: str) -> list[dict]:
-        return self.service.permissions().list(
-            fileId=file_id, fields="permissions(id,type,role,permissionDetails)").execute().get(
-                "permissions", [])
+        try:
+            return self.service.permissions().list(
+                fileId=file_id, fields="permissions(id,type,role)").execute().get(
+                    "permissions", [])
+        except Exception as exc:
+            raise DriveError("Drive permissions could not be inspected") from exc
 
     def folder_is_public(self, folder_id: str) -> bool:
-        return any(p.get("type") == "anyone" and p.get("role") == "reader"
-                   for p in self._permissions(folder_id))
+        return any(p.get("type") == "anyone" for p in self._permissions(folder_id))
 
     def share_folder(self, folder_id: str):
         try:
@@ -103,14 +142,12 @@ class GoogleDriveAdapter:
         except Exception as exc:
             raise DriveError("Drive public permission did not complete; retry to reconcile it") from exc
 
-    def children_inherit_public(self, folder_id: str, child_ids: list[str]) -> bool:
+    def children_have_public_reader(self, child_ids: list[str]) -> bool:
         for child in child_ids:
             permissions = self._permissions(child)
             if not any(
-                p.get("type") == "anyone" and p.get("role") == "reader" and any(
-                    detail.get("inherited") is True and detail.get("inheritedFrom") == folder_id
-                    for detail in p.get("permissionDetails", [])
-                ) for p in permissions
+                p.get("type") == "anyone" and p.get("role") == "reader"
+                for p in permissions
             ):
                 return False
         return True
@@ -129,8 +166,8 @@ class LazyConfiguredDrive:
 
 
 class DrivePublisher:
-    def __init__(self, cases: CaseHandoff, drive):
-        self.cases, self.drive, self.store = cases, drive, cases.store
+    def __init__(self, cases: CaseHandoff, drive, root):
+        self.cases, self.drive, self.root, self.store = cases, drive, root, cases.store
 
     def publish(self, url: str, summary: str) -> dict:
         completed = self.store.get_publication(url)
@@ -143,13 +180,34 @@ class DrivePublisher:
             completed = self.store.get_publication(url)
             if completed and completed["phase"] == "published":
                 return self._result(completed)
+            root_id, account_id = self.root.registration()
             publication = self.cases.claim(url, summary)
+            case = json.loads(publication["case_json"])
+            folder_name = f"RG2 предмет — {case['municipality']} БМ {case['station']}"
+            bound = publication.get("drive_account_id")
+            unbound_legacy = bound is None and bool(publication["folder_id"])
+            if bound is not None and bound != account_id:
+                raise DriveError("the pending publication belongs to a different Google Drive account")
+            if bound is None and not publication["folder_id"]:
+                self.store.bind_publication_account(url, account_id)
+                publication = dict(self.store.get_publication(url))
+            self.root.verify_registration(root_id, account_id)
+            if unbound_legacy:
+                legacy = self.drive.get_file(publication["folder_id"])
+                owners = (legacy or {}).get("owners") or []
+                if (not legacy or legacy.get("id") != publication["folder_id"]
+                        or legacy.get("name") != folder_name
+                        or legacy.get("mimeType") != FOLDER_MIME or legacy.get("trashed")
+                        or len(owners) != 1 or owners[0].get("permissionId") != account_id):
+                    raise DriveError("legacy pending Drive folder ownership could not be established; "
+                                     "investigate it manually")
+                self.store.bind_legacy_publication_account(url, account_id)
+                publication = dict(self.store.get_publication(url))
+            legacy_parent_recovery = bool(publication["legacy_parent_recovery"])
             if not publication["folder_id"]:
                 ids = self.drive.generate_ids(3)
                 self.store.save_drive_ids(url, *ids)
-                publication = self.store.get_publication(url)
-            case = json.loads(publication["case_json"])
-            folder_name = f"RG2 предмет — {case['municipality']} БМ {case['station']}"
+                publication = dict(self.store.get_publication(url))
             pdf_name = "документ.pdf"
             text_name = "опис-предмета.txt"
             staged = Path(publication["staged_pdf_path"])
@@ -161,7 +219,7 @@ class DrivePublisher:
                 raise CaseError("frozen staged PDF is missing or changed")
             case_text = self._case_text(case, publication["summary"], publication["pdf_sha256"])
             expected = (
-                (publication["folder_id"], folder_name, FOLDER_MIME, [], None),
+                (publication["folder_id"], folder_name, FOLDER_MIME, [root_id], None),
                 (publication["pdf_file_id"], pdf_name, "application/pdf",
                  [publication["folder_id"]], pdf),
                 (publication["text_file_id"], text_name, "text/plain",
@@ -172,7 +230,7 @@ class DrivePublisher:
                 if found is None:
                     try:
                         if mime == FOLDER_MIME:
-                            self.drive.create_folder(file_id, name)
+                            self.drive.create_folder(file_id, name, root_id)
                         else:
                             self.drive.upload(file_id, name, mime, parents[0], data)
                     except Exception:
@@ -181,9 +239,26 @@ class DrivePublisher:
                         if found is None:
                             raise
                     found = self.drive.get_file(file_id)
-                self._verify(found, file_id, name, mime, parents, data)
+                self._verify(found, file_id, name, mime, parents, data,
+                             legacy_parent_recovery=(legacy_parent_recovery
+                                                     and mime == FOLDER_MIME))
+                if mime == FOLDER_MIME:
+                    owners = found.get("owners") or []
+                    if len(owners) != 1 or owners[0].get("permissionId") != account_id:
+                        raise DriveError("Drive case folder owner does not match the authorized account")
+                    public = self.drive.folder_is_public(file_id)
+                    if public and publication["phase"] != "uploaded":
+                        raise DriveError("the pending Drive case folder became public before verification")
+                    visible = {child.get("id") for child in self.drive.list_children(file_id)}
+                    allowed = {publication["pdf_file_id"], publication["text_file_id"]}
+                    if not visible <= allowed:
+                        raise DriveError("the Drive case folder contains an unexpected app-visible child; "
+                                         "inspect it manually")
             self.store.advance_publication(url, "uploaded")
             with self.store.case_locks.decision(url):
+                checked_root, checked_account = self.root.require_state()
+                if checked_root != root_id or checked_account != account_id:
+                    raise DriveError("Google Drive root identity changed during publication")
                 already_public = self.drive.folder_is_public(publication["folder_id"])
                 if not already_public:
                     if self.store.latest_verdict(url) != "escalate":
@@ -196,7 +271,7 @@ class DrivePublisher:
                 if not self.drive.folder_is_public(publication["folder_id"]):
                     raise DriveError("Drive did not confirm anyone-with-link reader access")
                 children = [publication["pdf_file_id"], publication["text_file_id"]]
-                if not self.drive.children_inherit_public(publication["folder_id"], children):
+                if not self.drive.children_have_public_reader(children):
                     raise DriveError("Drive account policy did not expose both folder children")
                 final = "https://drive.google.com/drive/folders/" + publication["folder_id"]
                 viber = self.cases.viber_text(case, publication["summary"], final)
@@ -213,9 +288,16 @@ class DrivePublisher:
         return text.encode("utf-8")
 
     @staticmethod
-    def _verify(found, file_id, name, mime, parents, data):
+    def _verify(found, file_id, name, mime, parents, data, legacy_parent_recovery=False):
         if not found or found.get("id") != file_id or found.get("name") != name or \
                 found.get("mimeType") != mime or found.get("parents", []) != parents or found.get("trashed"):
+            if mime == FOLDER_MIME and found and found.get("parents") != parents:
+                if legacy_parent_recovery:
+                    raise DriveError("inspect the existing case folder for any files, confirm it is "
+                                     "empty, then move that same folder manually into the private "
+                                     "RG2 Watch folder and retry")
+                raise DriveError("the Drive case folder has an unexpected parent; investigate it "
+                                 "manually without moving or replacing it")
             raise DriveError("remote file metadata does not match the frozen case")
         if data is not None:
             expected = hashlib.md5(data).hexdigest()

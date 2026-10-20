@@ -98,10 +98,20 @@ def test_claim_freezes_summary_and_pdf_and_refuses_changed_retry(tmp_path):
     store.close()
 
 
+def test_publication_account_binding_is_nullable_and_immutable(tmp_path):
+    store, service, _ = handoff(tmp_path)
+    service.claim(URL, "Опрезан јавни опис.")
+    assert store.get_publication(URL)["drive_account_id"] is None
+    store.bind_publication_account(URL, "account-1")
+    assert store.get_publication(URL)["drive_account_id"] == "account-1"
+    store.bind_publication_account(URL, "account-1")
+    with pytest.raises(ValueError, match="different Google Drive account"):
+        store.bind_publication_account(URL, "account-2")
+
+
 def test_restart_after_preclaim_crash_discards_unclaimed_orphan_and_accepts_new_summary(
         tmp_path, monkeypatch):
-    from test_drive_publish import FakeDrive
-    from rg2watch.drive_publish import DrivePublisher
+    from test_drive_publish import FakeDrive, make_publisher
 
     store, service, _ = handoff(tmp_path)
 
@@ -127,7 +137,7 @@ def test_restart_after_preclaim_crash_discards_unclaimed_orphan_and_accepts_new_
     finally:
         jobs.close()
 
-    result = DrivePublisher(restarted, FakeDrive()).publish(URL, "Нови одобрени опис")
+    result = make_publisher(restarted, FakeDrive(), tmp_path).publish(URL, "Нови одобрени опис")
     assert result["status"] == "published"
     frozen = restarted_store.get_publication(URL)
     assert frozen["summary"] == "Нови одобрени опис"
@@ -336,9 +346,16 @@ def test_page_has_explicit_safe_case_controls():
     assert '"case/prepare"' in html and '"case/publish"' in html
     assert 'document.createElement("textarea")' in html
     assert ".textContent" in html and "innerHTML = draft" not in html
-    assert "свако са везом" in html
+    for text in ("Prepare draft", "Publish public case", "Anyone with the link can open",
+                 "public case summary in Serbian Cyrillic", "Copy", "Copied",
+                 "Retry frozen publication", "Publication error:"):
+        assert text in html
+    for old in ("Припреми нацрт", "Објави јавни предмет", "Понови објаву замрзнутог предмета",
+                "Грешка:", "Копирано"):
+        assert old not in html
+    # Prepared/public content is still Serbian Cyrillic and is never translated here.
+    assert "area.value = result.summary" in html
     assert "area.value = pending.summary" in html
-    assert "Понови објаву замрзнутог предмета" in html
 
 
 def test_case_ui_reenables_prepare_and_publish_after_async_job_errors():
@@ -376,18 +393,144 @@ async function tick() { await new Promise(resolve => setImmediate(resolve)); }
 (async () => {
   jobs.prepare = {state: "error", error: "prepare boom"};
   let box = caseBox({u: "https://example.test/a.pdf", pdf: "hash"}); await tick();
-  let prep = findText(box, "Припреми нацрт"); prep.onclick(); await tick(); await tick();
+  let prep = findText(box, "Prepare draft"); prep.onclick(); await tick(); await tick();
   if (prep.disabled || !box.querySelector(".rvmsg").textContent.includes("prepare boom")) process.exit(2);
 
   jobs.prepare = {state: "done", result: {summary: "Опис"}};
   jobs.publish = {state: "error", error: "publish boom"};
   box = caseBox({u: "https://example.test/a.pdf", pdf: "hash"}); await tick();
-  prep = findText(box, "Припреми нацрт"); prep.onclick(); await tick(); await tick();
-  const publish = findText(box, "Објави јавни предмет");
+  prep = findText(box, "Prepare draft"); prep.onclick(); await tick(); await tick();
+  const publish = findText(box, "Publish public case");
   const confirm = find(box, x => x.tag === "input"); confirm.checked = true;
   publish.onclick(); await tick(); await tick();
   if (publish.disabled || !box.querySelector(".rvmsg").textContent.includes("publish boom")) process.exit(3);
 })().catch(e => { console.error(e); process.exit(4); });
+'''
+    subprocess.run(["node", "-e", script], check=True)
+
+
+def test_case_ui_executes_all_operator_states_and_preserves_serbian_content():
+    html = Path("src/rg2watch/static/index.html").read_text(encoding="utf-8")
+    source = html[html.index("function copyButton"):html.index("function rowOf")]
+    script = r'''
+class El {
+  constructor(tag) { this.tag = tag; this.children = []; this.hidden = false; this.disabled = false;
+    this.textContent = ""; this.value = ""; this.checked = false; this.className = "";
+    this.attrs = {}; this.readOnly = false; }
+  append(...xs) { this.children.push(...xs); }
+  prepend(...xs) { this.children.unshift(...xs); }
+  replaceChildren(...xs) { this.children = xs; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  querySelector(sel) { if (sel === ".rvmsg") return find(this, x => x.className === "rvmsg"); }
+}
+function find(root, pred) { if (root instanceof El && pred(root)) return root;
+  for (const child of root.children || []) { const got = child instanceof El && find(child, pred); if (got) return got; }
+  return null; }
+function findText(root, text) { return find(root, x => x.textContent === text); }
+function allText(root) { if (!(root instanceof El)) return String(root || "");
+  return root.textContent + root.children.map(allText).join(""); }
+function check(ok, message) { if (!ok) throw new Error(message); }
+const document = {createElement: tag => new El(tag)};
+const clipboard = [];
+const navigator = {clipboard: {writeText: text => { clipboard.push(text); return Promise.resolve(); }}};
+let HTTP = true;
+function mk(tag, text, cls) { const e = new El(tag); if (text != null) e.textContent = text; e.className = cls || ""; return e; }
+function link(text, href) { const e = mk("a", text); e.href = href; return e; }
+function rvOf(v) { return v.rv || {v: "escalate"}; }
+const publications = new Map(), jobs = new Map();
+let prepareId = "prepare", publishId = "publish";
+function caseFetch(path) {
+  if (path.startsWith("case/publication")) {
+    const url = decodeURIComponent(path.split("url=")[1]);
+    return Promise.resolve(publications.get(url) || {status: "none"});
+  }
+  if (path === "case/prepare") return Promise.resolve({job_id: prepareId});
+  if (path === "case/publish") return Promise.resolve({job_id: publishId});
+  const id = path.split("/").pop(), values = jobs.get(id), value = Array.isArray(values) ? values.shift() : values;
+  return Promise.resolve(value);
+}
+function setTimeout(fn) { fn(); }
+''' + source + r'''
+async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); }
+(async () => {
+  HTTP = false;
+  let box = caseBox({u: "offline", pdf: "hash"});
+  check(allText(box).includes("only through the local rg2watch server"), "local-server guidance");
+  HTTP = true;
+
+  publications.set("missing", {status: "none"});
+  box = caseBox({u: "missing", pdf: ""}); await flush();
+  check(allText(box).includes("No locally cached PDF is available"), "missing-PDF guidance");
+
+  publications.set("ai", {status: "none"});
+  jobs.set("prepare-ai", {state: "done", result: {summary: "Српски јавни опис", warning: true}});
+  prepareId = "prepare-ai";
+  box = caseBox({u: "ai", pdf: "hash"}); await flush();
+  findText(box, "Prepare draft").onclick(); await flush();
+  check(allText(box).includes("AI draft failed; use the manual template."), "AI fallback");
+  const aiArea = find(box, x => x.tag === "textarea");
+  check(aiArea.value === "Српски јавни опис", "Serbian prepared summary unchanged");
+  check(aiArea.attrs["aria-label"] === "public case summary in Serbian Cyrillic", "textarea label");
+
+  publications.set("running", {status: "none"});
+  jobs.set("prepare-running", [{state: "running"},
+    {state: "done", result: {summary: "Текст после чекања"}}]);
+  prepareId = "prepare-running";
+  box = caseBox({u: "running", pdf: "hash"}); await flush();
+  const runningPrep = findText(box, "Prepare draft"); runningPrep.onclick();
+  check(runningPrep.disabled && allText(box).includes("Preparing..."), "running job status");
+  await flush();
+  check(!runningPrep.disabled && find(box, x => x.tag === "textarea").value === "Текст после чекања",
+    "running job completion");
+
+  publications.set("pending", {status: "uploaded", summary: "Замрзнути опис", retryable: true});
+  box = caseBox({u: "pending", pdf: "hash"}); await flush();
+  const pendingArea = find(box, x => x.tag === "textarea");
+  check(pendingArea.value === "Замрзнути опис" && pendingArea.readOnly, "frozen summary unchanged");
+  check(findText(box, "Retry frozen publication") && allText(box).includes("frozen publication is pending"),
+    "pending retry UI");
+
+  publications.set("published", {status: "published", url: "https://drive.test/case",
+    viber_text: "Могућа неправилност - Вибер порука"});
+  box = caseBox({u: "published", pdf: "hash"}); await flush();
+  check(allText(box).includes("Case published"), "published success");
+  check(allText(box).includes("Могућа неправилност - Вибер порука"), "Serbian Viber unchanged");
+  const copy = findText(box, "Copy"); copy.onclick(); await flush();
+  check(copy.textContent === "Copied" && clipboard[0] === "https://drive.test/case", "copy feedback");
+
+  publications.set("success", {status: "none"});
+  jobs.set("prepare-success", {state: "done", result: {summary: "Одобрени опис"}});
+  jobs.set("publish-success", {state: "done", result: {status: "published",
+    url: "https://drive.test/new", viber_text: "Вибер успех"}});
+  prepareId = "prepare-success"; publishId = "publish-success";
+  box = caseBox({u: "success", pdf: "hash"}); await flush();
+  findText(box, "Prepare draft").onclick(); await flush();
+  const confirm = find(box, x => x.tag === "input");
+  const publish = findText(box, "Publish public case"); confirm.checked = true; publish.onclick(); await flush();
+  check(allText(box).includes("Case published") && allText(box).includes("Вибер успех"), "publish success");
+
+  publications.set("errors", {status: "none"});
+  jobs.set("prepare-error", {state: "error", error: "preparation unavailable"});
+  prepareId = "prepare-error";
+  box = caseBox({u: "errors", pdf: "hash"}); await flush();
+  const prep = findText(box, "Prepare draft"); prep.onclick(); await flush();
+  check(!prep.disabled && allText(box).includes("Preparation error: preparation unavailable"),
+    "prepare error and re-enable");
+
+  jobs.set("prepare-for-publish-error", {state: "done", result: {summary: "Опис"}});
+  jobs.set("publish-error", {state: "error",
+    error: "Drive file ID preallocation did not complete; retry safely"});
+  prepareId = "prepare-for-publish-error"; publishId = "publish-error";
+  box = caseBox({u: "errors", pdf: "hash"}); await flush();
+  findText(box, "Prepare draft").onclick(); await flush();
+  const failedPublish = findText(box, "Publish public case");
+  find(box, x => x.tag === "input").checked = true; failedPublish.onclick(); await flush();
+  check(!failedPublish.disabled && allText(box).includes(
+    "Publication error: Drive file ID preallocation did not complete; retry safely"),
+    "publish error and re-enable");
+  check(!allText(box).includes("secret-token-value") && !allText(box).includes("provider debug"),
+    "raw provider details absent from UI");
+})().catch(e => { console.error(e); process.exit(2); });
 '''
     subprocess.run(["node", "-e", script], check=True)
 
@@ -407,6 +550,41 @@ def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_
         with pytest.raises(ValueError, match="not configured"):
             jobs.submit_publish(URL, "Јавни опис", True)
         assert jobs.publication(URL) is None
+    finally:
+        jobs.close()
+
+
+def test_publication_job_exposes_only_sanitized_generate_ids_error(tmp_path):
+    from rg2watch.drive_publish import DriveError, GoogleDriveAdapter
+
+    class FailingRequest:
+        def execute(self):
+            raise RuntimeError("provider debug: bearer secret-token-value")
+
+    class FilesService:
+        def files(self):
+            return self
+
+        def generateIds(self, **kwargs):
+            return FailingRequest()
+
+    class Publisher:
+        def publish(self, url, summary):
+            GoogleDriveAdapter(FilesService()).generate_ids(3)
+
+    _, cases, _ = handoff(tmp_path)
+    jobs = PublicationJobs(cases, Publisher(), workers=1)
+    try:
+        job_id = jobs.submit_publish(URL, "Јавни опис", True)
+        for _ in range(100):
+            result = jobs.job(job_id)
+            if result["state"] != "running":
+                break
+            time.sleep(.01)
+        assert result == {"id": job_id, "state": "error", "kind": "publication",
+                          "error": "Drive file ID preallocation did not complete; retry safely"}
+        assert "provider debug" not in json.dumps(result)
+        assert "secret-token-value" not in json.dumps(result)
     finally:
         jobs.close()
 
@@ -443,19 +621,29 @@ class _ProcessDrive:
         self.crash_after_folder = crash_after_folder
 
     def generate_ids(self, count):
+        if count == 1:
+            return ["process-root"]
         self.state["generate_calls"] += 1
         return ["process-folder", "process-pdf", "process-text"]
+
+    def account_permission_id(self):
+        return "process-account"
+
+    def get_my_drive_root_id(self):
+        return "my-drive-root"
 
     def get_file(self, file_id):
         return self.state["files"].get(file_id)
 
-    def create_folder(self, file_id, name):
+    def create_folder(self, file_id, name, parent):
         files = dict(self.state["files"])
         files[file_id] = {"id": file_id, "name": name,
-                          "mimeType": "application/vnd.google-apps.folder", "parents": []}
+                          "mimeType": "application/vnd.google-apps.folder", "parents": [parent],
+                          "owners": [{"permissionId": "process-account"}], "trashed": False}
         self.state["files"] = files
-        self.state["folder_creates"] += 1
-        if self.crash_after_folder:
+        if file_id != "process-root":
+            self.state["folder_creates"] += 1
+        if file_id != "process-root" and self.crash_after_folder:
             os._exit(73)
 
     def upload(self, file_id, name, mime, parent, data):
@@ -465,22 +653,29 @@ class _ProcessDrive:
         self.state["files"] = files
 
     def folder_is_public(self, folder_id):
-        return self.state["public"]
+        return False if folder_id == "process-root" else self.state["public"]
+
+    def list_children(self, folder_id):
+        return [f for f in self.state["files"].values() if f.get("parents") == [folder_id]]
 
     def share_folder(self, folder_id):
         self.state["share_calls"] += 1
         self.state["public"] = True
 
-    def children_inherit_public(self, folder_id, child_ids):
+    def children_have_public_reader(self, child_ids):
         return self.state["public"] and all(i in self.state["files"] for i in child_ids)
 
 
 def _publish_with_process_store(db, state, crash, out=None):
     from rg2watch.drive_publish import DrivePublisher
+    from rg2watch.drive_root import DriveRoot
     store = Store(db)
     try:
         cases = CaseHandoff(store, Config(db_path=Path(db), max_pdf_bytes=1000))
-        result = DrivePublisher(cases, _ProcessDrive(state, crash)).publish(URL, "Процесни опис")
+        drive = _ProcessDrive(state, crash)
+        root = DriveRoot(Path(db).parent / "process-token.json", drive)
+        root.setup()
+        result = DrivePublisher(cases, drive, root).publish(URL, "Процесни опис")
         if out is not None:
             out.put(result)
     finally:
@@ -488,8 +683,8 @@ def _publish_with_process_store(db, state, crash, out=None):
 
 
 def test_two_store_publish_owner_blocks_claim_and_upload_then_recovers_after_crash(tmp_path):
-    from test_drive_publish import FakeDrive
-    from rg2watch.drive_publish import DrivePublisher, DriveError
+    from test_drive_publish import FakeDrive, make_publisher
+    from rg2watch.drive_publish import DriveError
 
     first, _, _ = handoff(tmp_path)
     second = Store(first.path)
@@ -501,14 +696,14 @@ def test_two_store_publish_owner_blocks_claim_and_upload_then_recovers_after_cra
         assert ready.wait(5)
         blocked_drive = FakeDrive()
         with pytest.raises(DriveError, match="in progress"):
-            DrivePublisher(cases, blocked_drive).publish(URL, "Јавни опис")
+            make_publisher(cases, blocked_drive, tmp_path).publish(URL, "Јавни опис")
         assert blocked_drive.steps == []
         assert second.get_publication(URL) is None
     finally:
         if owner.is_alive():
             owner.kill()
         owner.join(5)
-    result = DrivePublisher(cases, blocked_drive).publish(URL, "Јавни опис")
+    result = make_publisher(cases, blocked_drive, tmp_path).publish(URL, "Јавни опис")
     assert result["status"] == "published"
 
 
@@ -541,6 +736,6 @@ def test_second_process_recovers_durable_pending_and_remote_create_without_dupli
         assert frozen_ids == ["process-folder", "process-pdf", "process-text"]
         assert state["generate_calls"] == 1
         assert state["folder_creates"] == 1
-        assert set(state["files"]) == set(frozen_ids)
+        assert set(state["files"]) == set(frozen_ids) | {"process-root"}
         assert state["files"]["process-pdf"]["md5Checksum"] == hashlib.md5(frozen_bytes).hexdigest()
         assert state["share_calls"] == 1

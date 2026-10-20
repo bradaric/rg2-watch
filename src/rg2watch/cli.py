@@ -181,7 +181,9 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=_port, help="port (config serve_port, default 8770)")
 
     sub.add_parser("drive-auth", parents=[common],
-                   help="authorize the operator's Google account for app-created Drive files")
+                    help="authorize the operator's Google account for app-created Drive files")
+    sub.add_parser("drive-root", parents=[common],
+                   help="create or verify the private shared RG2 Watch Drive root")
 
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
@@ -283,11 +285,15 @@ def _publication_api(store: Store, cfg: Config):
     from .case_draft import CaseDrafter
     from .case_handoff import CaseHandoff
     from .drive_publish import DrivePublisher, LazyConfiguredDrive
+    from .drive_root import DriveRoot
     from .publication_service import PublicationJobs
     drafter = None if is_ollama(cfg.model) else CaseDrafter(store, cfg, _anthropic_client)
     cases = CaseHandoff(store, cfg, drafter)
-    publisher = (DrivePublisher(cases, LazyConfiguredDrive(cfg.drive_token_path))
-                 if cfg.drive_token_path.is_file() else None)
+    if cfg.drive_token_path.is_file():
+        drive = LazyConfiguredDrive(cfg.drive_token_path)
+        publisher = DrivePublisher(cases, drive, DriveRoot(cfg.drive_token_path, drive))
+    else:
+        publisher = None
     return PublicationJobs(cases, publisher)
 
 
@@ -488,6 +494,21 @@ def _cmd_drive_auth(args) -> int:
         print("Google Drive authorization failed; check the OAuth client and try again", file=sys.stderr)
         return 1
     print(f"Google Drive authorization saved to {cfg.drive_token_path} (mode 0600)")
+    return 0
+
+
+def _cmd_drive_root(args) -> int:
+    cfg = _config(args)
+    try:
+        from .drive_publish import configured_drive
+        from .drive_root import DriveRoot
+        drive = configured_drive(cfg.drive_token_path)
+        root_id = DriveRoot(cfg.drive_token_path, drive).setup()
+    except Exception as exc:
+        log.error("Google Drive root setup failed: %s", exc)
+        print(f"Google Drive root setup failed: {exc}", file=sys.stderr)
+        return 1
+    print("https://drive.google.com/drive/folders/" + root_id)
     return 0
 
 
@@ -1166,7 +1187,8 @@ def main(argv: list[str] | None = None) -> int:
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
                "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "status": _cmd_status, "tally": _cmd_tally,
-               "review": _cmd_review, "labels": _cmd_labels, "drive-auth": _cmd_drive_auth}[args.cmd]
+               "review": _cmd_review, "labels": _cmd_labels, "drive-auth": _cmd_drive_auth,
+               "drive-root": _cmd_drive_root}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay", "serve"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
         previous = signal.signal(signal.SIGTERM, _sigterm)
