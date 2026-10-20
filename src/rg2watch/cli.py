@@ -1,8 +1,10 @@
 import argparse
 import dataclasses
+import fcntl
 import json
 import logging
 import math
+import os
 import signal
 import sys
 import threading
@@ -581,8 +583,39 @@ def _print_summary(store: Store, db_path, parent: str, only, started: float, don
     print(f"browse: rg2watch serve --db {db_path}")
 
 
+def _watch_lock(db_path: Path):
+    """Exclusive lock on <db>.lock (its pid inside) so two watchers never share a database;
+    None (message printed) when another one holds it. Released when the file is closed."""
+    path = Path(str(db_path) + ".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "a+")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.seek(0)
+        pid = fh.read().strip() or "unknown"
+        fh.close()
+        print(f"another rg2watch watch is already running on {db_path} (pid {pid})", file=sys.stderr)
+        return None
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    return fh
+
+
 def _cmd_watch(args) -> int:
     cfg = _config(args)
+    lock = _watch_lock(cfg.db_path)
+    if lock is None:
+        return 2
+    try:
+        return _run_watch(args, cfg)
+    finally:
+        lock.close()
+
+
+def _run_watch(args, cfg: Config) -> int:
     if args.once:
         cfg.tick_request_budget = 10**9  # a single tick must finish every pass
     store = _open_store(cfg)
