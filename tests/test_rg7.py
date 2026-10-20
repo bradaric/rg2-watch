@@ -626,3 +626,38 @@ def test_requeue_rg7_upgrades_r1_reads_but_never_rebills_failed_docs():
     assert s.requeue_rg7(BP, None, "r2") == 1
     st = lambda x: s._db.execute("SELECT analysis_status FROM documents WHERE url=?", (x.url,)).fetchone()[0]
     assert [st(x) for x in (r1_done, r1_failed, r2_done, r2_failed_after_r1)] == ["new", "failed", "done", "failed"]
+
+
+def test_diff_is_like_for_like_stations_joining_a_total_are_counted_separately():
+    from rg2watch.tally import format_tally
+
+    s = bstore()
+    station(s, clean_report(), no="1")  # untouched: in both views
+    # registered unreadable as filed, given by the RG-7 table: joins the registered/voted total
+    station(s, clean_report(), [(rg7(table=[("registered", 500), ("voted", 400)]), "2026-10-20T10:00:00Z")], no="2",
+            registered=nf(None, legible=False, mark="empty"))
+    t = tally(s)
+    m = t["munis"][0]
+    base = clean_report()["numbers"]
+    assert m["all"]["registered"] == base["registered"]["value"] + 500 and m["fall"]["registered"] == base["registered"]["value"]
+    p = m["pair"]["all"]
+    assert (p["in"], p["out"]) == (1, 0)
+    assert p["c"]["registered"] == p["f"]["registered"] == base["registered"]["value"]  # only station 1 is paired
+    assert p["c"]["voted"] == p["f"]["voted"]
+    assert t["overall"]["pair"]["all"]["in"] == 1
+    text = format_tally(t, view="diff")
+    assert "newly counted/removed" in text and "+1 / -0" in text
+    assert "stations newly counted: +1, removed: -0" in text
+    row = next(r for r in text.splitlines() if r.startswith(m["m"]))
+    assert "+500" not in row and "+400" not in row  # not shown as voter deltas
+
+
+def test_diff_clean_view_status_flip_is_a_station_change_not_a_delta():
+    s = bstore()
+    station(s, clean_report(), [(rg7([("10.2", 180, 178), ("10.3", 20, 18), ("10.4", 160, 160)]), "2026-10-20T10:00:00Z")],
+            voted=nf(178), ballots_in_box=nf(180), invalid=nf(20), valid=nf(160),
+            list_votes=[{"row": 1, "field": nf(100)}, {"row": 2, "field": nf(60)}])  # flagged as filed, clean corrected
+    o = tally(s)["overall"]["pair"]
+    assert (o["cl"]["in"], o["cl"]["out"]) == (1, 0) and o["cl"]["c"]["valid"] == o["cl"]["f"]["valid"] == 0
+    assert (o["all"]["in"], o["all"]["out"]) == (0, 0) and o["all"]["c"]["ballots_in_box"] == 178
+    assert o["all"]["f"]["ballots_in_box"] == 180

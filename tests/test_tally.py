@@ -418,3 +418,9 @@ def test_municipal_unknown_municipality_gets_no_list_totals():
     assert "(unknown): warning: municipality unknown" in format_tally(t)
     nat = next(m for m in tally(s)["munis"] if m["m"] == "(unknown)")
     assert "lists" in nat["all"]  # national scope: one ballot, lists kept
+
+
+def test_page_diff_view_uses_paired_numbers_and_shows_station_changes():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "deltaOf(r.pair.all.c, r.pair.all.f)" in html and "Stations newly counted" in html
+    assert "Stations removed" in html and "deltaOf(r.all, r.fall)" not in html

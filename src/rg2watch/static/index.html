@@ -778,7 +778,7 @@ const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
 const ratio = (a, b) => b ? a / b : null;
 const NV = () => $("tview").value;  // numbers: corrected | filed | diff
 const NV_LABEL = {corrected: "With RG-7 corrections.", filed: "As filed on the RG-2 forms (RG-7 corrections not applied).",
-  diff: "Difference: with RG-7 corrections minus as filed."};
+  diff: "Difference: with RG-7 corrections minus as filed, over the stations counted in both (stations that join or leave a total are shown separately)."};
 const dnum = v => v == null ? "-" : v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + nf.format(Math.abs(v));
 const dpp = x => { if (x == null) return "-"; const v = Math.round(x * 1000) / 10; return v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + Math.abs(v).toFixed(1); };
 function deltaOf(a, b) {  // totals block: corrected minus as filed (turnout and shares in fractions)
@@ -794,7 +794,9 @@ function deltaOf(a, b) {  // totals block: corrected minus as filed (turnout and
 function vrow(r) {  // the row as the chosen numbers view shows it
   const v = NV();
   if (v === "filed") return {...r, all: r.fall, cl: r.fcl, clean: r.fclean, excluded: r.fexcluded};
-  if (v === "diff") return {...r, all: deltaOf(r.all, r.fall), cl: deltaOf(r.cl, r.fcl), clean: r.clean - r.fclean, excluded: r.excluded - r.fexcluded};
+  // like-for-like: numbers over the stations counted in both views; stations joining/leaving a total are separate
+  if (v === "diff") return {...r, all: deltaOf(r.pair.all.c, r.pair.all.f), cl: deltaOf(r.pair.cl.c, r.pair.cl.f),
+    clean: r.clean - r.fclean, excluded: r.excluded - r.fexcluded, nin: r.pair[$("tmode").value].in, nout: -r.pair[$("tmode").value].out};
   return r;
 }
 function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come through vrow()
@@ -807,6 +809,7 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come
     ["Turnout" + (dg ? " (pp)" : ""), r => t(r).turnout, p, r => t(r).turnout == null ? "" : (100 * t(r).turnout).toFixed(1)],
     ["In box", r => t(r).ballots_in_box, n], ["Invalid", r => t(r).invalid, n],
     ["Valid", r => t(r).valid, n], ["Outside", r => t(r).outside_voted, n]];
+  if (dg) c.push(["Stations newly counted", r => r.nin, dnum], ["Stations removed", r => r.nout, dnum]);
   const share = (r, i) => dg ? t(r).sh[i] : ratio(t(r).lists[i], t(r).lists_valid);
   T.names.forEach((nm, i) => {
     c.push([(i + 1) + " \u00b7 " + nm + " votes", r => t(r).lists[i], n]);
@@ -1008,7 +1011,8 @@ function renderHero() {
   put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));
   put("hs-valid", none ? "" : dg ? "difference in valid votes" : !t.registered ? "" : "valid votes counted");
   $("heronote").textContent = none ? "No forms counted yet - no results to show."
-    : [muniScope && allMunis ? "Local election - lists differ per municipality; pick a municipality for list results." : "",
+    : [dg ? "Stations newly counted: " + dnum(r.nin) + ", removed: " + dnum(r.nout) + " (not in the differences above; a correction made a number readable or changed a form's clean/flagged status)." : "",
+      muniScope && allMunis ? "Local election - lists differ per municipality; pick a municipality for list results." : "",
       cover != null && cover < 0.1 ? "Very early - few stations counted. Do not read these shares as a result." : ""].filter(Boolean).join(" ");
   const rows = none || (muniScope && allMunis) || !raw[mode].lists_valid ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
     .sort((a, b) => dg ? Math.abs(b.v) - Math.abs(a.v) || a.i - b.i : b.v - a.v || a.i - b.i);
