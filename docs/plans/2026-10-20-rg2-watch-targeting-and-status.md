@@ -73,6 +73,17 @@ external requests from the page. `deferRender`, paging (default 100 rows), child
 versions and second opinions, custom filters via `DataTable.ext.search`, `stateSave` for filters.
 All data cells rendered with `DataTable.render.text()` (escaped); no HTML from data.
 
+## Local web server (decided 20/10/2026)
+
+- `watch` serves the page at `http://127.0.0.1:<serve_port>` (config `serve_port = 8770`,
+  `0` = off; `--serve-port`). `rg2watch serve` does the same without watching.
+- Binds 127.0.0.1 only. Serves an allow-list: `index.html`, `status.js`/`status.json`,
+  `data.js`/`data.json`, the vendored static files, and `pdfs/<64 hex>.pdf`. Everything else 404
+  (no directory listings, no DB, no `.env`, no path traversal). GET/HEAD only. Stdlib
+  `http.server` (ThreadingHTTPServer) in a daemon thread; port in use: log a warning, keep watching.
+- Over http the page polls `status.json`/`data.json` with fetch(); opened as a file it falls back
+  to the script re-injection. Startup log prints the URL.
+
 ## Browse page review fixes (fold into C + D)
 
 From the review of 09d953d:
@@ -90,6 +101,10 @@ From the review of 09d953d:
 - NULL municipality shown as "(unknown)", and selectable.
 - `uploaded_at` is Serbian local time (Europe/Belgrade); store/show both columns consistently.
 - Remove stale `*.tmp` from failed writes.
+- Links (operator request 20/10/2026): two columns, "Local PDF" and "RIK", each sortable/filterable
+  ("has local copy"); both open in a new tab (`target="_blank" rel="noopener noreferrer"`); the local
+  link is a plain file link so right-click "copy link" gives a usable file:// URL. Same for older
+  versions in child rows.
 
 ## Order
 
