@@ -81,6 +81,11 @@ browse_interval_s = 120
 
 # Local web server of `watch` for the browse page (127.0.0.1 only); 0 = off
 serve_port = 8770
+# Optional manual case publication. Download an OAuth "Desktop app" client JSON from Google Cloud,
+# keep it outside version control, set this path, then run `rg2watch drive-auth --config ...` once.
+# The app requests only drive.file and stores the operator account token locally (mode 0600).
+# drive_client_secrets = "data/google-oauth-client.json"
+drive_token_path = "data/drive-token.json"
 # PDF downloads have their own rate limiter (requests/second), on top of max_rps for listings
 download_max_rps = 0.5
 # Pause all analysis this long after a key/permission/model/request error (then one probe form)

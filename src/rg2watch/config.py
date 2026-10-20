@@ -72,6 +72,8 @@ class Config:
     analysis_workers: int = 4
     browse_interval_s: int = 120  # rebuild the browse page this often in `watch`; 0 = off
     serve_port: int = 8770  # local web server of `watch` (127.0.0.1); 0 = off
+    drive_client_secrets: Path | None = None  # installed-app OAuth JSON; never served
+    drive_token_path: Path = Path("data/drive-token.json")
     download_max_rps: float = 0.5
     analysis_pause_s: int = 600
     stop_wait_s: int = 80
@@ -112,8 +114,9 @@ def load_config(path: Path | None) -> Config:
     unknown = set(data) - known
     if unknown:
         raise ValueError(f"unknown config keys: {sorted(unknown)}")
-    if "db_path" in data:
-        data["db_path"] = Path(data["db_path"])
+    for key in ("db_path", "drive_client_secrets", "drive_token_path"):
+        if key in data and data[key] is not None:
+            data[key] = Path(data[key])
     cfg = Config(**data)
     if not 0.0 <= cfg.reserved_share <= 0.9:
         clamped = min(0.9, max(0.0, cfg.reserved_share))

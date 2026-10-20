@@ -180,6 +180,9 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", parents=[common], help="serve the browse page on 127.0.0.1 (no watching)")
     s.add_argument("--port", type=_port, help="port (config serve_port, default 8770)")
 
+    sub.add_parser("drive-auth", parents=[common],
+                   help="authorize the operator's Google account for app-created Drive files")
+
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
     s.add_argument("--host", default="127.0.0.1")
@@ -450,6 +453,25 @@ def _cmd_review(args) -> int:
         return 0
     finally:
         store.close()
+
+
+def _cmd_drive_auth(args) -> int:
+    cfg = _config(args)
+    if cfg.drive_client_secrets is None:
+        print("drive-auth needs drive_client_secrets in the config", file=sys.stderr)
+        return 2
+    if not cfg.drive_client_secrets.is_file():
+        print(f"Google OAuth client file not found: {cfg.drive_client_secrets}", file=sys.stderr)
+        return 2
+    try:
+        from .drive_publish import authorize_drive
+        authorize_drive(cfg.drive_client_secrets, cfg.drive_token_path)
+    except Exception:
+        log.exception("Google Drive authorization failed")
+        print("Google Drive authorization failed; check the OAuth client and try again", file=sys.stderr)
+        return 1
+    print(f"Google Drive authorization saved to {cfg.drive_token_path} (mode 0600)")
+    return 0
 
 
 def _cmd_labels(args) -> int:
@@ -1124,7 +1146,7 @@ def main(argv: list[str] | None = None) -> int:
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
                "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "status": _cmd_status, "tally": _cmd_tally,
-               "review": _cmd_review, "labels": _cmd_labels}[args.cmd]
+               "review": _cmd_review, "labels": _cmd_labels, "drive-auth": _cmd_drive_auth}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay", "serve"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
         previous = signal.signal(signal.SIGTERM, _sigterm)
