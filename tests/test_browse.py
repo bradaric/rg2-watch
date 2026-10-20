@@ -139,6 +139,12 @@ def test_stale_tmp_files_are_removed_fresh_ones_kept(tmp_path):
     assert not old.exists() and fresh.exists()
 
 
+def test_rg7_decisions_carry_links_wherever_shown():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert html.count("linksOf(x)") >= 3  # child row, forms-table badges, results list
+    assert "row.r7.find(y => y.u === d.u)" in html and "showForm(c.id" in html
+
+
 def test_static_files_ship_and_are_copied_only_when_changed(tmp_path):
     for name in STATIC_FILES:
         assert (STATIC / name).is_file()

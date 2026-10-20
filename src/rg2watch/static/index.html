@@ -47,7 +47,7 @@ h3{font-size:11.5px;font-weight:700;margin:0 0 var(--s2);text-transform:uppercas
 .card td:nth-child(3){font-weight:650;white-space:nowrap}
 .card td:nth-child(4){white-space:nowrap}
 .card td.lk{white-space:nowrap;text-align:right}
-.card td.lk a,.card td.lk .chip{font-size:11px;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:9px;background:none;color:inherit;text-decoration:none;cursor:pointer;font-weight:400;line-height:1.5;min-height:0;box-shadow:none}
+.card td.lk a,.card td.lk .chip,.lk a,.lk .chip{font-size:11px;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:9px;background:none;color:inherit;text-decoration:none;cursor:pointer;font-weight:400;line-height:1.5;min-height:0;box-shadow:none}
 .bad{color:var(--hi);font-weight:700}.warn{color:var(--md);font-weight:700}.good{color:var(--good);font-weight:600}
 /* severity badges: fill style differs (solid dark / solid light / outline) and the word is always shown */
 .b{display:inline-block;min-width:5.6em;padding:1px 6px;border:1.5px solid transparent;border-radius:4px;font-size:10.5px;line-height:15px;font-weight:800;letter-spacing:.06em;text-align:center;margin-right:var(--s2);vertical-align:1px;white-space:nowrap}
@@ -614,7 +614,12 @@ function rg7Text(x) {  // x.ch: read by the watch model; x.by: read by other mod
 }
 function rg7Badges(r) {
   const td = document.createDocumentFragment();
-  for (const x of r.r7) td.append(mk("div", rg7Text(x), "f rg7"));
+  for (const x of r.r7) {
+    const d = mk("div", rg7Text(x), "f rg7"), lk = linksOf(x);
+    lk.className = "lk";
+    d.append(lk);
+    td.append(d);
+  }
   return td;
 }
 function child(r) {
@@ -895,7 +900,19 @@ function renderTally() {
   }
   $("tnotes").replaceChildren(...T.notes.map(n => mk("li", n.m + " BM " + n.no + ": " + n.note)));
   $("tnoteshead").hidden = !T.notes.length;
-  $("tcor").replaceChildren(...T.corrected.map(c => mk("li", c.m + " BM " + c.no + ": " + c.rg7.map(d => "RG-7 " + d.d + ": " + d.ch.join(", ")).join("; "))));
+  $("tcor").replaceChildren(...T.corrected.map(c => {
+    const li = mk("li", c.m + " BM " + c.no + ": "), row = D.rows.find(r => r.id === c.id);
+    c.rg7.forEach((d, i) => {
+      li.append((i ? "; " : "") + "RG-7 " + d.d + ": " + d.ch.join(", "));
+      const x = row && d.u ? row.r7.find(y => y.u === d.u) : null;
+      if (x) { const lk = linksOf(x); lk.className = "lk"; li.append(lk); }
+    });
+    const b = mk("button", "show", "chip"); b.onclick = () => showForm(c.id, c.m + " BM " + c.no);
+    const sp = mk("span", null, "lk");
+    sp.append(b);
+    li.append(sp);
+    return li;
+  }));
   $("tcorhead").hidden = !T.corrected.length;
 }
 

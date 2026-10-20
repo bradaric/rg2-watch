@@ -107,7 +107,7 @@ def apply_rg7(report: dict, decisions: list[dict]) -> tuple[dict, list[dict], li
             if put(e["item"], e["value"], True) and before != e["value"]:
                 ch.append(f"{e['item']} table {e['value']}")
         if ch:
-            applied.append({"d": dec["d"], "ch": ch})
+            applied.append({"d": dec["d"], "ch": ch, **({"u": dec["u"]} if "u" in dec else {})})
     return out, applied, unverified
 
 
@@ -257,7 +257,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION):
         if row["doc_type"] in RG7_FIRST_ROUND and row["station_key"] is not None:
             corr.setdefault(row["station_key"], []).append(
-                ({"d": decision_label(row["uploaded_at"], rep), "rep": rep},
+                ({"d": decision_label(row["uploaded_at"], rep), "rep": rep, "u": row["url"]},
                  decision_sort_key(row["uploaded_at"], row["id"], rep)))
     corr = {k: [d for d, _ in sorted(v, key=lambda x: x[1])] for k, v in corr.items()}
     sigs = {k: hash(json.dumps(v, sort_keys=True)) for k, v in corr.items()}

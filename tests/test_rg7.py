@@ -167,7 +167,9 @@ def test_tally_applies_corrections_and_rechecks_arithmetic():
     assert o["clean"] == 1 and t["excluded"] == []  # 18 + 160 = 178: arithmetic ok after correction
     assert o["all"]["ballots_in_box"] == 178 and o["all"]["invalid"] == 18
     assert t["corrected"] == [{"id": t["corrected"][0]["id"], "m": "Сечањ", "no": "37", "rg7": [
-        {"d": "20/10/2026", "ch": ["10.2 180->178", "10.3 20->18", "10.4 160->160"]}]}]
+        {"d": "20/10/2026", "ch": ["10.2 180->178", "10.3 20->18", "10.4 160->160"],
+         "u": t["corrected"][0]["rg7"][0]["u"]}]}]
+    assert t["corrected"][0]["rg7"][0]["u"]
     assert o["corrected"] == 1
 
 
