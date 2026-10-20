@@ -152,7 +152,8 @@ button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 table.lists{border-collapse:collapse;margin:var(--s1) 0 var(--s2) var(--s5);font-variant-numeric:tabular-nums}
 table.lists th,table.lists td{padding:3px var(--s3);text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
 table.lists th{color:var(--mut);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
-table.lists th:first-child,table.lists td:first-child{text-align:left;font-weight:600}
+table.lists th:nth-child(2),table.lists td:nth-child(2){text-align:left;font-weight:600;white-space:normal;min-width:16em}
+table.lists td.no{color:var(--mut)}
 table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 /* hero: results-graphic look */
 #hero{border:1px solid var(--line);border-radius:10px;padding:var(--s4) var(--s5) var(--s5);margin-bottom:var(--s4);background:var(--panel);box-shadow:var(--shadow)}
@@ -171,11 +172,15 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .prog{height:6px;background:var(--track);border-radius:3px;overflow:hidden;margin:var(--s1) 0 var(--s1)}
 .prog>div{height:100%;width:0;background:var(--accent);transition:width .8s ease}
 #herochart{margin:var(--s3) 0 var(--s2)}
-.hrow{display:grid;grid-template-columns:minmax(7em,17%) 1fr minmax(10em,22%);gap:var(--s4);align-items:center;padding:.28em 0;border-top:1px solid var(--line);font-size:clamp(1rem,1.8vw,2.1rem)}
+.hrow{display:grid;grid-template-columns:1fr minmax(8.5em,20%);grid-template-areas:"hd hd" "tr val";gap:.12em var(--s4);align-items:center;padding:.3em 0;border-top:1px solid var(--line);font-size:clamp(1rem,1.8vw,2.1rem)}
 .hrow:first-child{border-top:0}
 .hrow[hidden]{display:none}
-.hrow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
-.hrow .track{background:var(--track);border-radius:3px;height:1.25em;overflow:hidden}
+.hrow .hd{grid-area:hd;display:flex;align-items:baseline;gap:.45em;font-size:.8em;font-weight:700;line-height:1.15;min-width:0}
+.hrow .nm{overflow-wrap:anywhere}
+.hrow .no{flex:none;min-width:1.65em;padding:.05em .3em;border-radius:4px;background:var(--fg);color:var(--panel);font-size:.85em;line-height:1.2;text-align:center;font-variant-numeric:tabular-nums}
+.hrow .no[hidden]{display:none}
+.hrow .track{grid-area:tr}.hrow .val{grid-area:val}
+.hrow .track{background:var(--track);border-radius:3px;height:1.05em;overflow:hidden}
 .hrow .fill{height:100%;width:0;min-width:3px;border-radius:0 3px 3px 0;transition:width .8s ease,background-color .3s}
 .hrow .val{text-align:right;font-variant-numeric:tabular-nums;white-space:pre;font-weight:700;letter-spacing:-.01em}
 #heronote{font-size:clamp(1rem,1.5vw,1.7rem);font-weight:700;color:var(--md);margin:var(--s2) 0}
@@ -191,8 +196,15 @@ body.hero{padding:2.2vh 3vw;min-height:100vh}
 body.hero #hero{border:0;background:transparent;box-shadow:none;padding:0;margin:0}
 body.hero #herobar{opacity:.55}
 body.hero #herobar:hover,body.hero #herobar:focus-within{opacity:1}
-body.hero .tile .v{font-size:clamp(2.4rem,5.2vw,6.6rem)}
-body.hero .hrow{font-size:clamp(1.1rem,2vw,2.4rem);padding:.2em 0}
+body.hero .tile .v{font-size:clamp(2.4rem,4.2vw,5.4rem)}
+body.hero #heronums{margin:var(--s3) 0 var(--s2)}
+body.hero .hrow{font-size:clamp(1.1rem,1.55vw,1.95rem);padding:.14em 0}
+body.hero .hrow .track{height:.9em}
+.hrow .val{line-height:1.1}
+body.hero .hrow{padding:.1em 0}
+body.hero #herohead{padding-bottom:var(--s2)}
+body.hero #herobar{margin-bottom:var(--s2)}
+body.hero #herochart{margin:var(--s2) 0 0}
 @media (min-width:1200px){#wrap{overflow:visible}#forms>thead>tr>th{position:sticky;top:0;z-index:2}}
 @media (max-width:700px){
   body{padding:var(--s3) var(--s3) var(--s5)}
@@ -211,8 +223,8 @@ body.hero .hrow{font-size:clamp(1.1rem,2vw,2.4rem);padding:.2em 0}
   #hero{padding:var(--s3)}
   .tile{border-left:0;padding:var(--s2) 0;border-top:1px solid var(--line)}
   .tile:first-child{border-top:0}
-  .hrow{grid-template-columns:1fr auto;grid-template-areas:"nm val" "tr tr";gap:var(--s1) var(--s3)}
-  .hrow .nm{grid-area:nm}.hrow .val{grid-area:val}.hrow .track{grid-area:tr}
+  .hrow{grid-template-columns:1fr auto;gap:var(--s1) var(--s3)}
+  .hrow .hd{font-size:.9em}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 </style></head><body>
@@ -668,8 +680,8 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]
     ["In box", r => t(r).ballots_in_box, num], ["Invalid", r => t(r).invalid, num],
     ["Valid", r => t(r).valid, num], ["Outside", r => t(r).outside_voted, num]];
   T.names.forEach((n, i) => {
-    c.push([n + " votes", r => t(r).lists[i], num]);
-    c.push([n + " %", r => ratio(t(r).lists[i], t(r).lists_valid), pc, r => ratio(t(r).lists[i], t(r).lists_valid) == null ? "" : (100 * t(r).lists[i] / t(r).lists_valid).toFixed(1)]);
+    c.push([(i + 1) + " \u00b7 " + n + " votes", r => t(r).lists[i], num]);
+    c.push([(i + 1) + " \u00b7 " + n + " %", r => ratio(t(r).lists[i], t(r).lists_valid), pc, r => ratio(t(r).lists[i], t(r).lists_valid) == null ? "" : (100 * t(r).lists[i] / t(r).lists_valid).toFixed(1)]);
   });
   return c.map(x => ({t: x[0], v: x[1], f: x[2], c: x[3] || x[1]}));
 }
@@ -689,11 +701,11 @@ function tallyCsv() {
     const shared = cols.slice(1), out = [];
     for (const r of rows) {
       const t = r[mode], tot = shared.map(c => csvCell(c.c(r)));
-      const ls = r.names && r.names.length ? r.names.map((n, i) => [n, t.lists[i],
-        ratio(t.lists[i], t.lists_valid) == null ? "" : (100 * t.lists[i] / t.lists_valid).toFixed(1)]) : [["", "", ""]];
+      const ls = r.names && r.names.length ? r.names.map((n, i) => [i + 1, n, t.lists[i],
+        ratio(t.lists[i], t.lists_valid) == null ? "" : (100 * t.lists[i] / t.lists_valid).toFixed(1)]) : [["", "", "", ""]];
       for (const l of ls) out.push([csvCell(r.m), ...l.map(csvCell), ...tot, out.length ? "" : csvCell(note)].join(","));
     }
-    const head = ["Municipality", "List", "Votes", "Share %", ...shared.map(c => c.t), "Note"].map(csvCell).join(",");
+    const head = ["Municipality", "No.", "List", "Votes", "Share %", ...shared.map(c => c.t), "Note"].map(csvCell).join(",");
     return [head, ...out].join("\r\n") + "\r\n";
   }
   const head = [...cols.map(c => csvCell(c.t)), "Note"].join(",");
@@ -713,11 +725,11 @@ function showForm(id, label) {
 let tkey = "", tcols = "";
 function listsOf(r) {  // municipal scope: this municipality's own lists, in ballot order
   const t = r[$("tmode").value], tbl = mk("table", null, "lists"), hr = mk("tr"), box = mk("div");
-  hr.append(mk("th", "List"), mk("th", "Votes"), mk("th", "Share"));
+  hr.append(mk("th", "No."), mk("th", "List"), mk("th", "Votes"), mk("th", "Share"));
   tbl.append(hr);
   r.names.forEach((n, i) => {
     const tr = mk("tr");
-    tr.append(mk("td", n), mk("td", num(t.lists[i])), mk("td", pc(ratio(t.lists[i], t.lists_valid))));
+    tr.append(mk("td", String(i + 1), "no"), mk("td", n), mk("td", num(t.lists[i])), mk("td", pc(ratio(t.lists[i], t.lists_valid))));
     tbl.append(tr);
   });
   box.append(tbl);
@@ -800,13 +812,15 @@ function put(id, text) {  // set text; flash when it changed
 }
 function initHero() {
   for (let i = 0; i <= TOP_LISTS; i++) {
-    const row = mk("div", null, "hrow"), nm = mk("div", null, "nm"), tr = mk("div", null, "track"),
-      fill = mk("div", null, "fill"), val = mk("div", null, "val");
+    const row = mk("div", null, "hrow"), hd = mk("div", null, "hd"), no = mk("span", null, "no"),
+      nm = mk("span", null, "nm"), tr = mk("div", null, "track"), fill = mk("div", null, "fill"),
+      val = mk("div", null, "val");
+    hd.append(no, nm);
     tr.append(fill);
-    row.append(nm, tr, val);
+    row.append(hd, tr, val);
     row.hidden = true;
     $("herochart").append(row);
-    slots.push({row, nm, fill, val});
+    slots.push({row, no, nm, fill, val});
   }
 }
 function heroMunis() {
@@ -856,7 +870,9 @@ function renderHero() {
     s.row.hidden = !e;
     if (!e) return;
     const share = e.v / t.lists_valid;
-    s.nm.textContent = e.n; s.nm.title = e.n;
+    s.no.textContent = e.i < 0 ? "" : String(e.i + 1);  // ballot number = the list row on the form
+    s.no.hidden = e.i < 0;
+    s.nm.textContent = e.n; s.row.title = e.n;
     s.val.textContent = num(e.v) + "  " + pc(share);
     s.fill.style.width = Math.min(100, share * 100) + "%";
     s.fill.style.backgroundColor = e.i < 0 ? "#777" : OKABE[e.i % (OKABE.length - 1)];
