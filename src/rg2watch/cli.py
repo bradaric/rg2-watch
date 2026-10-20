@@ -1030,6 +1030,10 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         stream=sys.stderr, format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True,
         level=logging.DEBUG if args.verbose else logging.INFO if args.cmd in ("watch", "serve") else logging.WARNING)
+    # httpx logs every request URL at INFO, which would leak the ntfy topic (it is the URL path):
+    # kept at WARNING even with -v.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
                "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "status": _cmd_status, "tally": _cmd_tally,

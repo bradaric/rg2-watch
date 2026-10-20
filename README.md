@@ -33,7 +33,8 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
        uv run rg2watch watch --parent <parent> --once
 
 2. Subscribe to your ntfy topic in the ntfy phone app (the topic name is the only secret: make it
-   unguessable), then set `RG2W_NTFY_TOPIC=<topic>` (or `ntfy_topic` in the config).
+   unguessable), then set `RG2W_NTFY_TOPIC=<topic>` (or `ntfy_topic` in the config). The `httpx`/`httpcore`
+   loggers are held at WARNING (even with `-v`) so request URLs, which contain the topic, never reach the logs.
 3. Start the live loop and leave it running:
 
        RG2W_NTFY_TOPIC=<topic> uv run rg2watch watch --parent <parent> --config rg2watch.toml --analyze
