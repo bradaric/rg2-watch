@@ -3,17 +3,18 @@ import sqlite3
 import threading
 import time
 from collections.abc import Collection
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from rg2watch.models import Doc, Election, Event, Finding, Scope, doc_key
+from rg2watch.models import DOC_TYPES, Doc, Election, Event, Finding, Scope, doc_key
 
 if TYPE_CHECKING:
     from rg2watch.analyze import AnalysisResult
 
 ANALYSED_TYPES = (6, 10, 15, 16)  # RG-2 and repeat-vote RG-2
 MAX_ANALYSIS_ATTEMPTS = 3
+STATUS_RARE = (7, 8, 9, 14, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)  # RG-7/8/9 families, Primedba
 _ANALYSED = ",".join(map(str, ANALYSED_TYPES))
 
 SCHEMA = """
@@ -451,6 +452,60 @@ class Store:
                 "SELECT document_id, rule, severity, summary FROM findings WHERE document_id IN "
                 f"(SELECT id FROM documents WHERE {where}) ORDER BY id", args).fetchall()
         return docs, found
+
+    def browse_analyses(self, parent: str | None = None) -> list[sqlite3.Row]:
+        """Stored successful analyses (any model, any parent they were recorded under, incl. adhoc
+        second opinions) of RG-2 documents, oldest first."""
+        where, args = f"d.doc_type IN ({_ANALYSED})", ()
+        if parent is not None:
+            where, args = where + " AND d.parent=?", (parent,)
+        with self._lock:
+            return self._db.execute(
+                "SELECT a.id, a.document_id, a.model, a.prompt_version, a.result_json, a.created_at "
+                f"FROM analyses a JOIN documents d ON d.id=a.document_id WHERE {where} "
+                "AND a.status='done' AND a.result_json IS NOT NULL ORDER BY a.id", args).fetchall()
+
+    def latest_document_parent(self) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT parent FROM documents ORDER BY id DESC LIMIT 1").fetchone()
+        return row["parent"] if row else None
+
+    def recent_findings(self, parent: str, limit: int = 20) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._db.execute(
+                "SELECT created_at, severity, rule, municipality, station_no, summary, alerted_at "
+                "FROM findings WHERE parent=? ORDER BY id DESC LIMIT ?", (parent, limit)).fetchall()
+
+    def status_counts(self, parent: str) -> dict:
+        """Cheap counts for the live status panel."""
+        def since(minutes: int) -> str:
+            return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        base = f"FROM documents WHERE parent=? AND doc_type IN ({_ANALYSED})"
+        ev = f"FROM events WHERE parent=? AND doc_type IN ({_ANALYSED}) AND kind="
+        with self._lock:
+            one = lambda sql, *a: self._db.execute(sql, (parent, *a)).fetchone()[0]
+            ast = {r[0]: r[1] for r in self._db.execute(
+                f"SELECT COALESCE(analysis_status, 'none'), COUNT(*) {base} AND active=1 GROUP BY 1",
+                (parent,))}
+            rik = self._db.execute("SELECT value FROM counts WHERE parent=? AND scope='rg2'",
+                                   (parent,)).fetchone()
+            return {
+                "rg2_seen": one(f"SELECT COUNT(DISTINCT COALESCE(station_key, id)) {base} AND active=1"),
+                "rg2_rik": rik["value"] if rik else None,
+                "stations": one("SELECT COUNT(*) FROM stations WHERE parent=?"),
+                "new10": one(f"SELECT COUNT(*) {base} AND first_seen_at >= ?", since(10)),
+                "new60": one(f"SELECT COUNT(*) {base} AND first_seen_at >= ?", since(60)),
+                "replaced": one(f"SELECT COUNT(*) {ev}'replaced'"),
+                "removed": one(f"SELECT COUNT(*) {ev}'removed'"),
+                "rare": {DOC_TYPES[t]: n for t, n in self._db.execute(
+                    "SELECT doc_type, COUNT(*) FROM documents WHERE parent=? AND active=1 AND "
+                    f"doc_type IN ({','.join(map(str, STATUS_RARE))}) GROUP BY 1", (parent,))},
+                "ast": ast,
+                "retrying": one(f"SELECT COUNT(*) {base} AND active=1 AND analysis_status='failed' "
+                                "AND analysis_next_at IS NOT NULL"),
+                "spend": float(one("SELECT COALESCE(SUM(cost_usd), 0) FROM analyses WHERE parent=?")),
+            }
 
     def total_spend(self, parent: str | None = None) -> float:
         """Recorded spend of one election (`parent`), or of everything when None."""

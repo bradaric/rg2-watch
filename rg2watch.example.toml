@@ -66,6 +66,9 @@ price_out_per_mtok = 20.0
 analysis_workers = 4
 # Seconds between rebuilds of the local browse page (index.html next to the DB) while watching; 0 = off
 browse_interval_s = 120
+
+# Local web server of `watch` for the browse page (127.0.0.1 only); 0 = off
+serve_port = 8770
 # PDF downloads have their own rate limiter (requests/second), on top of max_rps for listings
 download_max_rps = 0.5
 # Pause all analysis this long after a key/permission/model/request error (then one probe form)

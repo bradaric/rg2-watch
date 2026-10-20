@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rg2-watch</title>
+<link rel="stylesheet" href="dataTables.dataTables.min.css">
+<style>
+:root{color-scheme:light dark;--bg:#fff;--fg:#1b1f24;--mut:#667;--line:#d8dce1;--card:#f5f6f8;--hi:#c62828;--md:#e08600;--lo:#2e7d32;--link:#0b5fc0}
+@media (prefers-color-scheme:dark){:root{--bg:#14171a;--fg:#e4e7ea;--mut:#98a;--line:#2d3238;--card:#1d2125;--hi:#ef5350;--md:#ffb74d;--lo:#81c784;--link:#7ab6ff}}
+*{box-sizing:border-box}
+body{margin:0;padding:12px 16px;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
+a{color:var(--link)}
+h1{font-size:18px;margin:0 0 8px}
+h3{font-size:13px;margin:0 0 4px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+#banner{display:none;margin:0 0 8px;padding:8px 12px;border-radius:4px;background:var(--hi);color:#fff;font-weight:600}
+#status{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px;margin-bottom:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:6px 10px}
+.card dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:1px 10px}
+.card dt{color:var(--mut)}.card dd{margin:0;overflow-wrap:anywhere}
+.card.wide{grid-column:1/-1}
+.card table{width:100%;border-collapse:collapse}
+.card td{padding:1px 6px;border:0;vertical-align:top}
+.bad{color:var(--hi);font-weight:600}.warn{color:var(--md);font-weight:600}.good{color:var(--lo)}
+#ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+#ctl label{white-space:nowrap}
+input,select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:3px 6px}
+#rules{height:4.5em}
+#wrap{overflow-x:auto}
+table.dataTable>tbody>tr>*{box-shadow:none!important;background:var(--bg)!important;color:var(--fg);vertical-align:top}
+table.dataTable>thead>tr>*{color:var(--fg);white-space:nowrap}
+table.dataTable>tbody>tr.child>td{background:var(--card)!important}
+.dt-container{color:var(--fg)}
+.dt-container select,.dt-container input{background:var(--card)}
+.b{display:inline-block;padding:0 6px;border-radius:8px;color:#fff;font-size:12px;margin-right:4px}
+.b.HIGH{background:var(--hi)}.b.MEDIUM{background:var(--md)}.b.LOW{background:var(--lo)}
+.b.dis{outline:2px solid var(--hi);outline-offset:1px}
+.mut{color:var(--mut)}
+.f{margin:2px 0}
+td.disagree{color:var(--hi);font-weight:600}
+.sub{margin:3px 0 3px 24px}
+</style></head><body>
+<h1>rg2-watch <span class="mut" id="built"></span></h1>
+<div id="banner"></div>
+<div id="status"></div>
+<div id="ctl">
+<input id="q" type="search" placeholder="search">
+<select id="m"></select><select id="e"></select><select id="mod"></select>
+<label>min severity <select id="sev"><option value="0">any</option><option value="1">LOW</option><option value="2">MEDIUM</option><option value="3">HIGH</option></select></label>
+<select id="rules" multiple title="rules"></select>
+<label><input type="checkbox" id="fl"> with findings</label>
+<label><input type="checkbox" id="rp"> replaced</label>
+<label><input type="checkbox" id="rm"> removed</label>
+<label><input type="checkbox" id="fa"> analysis failed</label>
+<label><input type="checkbox" id="loc"> has local copy</label>
+<label><input type="checkbox" id="dis"> models disagree</label>
+<label><input type="checkbox" id="auto" checked> auto-refresh</label>
+</div>
+<div id="wrap"><table id="forms" class="display" style="width:100%"></table></div>
+<script src="jquery.min.js"></script>
+<script src="dataTables.min.js"></script>
+<script>
+"use strict";
+// All data reaches the DOM through DataTable.render.text() / escapeHtml, textContent or DOM
+// construction: never innerHTML with data.
+const $ = id => document.getElementById(id);
+const HTTP = /^https?:$/.test(location.protocol);
+const esc = DataTable.util.escapeHtml;
+const TZ = "Europe/Belgrade";
+const SEV = ["", "LOW", "MEDIUM", "HIGH"];
+const STATUS_EVERY_MS = 10000, STALE_S = 60;
+const pad = n => String(n).padStart(2, "0");
+// Serbian local time, DD/MM/YYYY HH:MM, from "YYYY-MM-DDTHH:MM..." (already Serbian local)
+function when(s) {
+  const m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)/.exec(s || "");
+  return m ? m[3] + "/" + m[2] + "/" + m[1] + " " + m[4] + ":" + m[5] : s || "";
+}
+const fmtEpoch = new Intl.DateTimeFormat("en-GB", {timeZone: TZ, day: "2-digit", month: "2-digit",
+  year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+function epoch(t) {
+  if (t == null) return "-";
+  const p = Object.fromEntries(fmtEpoch.formatToParts(new Date(t * 1000)).map(x => [x.type, x.value]));
+  return p.day + "/" + p.month + "/" + p.year + " " + p.hour + ":" + p.minute;
+}
+function dur(s) {
+  if (s == null) return "-";
+  s = Math.round(s);
+  return s < 90 ? s + " s" : s < 5400 ? Math.round(s / 60) + " min" : Math.floor(s / 3600) + " h " + pad(Math.round(s % 3600 / 60)) + " min";
+}
+const ago = t => t == null ? "-" : dur(Date.now() / 1000 - t) + " ago";
+function mk(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text != null) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+function link(text, href) {
+  const a = mk("a", text);
+  a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer";
+  return a;
+}
+const HEX = /^[0-9a-f]{64}$/;
+const localHref = h => HEX.test(h || "") ? "pdfs/" + h + ".pdf" : null;
+const rikHref = u => /^https?:\/\//i.test(u || "") ? u : null;
+
+// ---- status panel -------------------------------------------------------------------------
+let S = null;
+function card(title, pairs, cls) {
+  const c = mk("div", null, "card" + (cls ? " " + cls : ""));
+  c.append(mk("h3", title));
+  const dl = mk("dl");
+  for (const [k, v, c2] of pairs) dl.append(mk("dt", k), mk("dd", v, c2));
+  c.append(dl);
+  return c;
+}
+function renderStatus() {
+  const box = $("status"), ban = $("banner");
+  if (!S) { box.replaceChildren(); ban.style.display = "block"; ban.textContent = "no status yet"; return; }
+  const age = Date.now() / 1000 - S.ts;
+  const down = !S.watching || age > STALE_S;
+  ban.style.display = down ? "block" : "none";
+  ban.textContent = !S.watching ? "watcher not running (status written " + epoch(S.ts) + ")"
+    : "watcher not running / stalled since " + epoch(S.ts).slice(-5);
+  const w = S.watcher, d = S.docs, a = S.analysis, cards = [];
+  if (w) {
+    const h = w.health === "blind" ? "blind since " + epoch(w.last_ok) : w.health === "blocked" ? "blocked, paused until " + epoch(w.paused_until) : w.health;
+    cards.push(card("Watcher", [
+      ["running since", epoch(w.started)], ["last tick", ago(w.last_tick)], ["last RIK request ok", ago(w.last_ok)],
+      ["RIK health", h, w.health === "ok" ? "good" : w.health === "slow" ? "warn" : "bad"],
+      ["rate", w.rps + " / " + w.max_rps + " req/s"], ["requests this tick", w.tick_used + " / " + w.tick_budget],
+      ["lanes", Object.entries(w.lanes).map(([k, v]) => k + " " + ago(v)).join(", ")],
+      ["municipalities", w.only ? w.only.join(", ") : "all"]]));
+  }
+  cards.push(card("Documents", [
+    ["RG-2 seen", d.rg2_seen + " of " + (d.stations || "?") + " stations" + (d.rg2_rik != null ? " (RIK lists " + d.rg2_rik + ")" : "")],
+    ["new, last 10 / 60 min", d.new10 + " / " + d.new60], ["replaced", d.replaced], ["removed", d.removed],
+    ["rare types", Object.entries(d.rare).map(([k, v]) => k + ": " + v).join(", ") || "none"]]));
+  const p = a.paused;
+  cards.push(card("Analysis", a.on ? [
+    ["model", a.model], ["queued / running", a.queued + " / " + a.running],
+    ["done / failed / retrying", a.done + " / " + a.failed + " / " + a.retrying],
+    ["state", p ? "paused: " + p[0] + (p[1] ? " since " + epoch(p[1]) : "") : "running", p ? "bad" : "good"],
+    ["spend", "$" + a.spend.toFixed(2) + " of $" + a.cap.toFixed(2)],
+    ["avg per form", a.avg_s == null ? "-" : a.avg_s + " s"], ["time to clear queue", dur(a.eta_s)]]
+    : [["state", "off"], ["done / failed", a.done + " / " + a.failed], ["spend", "$" + a.spend.toFixed(2)]]));
+  const n = S.ntfy;
+  cards.push(card("Alerts", n ? [["ntfy", !n.enabled ? "not configured (terminal only)" : n.failing ? "failing, last ok " + ago(n.last_ok) : "delivering, last ok " + ago(n.last_ok), n.failing ? "bad" : ""],
+    ["waiting to send", n.queued]] : [["ntfy", "-"]]));
+  const al = mk("div", null, "card wide");
+  al.append(mk("h3", "Last " + S.alerts.length + " alerts"));
+  const t = mk("table");
+  for (const x of S.alerts) {
+    const tr = mk("tr"), sv = mk("td");
+    sv.append(mk("span", x[1], "b " + (SEV.includes(x[1]) ? x[1] : "")));
+    tr.append(mk("td", when(x[0]), "mut"), sv, mk("td", x[2]), mk("td", x[3] + (x[4] ? " BM " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
+    t.append(tr);
+  }
+  al.append(t);
+  cards.push(al);
+  box.replaceChildren(...cards);
+}
+
+// ---- table --------------------------------------------------------------------------------
+const COLS = [
+  ["", null], ["el", "Election"], ["muni", "Municipality"], ["no", "BM"], ["name", "Station"],
+  ["label", "Document"], ["up", "Uploaded (RS)"], ["seen", "First seen (RS)"], ["state", "State"],
+  ["ast", "Analysis"], ["sev", "Findings"], ["mods", "Models"], ["pdf", "Local PDF"], ["rik", "RIK"]];
+const col = k => COLS.findIndex(c => c[0] === k);
+let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
+const FILTERS = ["q", "m", "e", "mod", "sev", "fl", "rp", "rm", "fa", "loc", "dis", "auto"];
+
+function badges(list, dis) {
+  const td = document.createDocumentFragment();
+  for (const f of list) {
+    const d = mk("div", null, "f");
+    d.append(mk("span", f[1], "b " + (SEV.includes(f[1]) ? f[1] : "") + (dis && dis.includes(f[0]) && f[1] === "HIGH" ? " dis" : "")), f[0] + ": " + f[2]);
+    td.append(d);
+  }
+  return td;
+}
+function linksOf(v) {
+  const sp = mk("span"), l = localHref(v.pdf), r = rikHref(v.rik);
+  if (l) sp.append(link("Local PDF", l), " ");
+  if (r) sp.append(link("RIK", r));
+  return sp;
+}
+function child(r) {
+  const box = mk("div");
+  for (const o of r.ops) {
+    const d = mk("div", null, "sub");
+    d.append(mk("strong", o.m), mk("span", " (" + when(o.at) + ") ", "mut"), o.f.length ? badges(o.f, r.dis) : mk("span", "no findings", "mut"));
+    box.append(d);
+  }
+  for (const v of r.v) {
+    const d = mk("div", null, "sub mut");
+    d.append("older version: uploaded " + when(v.up) + ", first seen " + when(v.seen) + ", analysis " + v.ast + " ", linksOf(v));
+    d.append(badges(v.f));
+    for (const o of v.ops) d.append(mk("div", o.m + ": " + (o.f.map(f => f[0] + " " + f[1]).join(", ") || "no findings"), "sub"));
+    box.append(d);
+  }
+  return box;
+}
+function prep(r) {
+  const all = [r, ...r.v];
+  r._sev = Math.max(...all.map(x => Math.max(0, ...x.f.map(f => SEV.indexOf(f[1])))));
+  r._fl = all.some(x => x.f.length);
+  const ofs = all.flatMap(x => [...x.f, ...x.ops.flatMap(o => o.f)]);
+  r._rules = new Set(ofs.map(f => f[0]));
+  r._models = new Set(all.flatMap(x => x.ops.map(o => o.m)));
+  r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models].join("\n").toLowerCase();
+  r.mods = [...r._models].sort().join(", ") + (r.dis.length ? " - DISAGREE" : "");
+  r._pdfs = all.some(x => x.pdf);
+  return r;
+}
+const txt = () => DataTable.render.text();
+const fmt = () => ({_: d => d, display: d => esc(when(d))});
+const sel = id => $(id).value;
+function keep(r) {
+  const q = $("q").value.trim().toLowerCase();
+  const rs = [...$("rules").selectedOptions].map(o => o.value);
+  return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
+    && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
+    && (!rs.length || rs.some(x => r._rules.has(x))) && (!$("fl").checked || r._fl)
+    && (!$("rp").checked || r.state === "replaced") && (!$("rm").checked || r.state === "removed")
+    && (!$("fa").checked || r.ast === "failed") && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
+}
+function initTable() {
+  DataTable.ext.search.push((s, _d, _i, row) => s.nTable.id !== "forms" || keep(row));
+  table = new DataTable("#forms", {
+    data: rows, deferRender: true, pageLength: 100, lengthMenu: [50, 100, 250, 500],
+    order: [[col("sev"), "desc"], [col("up"), "desc"]], stateSave: true, stateDuration: 0,
+    layout: {topStart: "pageLength", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
+    stateSaveParams: (s, d) => { d.rg = readCtl(); },
+    stateLoadParams: (s, d) => { if (!location.hash.slice(1) && d.rg) setCtl(d.rg); },
+    columns: [
+      {data: null, orderable: false, className: "dt-control", defaultContent: "",
+       createdCell: (td, d, r) => { if (!r.v.length && !r.ops.length) td.classList.remove("dt-control"); }},
+      {data: "el", title: "Election", render: {_: d => d, display: d => esc(D.elections[d] || d)}},
+      {data: "muni", title: "Municipality", render: txt()}, {data: "no", title: "BM", render: txt(), defaultContent: ""},
+      {data: "name", title: "Station", render: txt(), defaultContent: ""}, {data: "label", title: "Document", render: txt(), defaultContent: ""},
+      {data: "up", title: "Uploaded (RS)", render: fmt()}, {data: "seen", title: "First seen (RS)", render: fmt()},
+      {data: "state", title: "State", render: txt()}, {data: "ast", title: "Analysis", render: txt()},
+      {data: "sev", title: "Findings", render: {_: d => d, display: () => ""},
+       createdCell: (td, d, r) => td.append(badges(r.f))},
+      {data: "mods", title: "Models", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
+      {data: "pdf", title: "Local PDF", render: {_: d => d ? 1 : 0, display: () => ""},
+       createdCell: (td, d, r) => { const h = localHref(r.pdf); if (h) td.append(link("Local PDF", h)); }},
+      {data: "rik", title: "RIK", render: {_: d => d ? 1 : 0, display: () => ""},
+       createdCell: (td, d, r) => { const h = rikHref(r.rik); if (h) td.append(link("RIK", h)); }}]
+  });
+  $("forms").addEventListener("click", ev => {
+    const td = ev.target.closest("td.dt-control");
+    if (!td) return;
+    const row = table.row(td.parentElement);
+    row.child.isShown() ? row.child.hide() : row.child(child(row.data())).show();
+  });
+}
+function optsOf(sel2, first, items) {
+  const keepv = sel2.value;
+  sel2.replaceChildren(new Option(first, ""));
+  for (const [v, t] of items) sel2.append(new Option(t, v));
+  sel2.value = [...sel2.options].some(o => o.value === keepv) ? keepv : "";
+}
+function applyData(data) {
+  D = data;
+  rows = D.rows.map(prep);
+  optsOf($("m"), "all municipalities", [...new Set(rows.map(r => r.muni))].sort().map(m => [m, m]));
+  const parents = [...new Set(rows.map(r => r.el))].sort();
+  optsOf($("e"), "all elections", parents.map(p => [p, D.elections[p] || p]));
+  $("e").hidden = parents.length < 2;
+  optsOf($("mod"), "all models", [...new Set(rows.flatMap(r => [...r._models]))].sort().map(m => [m, m]));
+  $("mod").hidden = $("mod").options.length < 2;
+  $("dis").parentElement.hidden = $("mod").hidden;
+  const chosen = new Set([...$("rules").selectedOptions].map(o => o.value));
+  $("rules").replaceChildren(...[...new Set(rows.flatMap(r => [...r._rules]))].sort().map(r => {
+    const o = new Option(r, r); o.selected = chosen.has(r); return o; }));
+  $("rules").hidden = !$("rules").options.length;
+  $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
+  if (!table) { readHash(); initTable(); return; }
+  const shown = new Set();
+  table.rows().every(function () { if (this.child.isShown()) shown.add(this.data().id); });
+  table.clear().rows.add(rows).draw(false);
+  table.rows().every(function () { if (shown.has(this.data().id)) this.child(child(this.data())).show(); });
+}
+
+// ---- filter state: URL hash first, saved state second; absent keys reset to defaults -------
+function readCtl() {
+  const o = {};
+  for (const k of FILTERS) o[k] = $(k).type === "checkbox" ? $(k).checked : $(k).value;
+  o.rules = [...$("rules").selectedOptions].map(x => x.value);
+  return o;
+}
+function setCtl(o) {
+  for (const k of FILTERS) {
+    const v = o[k], el = $(k);
+    if (el.type === "checkbox") el.checked = k === "auto" ? v !== false : v === true;
+    else {
+      el.value = v == null ? "" : v;
+      if (el.value !== String(v)) el.value = k === "sev" ? "0" : "";
+    }
+  }
+  for (const x of $("rules").options) x.selected = (o.rules || []).includes(x.value);
+}
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  if (![...p.keys()].length) return;
+  const o = {rules: (p.get("rules") || "").split(",")};
+  for (const k of FILTERS) o[k] = $(k).type === "checkbox" ? (k === "auto" ? p.get(k) !== "0" : p.get(k) === "1") : p.get(k);
+  setCtl(o);
+}
+function writeHash() {
+  const c = readCtl(), p = new URLSearchParams();
+  for (const k of FILTERS) {
+    if (k === "auto") { if (!c.auto) p.set("auto", "0"); }
+    else if (typeof c[k] === "boolean") { if (c[k]) p.set(k, "1"); }
+    else if (c[k] && c[k] !== "0") p.set(k, c[k]);
+  }
+  if (c.rules.length) p.set("rules", c.rules.join(","));
+  try { history.replaceState(null, "", "#" + p); } catch (e) {}
+}
+function redraw() { writeHash(); if (table) table.draw(); }
+let timer = 0;
+$("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(redraw, 200); });
+for (const id of FILTERS.concat(["rules"])) if (id !== "q") $(id).addEventListener("input", redraw);
+
+// ---- loading: fetch() over http, script re-injection from file:// ------------------------
+function inject(name, done) {
+  const s = document.createElement("script");
+  s.src = name + ".js?t=" + Date.now();
+  s.onload = () => { s.remove(); done(); };
+  s.onerror = () => s.remove();
+  document.head.append(s);
+}
+function load(name, global, apply) {
+  if (HTTP) {
+    fetch(name + ".json?t=" + Date.now(), {cache: "no-store"}).then(r => r.ok ? r.json() : Promise.reject()).then(apply).catch(() => {});
+  } else inject(name, () => apply(window[global]));
+}
+function loadStatus() { load("status", "RG2_STATUS", s => { S = s; renderStatus(); }); }
+let dataBuilt = null;
+function loadData() {
+  load("data", "RG2_DATA", d => { if (d && d.built !== dataBuilt) { dataBuilt = d.built; applyData(d); } });
+}
+loadStatus();
+setInterval(loadStatus, STATUS_EVERY_MS);
+setInterval(renderStatus, 5000);
+// data polls only while enabled: the period comes from the data (0 = off), checked after each load
+(function loop() {
+  if ($("auto").checked && (D.interval > 0 || !table)) loadData();
+  setTimeout(loop, Math.max(5, D.interval || 10) * 1000);
+})();
+</script></body></html>

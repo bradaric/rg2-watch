@@ -4,6 +4,7 @@ import json
 import logging
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -12,7 +13,7 @@ import httpx
 
 from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
 from .batch import ADHOC, describe_estimate, run_batch, select_forms
-from .browse import build_page
+from .browse import build_page, copy_static, write_status
 from .config import Config, load_config
 from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
 from .evaluate import PARENT as EVAL_PARENT
@@ -27,6 +28,7 @@ from .render import RenderError, render_tiles
 from .replay import fetch_fixtures, make_replay_server
 from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, download_limiter_for
 from .rules import evaluate_report
+from .server import start_server
 from .store import Store
 from .watcher import Watcher, filter_request_rate
 
@@ -66,6 +68,8 @@ def _parser() -> argparse.ArgumentParser:
                    "only these (config only_municipalities)")
     s.add_argument("--baseline", action="store_true",
                    help="record what is already published silently on each lane's first full pass")
+    s.add_argument("--serve-port", type=int, help="port of the local web server (config serve_port, "
+                   "default 8770; 0 = off)")
     mode = s.add_mutually_exclusive_group()
     mode.add_argument("--analyze", action="store_true",
                       help="analyse new RG-2 forms with Claude (paid API; also config "
@@ -117,6 +121,9 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("browse", parents=[common], help="write the local HTML page of RG-2 forms")
     s.add_argument("--parent", help="only this election")
     s.add_argument("--out", type=Path, help="HTML path (default: index.html next to the DB)")
+
+    s = sub.add_parser("serve", parents=[common], help="serve the browse page on 127.0.0.1 (no watching)")
+    s.add_argument("--port", type=int, help="port (config serve_port, default 8770)")
 
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
@@ -208,10 +215,64 @@ def _cmd_browse(args) -> int:
     store = _open_store(cfg)
     try:
         out = args.out or _browse_path(cfg)
-        n = build_page(store, out, _cache_dir(cfg), args.parent)
+        n = build_page(store, out, _cache_dir(cfg), args.parent, cfg)
     finally:
         store.close()
     print(f"{out} ({n} form(s))")
+    return 0
+
+
+STATUS_EVERY_S = 10
+
+
+def _live(watcher: Watcher, pipeline, notifier: Notifier, url: str | None):
+    def live() -> dict:
+        d = {"watcher": watcher.status_snapshot(), "ntfy": notifier.status_snapshot(), "url": url}
+        if pipeline is not None:
+            d["analysis"] = pipeline.status_snapshot()
+        return d
+    return live
+
+
+def _background(name: str, stop: threading.Event, period: float, fn, first=None) -> None:
+    """Run fn every `period` s in a daemon thread; failures are logged and swallowed, so the watch
+    loop never waits for (or is hurt by) page building."""
+    def run() -> None:
+        if first is not None:
+            try:
+                first()
+            except Exception:
+                log.exception("%s setup failed", name)
+        while not stop.is_set():
+            try:
+                fn()
+            except Exception:
+                log.exception("%s update failed", name)
+            stop.wait(period)
+
+    threading.Thread(target=run, name=name, daemon=True).start()
+
+
+def _cmd_serve(args) -> int:
+    cfg = _config(args)
+    port = cfg.serve_port if args.port is None else args.port
+    out = _browse_path(cfg)
+    store = _open_store(cfg)
+    try:
+        if not (out.parent / "index.html").is_file():
+            build_page(store, out, _cache_dir(cfg), cfg=cfg)
+    finally:
+        store.close()
+    server = start_server(out.parent, _cache_dir(cfg), port)
+    if server is None:
+        return 1
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        log.info("interrupted, shutting down")
+    finally:
+        server.shutdown()
+        server.server_close()
     return 0
 
 
@@ -336,15 +397,19 @@ def _cmd_watch(args) -> int:
         if pipeline is not None:
             pipeline.start()
 
-        def browse() -> None:
-            try:
-                build_page(store, _browse_path(cfg), _cache_dir(cfg))
-            except Exception:
-                log.exception("browse page rebuild failed")
-
-        if cfg.browse_interval_s > 0:
-            browse()
-        next_browse = time.monotonic() + cfg.browse_interval_s
+        stop = threading.Event()
+        server = None
+        if not args.once:  # `--once` is a diff check: no page build, no server
+            port = cfg.serve_port if args.serve_port is None else args.serve_port
+            if port:
+                server = start_server(_browse_path(cfg).parent, _cache_dir(cfg), port)
+            url = f"http://127.0.0.1:{server.server_port}" if server else None
+            live = _live(watcher, pipeline, notifier, url)
+            _background("status", stop, STATUS_EVERY_S, lambda: write_status(
+                store, _browse_path(cfg), parent, live()), first=lambda: copy_static(_browse_path(cfg).parent))
+            if cfg.browse_interval_s > 0:
+                _background("browse", stop, cfg.browse_interval_s, lambda: build_page(
+                    store, _browse_path(cfg), _cache_dir(cfg), None, cfg, live(), cfg.browse_interval_s, parent))
         try:
             while True:
                 try:
@@ -355,15 +420,16 @@ def _cmd_watch(args) -> int:
                     deliver()
                 except Exception:
                     log.exception("delivery failed; retrying next tick")
-                if cfg.browse_interval_s > 0 and (args.once or time.monotonic() >= next_browse):
-                    browse()
-                    next_browse = time.monotonic() + cfg.browse_interval_s
                 if args.once:
                     break
                 time.sleep(1)
         except KeyboardInterrupt:
             log.info("interrupted, shutting down")
         finally:
+            stop.set()
+            if server is not None:
+                server.shutdown()
+                server.server_close()
             if pipeline is not None:
                 pipeline.stop()
         return 0
@@ -632,12 +698,12 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     logging.basicConfig(
         stream=sys.stderr, format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True,
-        level=logging.DEBUG if args.verbose else logging.INFO if args.cmd == "watch" else logging.WARNING)
+        level=logging.DEBUG if args.verbose else logging.INFO if args.cmd in ("watch", "serve") else logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
-               "requeue": _cmd_requeue, "browse": _cmd_browse}[args.cmd]
+               "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve}[args.cmd]
     previous = None
-    if args.cmd in ("watch", "replay"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
+    if args.cmd in ("watch", "replay", "serve"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
         previous = signal.signal(signal.SIGTERM, _sigterm)
     try:
         return handler(args)

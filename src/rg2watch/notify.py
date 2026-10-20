@@ -61,6 +61,8 @@ class Notifier:
         self._status: list[str] = []
         self._backoff = 0.0
         self._backoff_until = 0.0
+        self.last_ok: float | None = None  # wall time of the last accepted push
+        self.last_fail: float | None = None
         self._lock = threading.RLock()  # status() is called from analysis worker threads
 
     def _post(self, title: str, body: str, priority: str, tags: str, click: str | None = None) -> bool:
@@ -80,9 +82,17 @@ class Notifier:
         except httpx.HTTPError:
             self._backoff = min(BACKOFF_CAP_S, self._backoff * 2 or BACKOFF_START_S)
             self._backoff_until = self.clock() + self._backoff
+            self.last_fail = time.time()
             return False
         self._backoff = 0.0
+        self.last_ok = time.time()
         return True
+
+    def status_snapshot(self) -> dict:
+        """ntfy delivery state for the status panel: in-memory only."""
+        failing = self._backoff > 0
+        return {"enabled": bool(self.cfg.ntfy_topic), "failing": failing, "last_ok": self.last_ok,
+                "last_fail": self.last_fail, "queued": len(self._status) + len(self._pending)}
 
     def _print(self, fid: int, f: Finding) -> None:
         if fid in self._printed:

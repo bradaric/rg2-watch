@@ -974,3 +974,17 @@ def test_filtered_followup_is_charged_to_the_tick_budget():
         t.now += 1
         w.run_once()
     assert [e.doc.station_key for e in events(batches)] == ["M3|1"]
+
+
+def test_status_snapshot_reports_tick_lanes_and_health():
+    w, fake, store, t, batches, limiter = env()
+    snap = w.status_snapshot()
+    assert snap["last_tick"] is None and snap["health"] == "ok" and snap["only"] is None
+    w.run_once()
+    snap = w.status_snapshot()
+    assert snap["last_tick"] is not None and snap["tick_budget"] == w.cfg.tick_request_budget
+    assert snap["tick_used"] > 0 and "probe" in snap["lanes"] and snap["max_rps"] == 2.0
+    limiter.on_overload()
+    assert w.status_snapshot()["health"] == "slow"
+    w._paused_until = t.now + 100
+    assert w.status_snapshot()["health"] == "blocked" and w.status_snapshot()["paused_until"]

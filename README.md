@@ -45,6 +45,34 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
    ones, so a larger set costs more requests per round.
 4. Alerts are leads for manual review, not conclusions: open the PDF link and check it yourself.
 
+## Browse page, status panel and local server
+
+`watch` serves the page at `http://127.0.0.1:8770` (the URL is logged at start; `serve_port` in the
+config or `--serve-port`, `0` = off). `rg2watch serve [--port N]` serves the same files without
+watching. The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed allow-list
+(`index.html`, `status.js[on]`, `data.js[on]`, the vendored libraries, `pdfs/<sha256>.pdf`); the DB,
+`.env` and everything else are 404. Port taken: a warning, and the watcher carries on.
+
+- **Forms table** (DataTables + jQuery, vendored in `src/rg2watch/static/`, versions and sha256 in
+  `VERSIONS.txt`; no CDN, no external requests): one row per form, sortable, paged (50-500 rows),
+  with filters for election, municipality, model, severity, rule, replaced/removed, analysis failed,
+  has local copy and "models disagree"; the filters survive a refresh (URL hash / saved state). The
+  "+" opens older versions and the findings of every stored analysis model (second opinions from
+  `analyze --parent`, current rules re-applied, no API); a HIGH that another model lacks is
+  highlighted. Columns "Local PDF" (only when cached under `pdfs/` next to the page) and "RIK" open in
+  a new tab. Times are Serbian local time, DD/MM/YYYY HH:MM.
+- **Status panel** (top of the page, updates in place, nothing reloads): watcher (running since, last
+  tick, last RIK success, RIK health ok/slow/blocked/blind, rate, requests per tick, lanes, municipality
+  filter), documents (RG-2 seen of expected stations, new in 10/60 min, replaced, removed, rare types),
+  analysis (model, queued/running/done/failed/retrying, pause reason, spend vs cap, seconds per form,
+  time to clear the queue), the last 20 alerts and ntfy delivery. A red banner "watcher not running /
+  stalled since HH:MM" appears when the status is older than 60 s.
+- **How it updates:** `watch` writes `status.js/json` every 10 s and `data.js/json` every
+  `browse_interval_s` (0 = off) from daemon threads, atomically; failures are logged and never touch
+  the watch loop. `watch --once` builds nothing. Over http the page polls the `.json` files; opened as
+  a file it re-injects the `.js` files. `rg2watch browse` writes everything once with the status
+  "watcher not running".
+
 ## Visual analysis of RG-2 forms
 
 Analysis is opt-in because it calls a paid API: `watch` analyses only with `--analyze` or

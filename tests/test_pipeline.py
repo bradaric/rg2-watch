@@ -1099,3 +1099,25 @@ def test_analyze_billed_failure_recorded_under_adhoc(tmp_path, monkeypatch, caps
     row = s._db.execute("SELECT parent, status, cost_usd FROM analyses").fetchone()
     s.close()
     assert row[0] == "adhoc" and row[1] == "failed" and row[2] > 0
+
+
+def test_status_snapshot_cap_pause_and_average(tmp_path):
+    e = Env(tmp_path, resp(clean_report(), tin=1_000_000, tout=0), max_spend_usd=3.0)
+    snap = e.pipe.status_snapshot()
+    assert snap["paused"] is None and snap["avg_s"] is None and snap["cap"] == 3.0
+    e.publish(doc("a.pdf", no="1"))
+    e.drain()
+    e.pipe.process_next()  # notices the cap
+    snap = e.pipe.status_snapshot()
+    assert snap["paused"][0] == "spend cap reached" and snap["avg_s"] is not None
+    assert snap["workers"] == 4 and snap["model"] == e.cfg.model
+
+
+def test_notifier_status_snapshot_tracks_delivery():
+    n = Notifier(Config(ntfy_topic="t"), httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(500))), out=io.StringIO())
+    assert n.status_snapshot()["failing"] is False
+    n.status("[rg2-watch] x")
+    s = n.status_snapshot()
+    assert s["enabled"] and s["failing"] and s["last_fail"] and s["last_ok"] is None and s["queued"] == 1
+    assert Notifier(Config(), None, out=io.StringIO()).status_snapshot()["enabled"] is False

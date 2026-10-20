@@ -104,6 +104,9 @@ class Watcher:
         self._baseline = set(BASELINE_LANES) if baseline else set()
         self._baseline_counts: Counter[str] = Counter()
         self._progress = {"rare": False, "probe": False, "missing": False, "safety": False}
+        self._tick_wall: float | None = None  # wall time the last tick finished
+        self._tick_used = 0  # requests spent by the last tick
+        self._tick_budget = 0
     def bootstrap(self, refresh: bool = False) -> None:
         self.store.upsert_election(self.client.election)
         if refresh or not self.store.municipality_ids(self.parent):
@@ -129,7 +132,26 @@ class Watcher:
         self._abort = False
         if self.clock() >= self._paused_until:
             self._tick()
+            self._tick_used, self._tick_wall = self._tick_budget - self._budget, time.time()
         self._check_health()
+
+    def status_snapshot(self) -> dict:
+        """Plain in-memory state for the status panel: cheap, no I/O, safe to call from any thread."""
+        now, c = self.clock(), self.client
+        wall = lambda t: None if t is None else round(time.time() - (now - t), 1)
+        blocked = now < self._paused_until
+        rps, mx = c.limiter.current_rps, c.limiter.max_rps
+        return {
+            "started": wall(self._started), "last_tick": self._tick_wall,
+            "last_ok": wall(c.last_ok), "blind": self._blind,
+            "health": "blocked" if blocked else "blind" if self._blind else "slow" if rps < mx else "ok",
+            "paused_until": wall(self._paused_until) if blocked else None,
+            "rps": round(rps, 2), "max_rps": mx,
+            "tick_used": self._tick_used, "tick_budget": self._tick_budget,
+            "lane": self._lane,
+            "lanes": {k: wall(v) for k, v in {**self._last, "safety": self._safety_started}.items()},
+            "only": sorted(self._only) if self._only is not None else None,
+        }
 
     def run_forever(self, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -150,7 +172,7 @@ class Watcher:
                 log.warning("municipality refresh failed: %r", exc)
                 self._abort = isinstance(exc, RikUnavailable)
                 self._last_bootstrap = self.clock()  # throttle retries
-        self._budget = budget = max(MIN_BUDGET, self.cfg.tick_request_budget)
+        self._budget = budget = self._tick_budget = max(MIN_BUDGET, self.cfg.tick_request_budget)
         # Priority: rare > removal re-checks > watchlist > probe > missing > safety, except that a
         # reserved share is held back from watchlist/probe for safety (first) and missing when they
         # have work, so a busy probe cannot starve them. Unused reserve goes back to the probe,

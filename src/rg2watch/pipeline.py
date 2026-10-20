@@ -2,6 +2,7 @@
 import logging
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Collection
 from datetime import datetime
 from pathlib import Path
@@ -93,6 +94,9 @@ class AnalysisPipeline:
         self._overloads = 0  # consecutive Anthropic overload failures
         self._overloaded_since = 0.0
         self._overload_alerted = False
+        self._pause_reason = ""
+        self._cap_since: float | None = None
+        self._durations: deque[float] = deque(maxlen=50)  # seconds per form that reached the API
 
     # control ----------------------------------------------------------------
     def submit(self, events: list[Event]) -> None:
@@ -145,6 +149,20 @@ class AnalysisPipeline:
                 self._wake.wait(IDLE_POLL_S)
                 self._wake.clear()
 
+    def status_snapshot(self) -> dict:
+        """In-memory state for the status panel (no I/O). `paused` is [why, since] or None."""
+        paused = None
+        if self._paused:
+            paused = [self._pause_reason, self._paused_since]
+        elif self._cap_since is not None and self.store.total_spend(self.parent) >= self.cfg.max_spend_usd:
+            paused = ["spend cap reached", self._cap_since]
+        elif self._rik_paused():
+            paused = ["RIK blocked, downloads paused", None]
+        d = list(self._durations)
+        return {"model": self.cfg.model, "workers": max(1, self.cfg.analysis_workers),
+                "paused": paused, "avg_s": round(sum(d) / len(d), 1) if d else None,
+                "cap": self.cfg.max_spend_usd}
+
     # work -------------------------------------------------------------------
     def process_next(self) -> bool:
         """Analyse one due document; False when there is nothing to do or analysis is paused
@@ -179,6 +197,8 @@ class AnalysisPipeline:
             return False
         with self._state:
             first, self._cap_alerted = not self._cap_alerted, True
+            if first:
+                self._cap_since = self.clock()
         if first:
             log.warning("spend cap reached ($%.2f of $%.2f on election %s); analysis paused, "
                         "watcher continues", spent, self.cfg.max_spend_usd, self.parent)
@@ -194,8 +214,12 @@ class AnalysisPipeline:
     def _process(self, doc: Doc, probe: bool = False) -> str | None:
         """Returns "api" when the Anthropic API answered usably, "global" on a global failure,
         None when no API call was made."""
+        t0 = time.monotonic()
         try:
-            return self._run(doc, probe)
+            out = self._run(doc, probe)
+            if out == "api":
+                self._durations.append(time.monotonic() - t0)
+            return out
         except Exception as exc:  # a store write failed (e.g. closed at shutdown) or a bug
             if not self._stop.is_set():
                 log.exception("analysis of %s failed unexpectedly", doc.url)
@@ -322,6 +346,7 @@ class AnalysisPipeline:
         with self._state:
             first, self._paused = not self._paused, True
             self._pause_until = now + self.cfg.analysis_pause_s
+            self._pause_reason = _short(exc, 120)
             if first:
                 self._paused_since = self._pause_alerted_at = now
             realert = not first and now - self._pause_alerted_at >= REALERT_S
