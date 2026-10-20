@@ -17,12 +17,15 @@ from .models import Doc, Event, Finding
 from .notify import Notifier
 from .render import RenderError, render_tiles
 from .rik_client import RikBlocked, RikClient, RikError, RikUnavailable
-from .rules import evaluate_report
-from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, Store
+from .rules import evaluate_report, evaluate_rg7
+from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, RG7_TYPES, Store, _doc
 
 log = logging.getLogger("rg2watch.pipeline")
 
 PROMPT_VERSION = "v7"
+RG7_PROMPT_VERSION = "r1"
+# RG-7 types 19-22 correct a first-round RG-2 (type 6), 23-26 a repeat-vote one
+RG2_OF_RG7 = {**dict.fromkeys((19, 20, 21, 22), (6,)), **dict.fromkeys((23, 24, 25, 26), (10, 15, 16))}
 RETRY_STEP_S = 60
 RIK_RETRY_S = 120
 IDLE_POLL_S = 5.0
@@ -105,7 +108,7 @@ class AnalysisPipeline:
         """Queue added/replaced RG-2 documents (the store dedupes by URL) and wake the workers."""
         queued = False
         for ev in events:
-            if ev.kind in ("added", "replaced") and ev.doc.doc_type in ANALYSED_TYPES:
+            if ev.kind in ("added", "replaced") and ev.doc.doc_type in (*ANALYSED_TYPES, *RG7_TYPES):
                 queued |= self.store.queue_analysis(ev.doc.url)
         if queued:
             self._wake.set()
@@ -115,6 +118,9 @@ class AnalysisPipeline:
         if self.backlog:
             n = self.store.requeue_skipped(self.parent, self.municipalities)
             log.info("--analyze-backlog: %d form(s) seen before analysis was enabled queued", n)
+        n7 = self.store.requeue_rg7(self.parent, self.municipalities)
+        if n7:
+            log.info("%d RG-7 decision(s) never analysed queued", n7)
         for doc in self.store.requeue_running(self.parent, self.municipalities):
             self._emit([Finding("X2", "LOW", doc, f"analysis failed after {MAX_ANALYSIS_ATTEMPTS} "
                                 "attempts: interrupted every time (crash or shutdown)")])
@@ -256,13 +262,15 @@ class AnalysisPipeline:
             self._transient(doc, exc)
             return None
 
+        rg7 = doc.doc_type in RG7_TYPES
+        kind, version = ("rg7", RG7_PROMPT_VERSION) if rg7 else ("rg2", PROMPT_VERSION)
         if self._stop.is_set():  # shutting down: do not start a billed call
             self.store.mark_analysis(doc.url, "new", refund=True)
             return None
         try:
-            result = analyze_document(tiles, self.anthropic, self.cfg)
+            result = analyze_document(tiles, self.anthropic, self.cfg, kind)
         except anthropic.BadRequestError as exc:
-            self._record_cost(doc, exc)
+            self._record_cost(doc, exc, version)
             with self._state:
                 self._bad_requests.add(doc.url)
                 # during a global pause the probe's 400 counts as still account-wide
@@ -274,15 +282,15 @@ class AnalysisPipeline:
             self._transient(doc, exc)
             return None
         except GLOBAL_ERRORS as exc:
-            self._record_cost(doc, exc)
+            self._record_cost(doc, exc, version)
             return self._global_failure(doc, exc, probe)
         except AnalysisRefused as exc:
-            self._record_cost(doc, exc)
+            self._record_cost(doc, exc, version)
             self._api_ok()
             self._permanent(doc, "X1", f"analysis failed: {_short(exc)}", exc)
             return "api"
         except Exception as exc:  # 429/5xx/overloaded/connection after SDK retries, bad output
-            self._record_cost(doc, exc)
+            self._record_cost(doc, exc, version)
             if _is_overload(exc):
                 self._overloaded(doc, exc)
                 return "api" if isinstance(exc, anthropic.APIStatusError) else None
@@ -296,13 +304,19 @@ class AnalysisPipeline:
             self.store.save_analysis(
                 doc.url, dataclasses.replace(result, model=stored_model(self.cfg.model),
                                              report={**result.report, "responding_model": result.model}),
-                PROMPT_VERSION)
+                version)
         except Exception:
             log.error("analysis of %s cost $%.3f but could not be recorded", doc.url, result.cost_usd)
             raise
 
         try:
-            found = evaluate_report(result.report, doc, self.cfg)
+            if rg7:
+                rg2 = self.store.station_rg2_report(self.parent, doc.station_key, RG2_OF_RG7[doc.doc_type],
+                                                    stored_model(self.cfg.model), PROMPT_VERSION)
+                found = evaluate_rg7(result.report, doc, self.cfg, rg2)
+            else:
+                found = evaluate_report(result.report, doc, self.cfg)
+                found += self._rg7_rechecks(doc, result.report)
         except Exception as exc:  # malformed report: retrying would bill again
             log.exception("rules failed for %s", doc.url)
             self._permanent(doc, "X1", f"analysis output could not be evaluated: {_short(exc)}", exc)
@@ -312,6 +326,18 @@ class AnalysisPipeline:
         log.info("analysed %s BM %s: %d finding(s), $%.3f", doc.municipality, doc.station_no,
                  len(found), result.cost_usd)
         return "api"
+
+    def _rg7_rechecks(self, doc: Doc, rg2_report: dict) -> list[Finding]:
+        """R2 for the station's RG-7 decisions analysed before this RG-2 was (the finding table
+        dedupes, so a pair already checked at RG-7 time is not alerted twice)."""
+        out: list[Finding] = []
+        for t, rg7_types in (((6,), (19, 20, 21, 22)), ((10, 15, 16), (23, 24, 25, 26))):
+            if doc.doc_type not in t:
+                continue
+            for row, rep in self.store.rg7_reports(self.parent, stored_model(self.cfg.model), RG7_PROMPT_VERSION):
+                if row["doc_type"] in rg7_types and row["station_key"] == doc.station_key:
+                    out += [f for f in evaluate_rg7(rep, _doc(row), self.cfg, rg2_report) if f.rule == "R2"]
+        return out
 
     # global pause -----------------------------------------------------------
     def _api_ok(self) -> None:
@@ -406,12 +432,12 @@ class AnalysisPipeline:
             self._wake.set()
 
     # outcomes ---------------------------------------------------------------
-    def _record_cost(self, doc: Doc, exc: BaseException) -> None:
+    def _record_cost(self, doc: Doc, exc: BaseException, version: str = PROMPT_VERSION) -> None:
         cost = getattr(exc, "cost_usd", 0.0) or 0.0
         if not cost:
             return
         try:
-            self.store.save_failed_analysis(doc.url, stored_model(self.cfg.model), PROMPT_VERSION, cost,
+            self.store.save_failed_analysis(doc.url, stored_model(self.cfg.model), version, cost,
                                             _short(exc))
         except Exception:
             log.error("billed failure of %s ($%.3f) could not be recorded", doc.url, cost)

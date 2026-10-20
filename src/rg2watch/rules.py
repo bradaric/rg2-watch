@@ -40,6 +40,9 @@ RULE_INFO = {
     "A7": "One list got 90% or more of the valid votes (stations with over 50 valid votes)",
     "A8": "Many voters were assisted (more than 5% of those who voted)",
     "A9": "High share of votes cast outside the polling station (10%+ medium, 15%+ high)",
+    "R1": "An RG-7 decision corrected numbers (HIGH when results 10.1-10.4 or list votes changed)",
+    "R2": "An RG-7 decision's old numbers differ from what we read on that station's RG-2",
+    "R3": "An RG-7 decision could not be parsed into changes",
     "D1": "A follow-up document (RG-7, RG-8, RG-9 or a complaint) was published for the station",
     "D2": "A published document was replaced by a new file",
     "D3": "The PDF could not be downloaded or read",
@@ -259,4 +262,56 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
             text = text[:_MAX_SUMMARY - len(suffix) - 3] + "..."
         text += suffix
         out.append(Finding(rule, sev, doc, text))
+    return out
+
+
+RG7_ITEMS = {"3": "registered", "10.1": "voted", "10.2": "ballots_in_box", "10.3": "invalid", "10.4": "valid"}
+_RG7_RESULT = ("10.1", "10.2", "10.3", "10.4")
+
+
+def _is_result(item: str) -> bool:
+    return item in _RG7_RESULT or item.startswith("list:")
+
+
+def change_text(c: dict) -> str:
+    old = "?" if c["old"] is None else c["old"]
+    new = "?" if c["new"] is None else c["new"]
+    return f"{c['item']} {old}->{new}"
+
+
+def rg2_value(rg2: dict, item: str) -> int | None:
+    """The number the watch model read for an RG-7 item on an RG-2 report (None = not readable)."""
+    if item in RG7_ITEMS:
+        f = _dash_zero(rg2["numbers"][RG7_ITEMS[item]])
+    elif item.startswith("list:") and item[5:].isdigit():
+        row = int(item[5:])
+        f = next((_dash_zero(r["field"]) for r in rg2["numbers"]["list_votes"] if r["row"] == row), None)
+    else:
+        return None
+    return f["value"] if f is not None and _ok(f) else None
+
+
+def rg7_mismatch(report: dict, rg2: dict) -> list[str]:
+    """Changes whose `old` differs from the RG-2 reading, as "item: decision says X, RG-2 read Y"."""
+    out = []
+    for c in report["changes"]:
+        read = rg2_value(rg2, c["item"])
+        if c["old"] is not None and read is not None and read != c["old"]:
+            out.append(f"{c['item']}: decision old {c['old']}, RG-2 read {read}")
+    return out
+
+
+def evaluate_rg7(report: dict, doc: Doc, cfg: Config, rg2: dict | None = None) -> list[Finding]:
+    """R1-R3 of an RG-7 report; `rg2` (the station's RG-2 report) enables the R2 cross-check."""
+    changes = report["changes"]
+    if not changes:
+        return [Finding("R3", "LOW", doc, "RG-7 decision: no changes could be read")]
+    low = report["confidence"] == "low"
+    sev = "HIGH" if any(_is_result(c["item"]) for c in changes) and not low else "MEDIUM"
+    text = "RG-7 corrected " + "; ".join(change_text(c) for c in changes)
+    suffix = " (low-confidence read)" if low else ""
+    out = [Finding("R1", sev, doc, text[:_MAX_SUMMARY - len(suffix) - 3] + "..." + suffix
+                   if len(text) + len(suffix) > _MAX_SUMMARY else text + suffix)]
+    if rg2 is not None and (bad := rg7_mismatch(report, rg2)):
+        out.append(Finding("R2", "MEDIUM", doc, ("RG-7 vs RG-2 - " + "; ".join(bad))[:_MAX_SUMMARY]))
     return out

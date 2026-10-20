@@ -17,7 +17,9 @@ ANALYSED_TYPES = (6, 10, 15, 16)  # RG-2 and repeat-vote RG-2
 MAX_ANALYSIS_ATTEMPTS = 3
 BROWSE_CHUNK = 2000
 STATUS_RARE = (7, 8, 9, 14, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)  # RG-7/8/9 families, Primedba
+RG7_TYPES = (19, 20, 21, 22, 23, 24, 25, 26)  # RG-7-1..4 correction decisions (+ repeat vote)
 _ANALYSED = ",".join(map(str, ANALYSED_TYPES))
+_QUEUED = ",".join(map(str, ANALYSED_TYPES + RG7_TYPES))  # everything the analysis queue handles
 VERDICTS = ("ok", "escalate", "unsure")  # operator review of one document version (URL)
 NOTE_MAX = 500
 
@@ -212,7 +214,7 @@ class Store:
                         "ON CONFLICT(url) DO UPDATE SET active=1",
                         (parent, d.municipality, d.station_no, d.station_name, d.station_key,
                          d.doc_type, d.label, d.url, d.uploaded_at, now,
-                         "new" if d.doc_type in ANALYSED_TYPES else "skipped"))
+                         "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES else "skipped"))
                 row = self._db.execute("SELECT id FROM documents WHERE url=?", (d.url,)).fetchone()
                 self._db.execute(
                     "INSERT INTO events(sweep_id, parent, kind, document_id, station_key, "
@@ -312,7 +314,7 @@ class Store:
         with self._lock, self._db:
             self._db.execute(
                 "UPDATE documents SET analysis_status='new' WHERE url=? AND "
-                f"(analysis_status IS NULL OR analysis_status='skipped') AND doc_type IN ({_ANALYSED})",
+                f"(analysis_status IS NULL OR analysis_status='skipped') AND doc_type IN ({_QUEUED})",
                 (url,))
             row = self._db.execute("SELECT analysis_status FROM documents WHERE url=?",
                                    (url,)).fetchone()
@@ -339,7 +341,7 @@ class Store:
         with self._lock:
             return self._db.execute(
                 f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
-                f"({_ANALYSED}) AND analysis_status='skipped'{where}", (parent, *extra)).fetchone()[0]
+                f"({_QUEUED}) AND analysis_status='skipped'{where}", (parent, *extra)).fetchone()[0]
 
     def queued_for_analysis(self, parent: str, municipalities: Collection[str] | None = None) -> int:
         """Active RG-2 forms of `parent` waiting for (or retrying) analysis."""
@@ -347,7 +349,7 @@ class Store:
         with self._lock:
             return self._db.execute(
                 f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
-                f"({_ANALYSED}) AND analysis_attempts < ? AND (analysis_status='new' OR "
+                f"({_QUEUED}) AND analysis_attempts < ? AND (analysis_status='new' OR "
                 f"(analysis_status='failed' AND analysis_next_at IS NOT NULL)){where}",
                 (parent, MAX_ANALYSIS_ATTEMPTS, *extra)).fetchone()[0]
 
@@ -357,7 +359,7 @@ class Store:
         with self._lock:
             return self._db.execute(
                 f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
-                f"({_ANALYSED}) AND (analysis_status='running' OR (analysis_attempts < ? AND "
+                f"({_QUEUED}) AND (analysis_status='running' OR (analysis_attempts < ? AND "
                 f"(analysis_status='new' OR (analysis_status='failed' AND analysis_next_at IS NOT "
                 f"NULL)))){where}", (parent, MAX_ANALYSIS_ATTEMPTS, *extra)).fetchone()[0]
 
@@ -367,7 +369,7 @@ class Store:
         with self._lock:
             return self._db.execute(
                 f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
-                f"({_ANALYSED}) AND (analysis_status='done' OR (analysis_status='failed' AND NOT "
+                f"({_QUEUED}) AND (analysis_status='done' OR (analysis_status='failed' AND NOT "
                 f"(analysis_attempts < ? AND analysis_next_at IS NOT NULL))){where}",
                 (parent, MAX_ANALYSIS_ATTEMPTS, *extra)).fetchone()[0]
 
@@ -381,20 +383,31 @@ class Store:
                 "GROUP BY 1")}
             ast = {r[0]: r[1] for r in rows(
                 f"SELECT analysis_status, COUNT(*) FROM documents WHERE parent=? AND active=1 AND "
-                f"doc_type IN ({_ANALYSED}){where} GROUP BY 1")}
+                f"doc_type IN ({_QUEUED}){where} GROUP BY 1")}
             retrying = rows(f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND "
-                            f"doc_type IN ({_ANALYSED}) AND analysis_status='failed' AND "
+                            f"doc_type IN ({_QUEUED}) AND analysis_status='failed' AND "
                             f"analysis_next_at IS NOT NULL{where}")[0][0]
             sev = {r[0]: r[1] for r in rows(
                 f"SELECT severity, COUNT(*) FROM findings WHERE parent=?{where} GROUP BY 1")}
         return {"docs": docs, "done": ast.get("done", 0), "failed": ast.get("failed", 0) - retrying,
                 "skipped": ast.get("skipped", 0), "findings": sev}
 
+    def requeue_rg7(self, parent: str, municipalities: Collection[str] | None = None) -> int:
+        """Queue active RG-7 decisions never analysed (recorded before RG-7 analysis existed or
+        before analysis was enabled): they are few and cheap, so no opt-in is needed."""
+        where, extra = _in_municipalities(municipalities)
+        return self._write(
+            "UPDATE documents SET analysis_status='new' WHERE parent=? AND active=1 "
+            f"AND doc_type IN ({','.join(map(str, RG7_TYPES))}) "
+            "AND (analysis_status IS NULL OR analysis_status='skipped') AND NOT EXISTS "
+            f"(SELECT 1 FROM analyses a WHERE a.document_id=documents.id AND a.status='done'){where}",
+            (parent, *extra)).rowcount
+
     def requeue_skipped(self, parent: str | None = None,
                         municipalities: Collection[str] | None = None) -> int:
         """Queue skipped RG-2 forms (the backlog from before analysis was enabled)."""
         sql = (f"UPDATE documents SET analysis_status='new' WHERE analysis_status='skipped' "
-               f"AND doc_type IN ({_ANALYSED})")
+               f"AND doc_type IN ({_QUEUED})")
         args: list = []
         if parent is not None:
             sql += " AND parent=?"
@@ -411,7 +424,7 @@ class Store:
         that has passed (permanent failures have no retry time).
         """
         now = time.time() if now is None else now
-        sql = (f"SELECT * FROM documents WHERE active=1 AND doc_type IN ({_ANALYSED}) "
+        sql = (f"SELECT * FROM documents WHERE active=1 AND doc_type IN ({_QUEUED}) "
                "AND analysis_attempts < ? AND (analysis_status='new' OR (analysis_status='failed' "
                "AND analysis_next_at IS NOT NULL AND analysis_next_at <= ?))")
         args: list = [MAX_ANALYSIS_ATTEMPTS, now]
@@ -502,6 +515,41 @@ class Store:
                 "WHERE d.url=? AND a.model=? AND a.prompt_version=? AND a.status='done' "
                 "AND a.result_json IS NOT NULL ORDER BY a.id DESC LIMIT 1",
                 (url, model, prompt_version)).fetchone()
+        return json.loads(row["result_json"]) if row else None
+
+    def rg7_reports(self, parent: str, model: str, prompt_version: str,
+                    analysed_only: bool = True) -> list[tuple[sqlite3.Row, dict | None]]:
+        """(document row, report) of every active RG-7 decision of `parent`, oldest decision first
+        (upload time, then id). Only those this model analysed, or all with report None."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT d.*, (SELECT a.result_json FROM analyses a WHERE a.document_id=d.id AND "
+                "a.model=? AND a.prompt_version=? AND a.status='done' AND a.result_json IS NOT NULL "
+                "ORDER BY a.id DESC LIMIT 1) AS rj FROM documents d WHERE d.parent=? AND d.active=1 "
+                f"AND d.doc_type IN ({','.join(map(str, RG7_TYPES))}) "
+                "ORDER BY d.uploaded_at, d.id", (model, prompt_version, parent)).fetchall()
+        return [(r, json.loads(r["rj"]) if r["rj"] else None) for r in rows
+                if r["rj"] or not analysed_only]
+
+    def rg7_findings(self, parent: str | None) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._db.execute(
+                "SELECT id, document_id, rule, severity, summary FROM findings WHERE "
+                f"document_id IN (SELECT id FROM documents WHERE doc_type IN ({','.join(map(str, RG7_TYPES))})"
+                + (" AND parent=?)" if parent else ")") + " AND rule IN ('R1','R2','R3') ORDER BY id",
+                (parent,) if parent else ()).fetchall()
+
+    def station_rg2_report(self, parent: str, station_key: str, types: tuple[int, ...], model: str,
+                           prompt_version: str) -> dict | None:
+        """Report of the newest analysed active RG-2 (of `types`) of a station by this model."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT a.result_json FROM analyses a JOIN documents d ON d.id=a.document_id "
+                "WHERE d.parent=? AND d.station_key=? AND d.active=1 AND "
+                f"d.doc_type IN ({','.join(map(str, types))}) AND a.model=? AND a.prompt_version=? "
+                "AND a.status='done' AND a.result_json IS NOT NULL "
+                "ORDER BY d.uploaded_at DESC, a.id DESC LIMIT 1",
+                (parent, station_key, model, prompt_version)).fetchone()
         return json.loads(row["result_json"]) if row else None
 
     def browse_rows(self, parent: str | None = None) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:

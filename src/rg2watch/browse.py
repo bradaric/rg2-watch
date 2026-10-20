@@ -11,11 +11,11 @@ from urllib.parse import urljoin, urlsplit
 from .analyze import stored_model
 from .config import Config
 from .models import Doc
-from .pipeline import PROMPT_VERSION
-from .rules import RULE_INFO, evaluate_report
+from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
+from .rules import RULE_INFO, change_text, evaluate_report
 from .status import build_status, to_belgrade
 from .store import Store, _doc
-from .tally import build_tally
+from .tally import build_tally, ddmm
 
 log = logging.getLogger("rg2watch.browse")
 SEV_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
@@ -116,6 +116,20 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                          {} if cache is None else cache.setdefault("ops", {}))
     elections = {e.parent: e for e in store.elections()}
     reviews = {r["url"]: review_record(r) for r in store.latest_reviews(parent)}
+    model = stored_model((cfg or Config()).model)
+    r7: dict[tuple, list[dict]] = {}  # (election, station_key, RG-2 type) -> its RG-7 decisions
+    r7_docs = store.rg7_reports(parent, model, RG7_PROMPT_VERSION, analysed_only=False) if parent else [
+        x for p in elections for x in store.rg7_reports(p, model, RG7_PROMPT_VERSION, analysed_only=False)]
+    r7_found: dict[int, list] = {}
+    for f in store.rg7_findings(parent):
+        r7_found.setdefault(f["document_id"], []).append([f["rule"], f["severity"], f["summary"]])
+    for d, rep in r7_docs:
+        base = elections[d["parent"]].base_url if d["parent"] in elections else None
+        x = _version(d, {}, {}, cache_dir, base)
+        x.update(d=ddmm(d["uploaded_at"]), ch=[change_text(c) for c in rep["changes"]] if rep else None,
+                 f=sorted(r7_found.get(d["id"], []), key=lambda f: -SEV_RANK.get(f[1], 0)))
+        for t in RG2_OF_RG7.get(d["doc_type"], ()):
+            r7.setdefault((d["parent"], d["station_key"], t), []).append(x)
     groups: dict[tuple, list] = {}
     for d in docs:  # a NULL station_key cannot be grouped: the document stands alone
         key = d["station_key"] if d["station_key"] is not None else ("id", d["id"])
@@ -133,6 +147,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),
             v=[_version(d, found, opinions, cache_dir, base, reviews) for d in ds if d is not main])
         row["dis"] = _disagreement(row["ops"])
+        row["r7"] = r7.get((par, main["station_key"], main["doc_type"]), []) if main["active"] else []
         # "to review": the active current version has stored findings and no verdict on its URL
         row["rf"] = bool(main["active"]) and bool(found.get(main["id"]))
         row["todo"] = row["rf"] and row["rv"] is None

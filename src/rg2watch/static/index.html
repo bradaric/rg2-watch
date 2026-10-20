@@ -157,7 +157,8 @@ button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 #toverall td{font-weight:650}
 #toverall th:first-child,#toverall td:first-child{text-align:left}
 .wrapx{padding:0 var(--s3)}
-#tnotes{margin:0;padding-left:var(--s5)}
+#tnotes,#tcor{margin:0;padding-left:var(--s5)}
+.rg7{font-weight:650}
 #tmhint{margin:0 0 var(--s2)}
 table.lists{border-collapse:collapse;margin:var(--s1) 0 var(--s2) var(--s5);font-variant-numeric:tabular-nums}
 table.lists th,table.lists td{padding:3px var(--s3);text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
@@ -253,6 +254,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
 <label><input type="checkbox" id="fa"> analysis failed</label>
+<label><input type="checkbox" id="c7"> corrected by RG-7</label>
 <label><input type="checkbox" id="loc"> has local copy</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
 <details id="colbox"><summary>columns</summary><div id="cols"></div></details>
@@ -287,6 +289,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <h3>Overall</h3><div id="toverall"></div>
 <h3>Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
 <h3>Flagged forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
+<h3 id="tcorhead" hidden>Corrected by RG-7 (corrected numbers are counted)</h3><ul id="tcor"></ul>
 <h3 id="tnoteshead" hidden>Notes (not flagged)</h3><ul id="tnotes"></ul>
 </div>
 <script src="jquery.min.js"></script>
@@ -421,7 +424,7 @@ function renderStatus() {
 // ---- table --------------------------------------------------------------------------------
 let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
-const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "fl", "rp", "rm", "fa", "loc", "dis", "auto"];
+const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "fl", "rp", "rm", "fa", "c7", "loc", "dis", "auto"];
 
 // rule codes carry their plain-language description (data.json "rules"): a hover title, a focus
 // tooltip, and aria-describedby pointing at the legend entry
@@ -588,9 +591,20 @@ function download(name, text) {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+function rg7Text(x) { return "RG-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : "not read yet"); }
+function rg7Badges(r) {
+  const td = document.createDocumentFragment();
+  for (const x of r.r7) td.append(mk("div", rg7Text(x), "f rg7"));
+  return td;
+}
 function child(r) {
   const box = mk("div");
   box.append(reviewBox(r));
+  for (const x of r.r7) {
+    const d = mk("div", null, "sub");
+    d.append(mk("strong", rg7Text(x)), " ", linksOf(x), x.f.length ? badges(x.f) : "");
+    box.append(d);
+  }
   for (const o of r.ops) {
     const d = mk("div", null, "sub");
     d.append(mk("strong", o.m), mk("span", " (" + when(o.at) + ") ", "mut"), o.f.length ? badges(o.f, r.dis) : mk("span", "no findings", "mut"));
@@ -623,7 +637,7 @@ function prep(r) {
   r._fl = ofs.length > 0;
   r._rules = new Set(ofs.map(f => f[0]));
   r._models = new Set(all.flatMap(x => x.ops.map(o => o.m)));
-  r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models].join("\n").toLowerCase();
+  r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models, ...r.r7.flatMap(x => x.ch || [])].join("\n").toLowerCase();
   r.mods = [...r._models].sort().join(", ") + (r.dis.length ? " - DISAGREE" : "");
   r._stn = r.muni.toLowerCase() + " " + (parseInt(r.no) || 0);
   r._st = r.state + " " + r.ast;
@@ -643,7 +657,7 @@ function keep(r) {
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
     && (!rs.length || rs.some(x => r._rules.has(x))) && (!$("fl").checked || r._fl)
     && (!$("rp").checked || r.state === "replaced") && (!$("rm").checked || r.state === "removed")
-    && (!$("fa").checked || r.ast === "failed") && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
+    && (!$("fa").checked || r.ast === "failed") && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
 }
 function initTable() {
   DataTable.ext.search.push((s, _d, _i, row) => s.nTable.id !== "forms" || keep(row));
@@ -665,7 +679,7 @@ function initTable() {
       {data: "_st", title: "Status", className: "nw", render: {_: d => d, display: (d, t, r) =>
         esc(r.state) + "<br>" + esc("analysis " + r.ast)}},
       {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
-       createdCell: (td, d, r) => { td.append(badges(r.f)); if (r._note) td.append(mk("span", r._note, "note")); }},
+       createdCell: (td, d, r) => { td.append(badges(r.f), rg7Badges(r)); if (r._note) td.append(mk("span", r._note, "note")); }},
       {data: "u", name: "review", title: "Review", className: "nw", render: {
         _: (d, t, r) => ((rvOf(r) || {}).v || "") + (olderEsc(r).length ? " older escalate" : ""),
         display: (d, t, r) => verdictHtml(rvOf(r)) + (olderEsc(r).length && (rvOf(r) || {}).v !== "escalate"
@@ -861,6 +875,8 @@ function renderTally() {
   }
   $("tnotes").replaceChildren(...T.notes.map(n => mk("li", n.m + " BM " + n.no + ": " + n.note)));
   $("tnoteshead").hidden = !T.notes.length;
+  $("tcor").replaceChildren(...T.corrected.map(c => mk("li", c.m + " BM " + c.no + ": " + c.rg7.map(d => "RG-7 " + d.d + ": " + d.ch.join(", ")).join("; "))));
+  $("tcorhead").hidden = !T.corrected.length;
 }
 
 // ---- hero display -------------------------------------------------------------------------

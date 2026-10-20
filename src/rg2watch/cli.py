@@ -25,11 +25,11 @@ from .findings import findings_for
 from .models import Doc, Event, Finding
 from .names import MunicipalityError, resolve_municipalities
 from .notify import Notifier
-from .pipeline import PROMPT_VERSION, AnalysisPipeline
+from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from .render import RenderError, render_tiles
 from .replay import fetch_fixtures, make_replay_server
 from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, download_limiter_for
-from .rules import evaluate_report
+from .rules import change_text, evaluate_report, evaluate_rg7
 from .server import start_server
 from .status import format_status, to_belgrade
 from .store import NOTE_MAX, VERDICTS, Store
@@ -114,6 +114,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--max-usd", type=float, help="batch: stop at this spend (default max_spend_usd)")
     s.add_argument("--json", action="store_true", help="print report and findings as JSON")
     s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
+    s.add_argument("--doc-type", choices=["rg2", "rg7"], default="rg2",
+                   help="single-file mode: rg7 reads a correction decision (default rg2)")
 
     s = sub.add_parser("eval", parents=[common],
                        help="score the rules against hand labels on local PDFs")
@@ -790,6 +792,9 @@ def _cmd_analyze(args) -> int:
         print("--max-usd must be a positive number", file=sys.stderr)
         return 2
     if args.parent:
+        if args.doc_type != "rg2":
+            print("--doc-type needs a single source, not --parent", file=sys.stderr)
+            return 2
         return _cmd_analyze_batch(args, cfg)
     if any(batch_flags):
         print("--municipality/--station/--rule/--severity/--state/--limit/--yes/--max-usd need "
@@ -800,6 +805,8 @@ def _cmd_analyze(args) -> int:
         print(f"analysis unavailable: {why}", file=sys.stderr)
         return 2
     src = args.source
+    rg7 = args.doc_type == "rg7"
+    version = RG7_PROMPT_VERSION if rg7 else PROMPT_VERSION
     if urlsplit(src).scheme in ("http", "https"):
         store = _open_store(cfg)
         try:
@@ -810,7 +817,7 @@ def _cmd_analyze(args) -> int:
                 host = urlsplit(src)[:2]
                 election = next((e for e in store.elections() if urlsplit(e.base_url)[:2] == host),
                                 None)
-                doc = Doc("", "", "", "", 6, src, "")
+                doc = Doc("", "", "", "", 19 if rg7 else 6, src, "")
         finally:
             store.close()
         if election is None:
@@ -827,25 +834,36 @@ def _cmd_analyze(args) -> int:
         if not path.is_file():
             print(f"no such file: {src}", file=sys.stderr)
             return 2
-        doc = Doc("", "", path.name, "", 6, str(path), "")
+        doc = Doc("", "", path.name, "", 19 if rg7 else 6, str(path), "")
     try:
-        result = analyze_document(render_tiles(path), ai, cfg)
+        result = analyze_document(render_tiles(path), ai, cfg, args.doc_type)
     except (RenderError, AnalysisError, OllamaUnavailable) as exc:
         cost = getattr(exc, "cost_usd", 0.0)
         if cost:
             error = str(exc)[:200]
             _record_adhoc(cfg, doc.url, lambda s: s.save_failed_analysis(
-                doc.url, stored_model(cfg.model), PROMPT_VERSION, cost, error, parent=ADHOC))
+                doc.url, stored_model(cfg.model), version, cost, error, parent=ADHOC))
         print(f"analysis failed: {exc}" + (f" (billed ${cost:.3f})" if cost else ""), file=sys.stderr)
         return 1
-    _record_adhoc(cfg, doc.url, lambda s: s.save_analysis(doc.url, result, PROMPT_VERSION,
+    _record_adhoc(cfg, doc.url, lambda s: s.save_analysis(doc.url, result, version,
                                                           parent=ADHOC))
-    findings = evaluate_report(result.report, doc, cfg)
+    findings = (evaluate_rg7 if rg7 else evaluate_report)(result.report, doc, cfg)
     if args.json:
         print(json.dumps({
             "report": result.report, "model": result.model, "cost_usd": result.cost_usd,
             "findings": [{"rule": f.rule, "severity": f.severity, "summary": f.summary}
                          for f in findings]}, ensure_ascii=False, indent=2))
+        return 0
+    if rg7:
+        rep = result.report
+        print(f"{doc.url}\nmodel {result.model}, {result.input_tokens} in / {result.output_tokens} out "
+              f"tokens, ${result.cost_usd:.3f}\nconfidence {rep['confidence']}, decision "
+              f"{rep['decision_date']}, station {rep['station_no']}")
+        print("changes: " + ("; ".join(change_text(c) for c in rep["changes"]) or "none"))
+        if rep["reason"]:
+            print("reason: " + rep["reason"])
+        for f in findings:
+            print(f"[{f.severity}] {f.rule} {f.summary}")
         return 0
     vis = result.report["visual"]
     print(f"{doc.url}\nmodel {result.model}, {result.input_tokens} in / {result.output_tokens} out "

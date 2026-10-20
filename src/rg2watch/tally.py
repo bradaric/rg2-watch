@@ -1,5 +1,6 @@
 """Unofficial count read from the forms: totals of what the watch model read from each RG-2.
 Never RIK's official results; numbers are model readings and are marked as such."""
+import copy
 import json
 import logging
 from collections import Counter
@@ -7,13 +8,14 @@ from collections import Counter
 from .config import Config
 from .models import Doc
 from .names import to_cyrillic
-from .pipeline import PROMPT_VERSION
-from .rules import _dash_zero, _ok, evaluate_report
+from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
+from .rules import RG7_ITEMS, _dash_zero, _ok, change_text, evaluate_report
 from .store import Store, _doc
 
 log = logging.getLogger("rg2watch.tally")
 COUNTED = ("registered", "voted", "ballots_in_box", "invalid", "valid", "outside_voted")
 ARITHMETIC = ("A1", "A2", "A3", "A4", "A5")
+RG7_FIRST_ROUND = (19, 20, 21, 22)  # decisions correcting a first-round RG-2
 FIRST_ROUND = 6  # repeat-vote forms (10, 15, 16) are another round: never mixed into the totals
 
 
@@ -50,8 +52,50 @@ def list_name(names: list[str], row: int) -> str:
     return names[row - 1] if 1 <= row <= len(names) and names[row - 1].strip() else f"List {row}"
 
 
-def extract(report: dict, doc: Doc, cfg: Config) -> dict:
-    """The counted numbers of one report (None = not readable) plus what makes it unreliable."""
+def ddmm(uploaded_at: str | None) -> str:
+    """dd/mm of an ISO upload time ("?" when unknown)."""
+    m = (uploaded_at or "")[:10].split("-")
+    return f"{m[2]}/{m[1]}" if len(m) == 3 and all(m) else "?"
+
+
+def apply_rg7(report: dict, decisions: list[dict]) -> dict:
+    """Copy of an RG-2 report with RG-7 corrections applied in decision order: latest wins per item,
+    and a decision's corrected table (when present) is final for the items it lists. Corrected
+    values read as clean and legible; items an RG-2 report does not carry are ignored."""
+    out = copy.deepcopy(report)
+    nums = out["numbers"]
+
+    def put(item: str, value: int | None) -> None:
+        if value is None:
+            return
+        done = {"value": value, "legible": True, "mark": "clean", "note": "corrected by RG-7",
+                "original_value": None}
+        if item in RG7_ITEMS:
+            nums[RG7_ITEMS[item]] = done
+        elif item.startswith("list:") and item[5:].isdigit():
+            row = int(item[5:])
+            old = next((r for r in nums["list_votes"] if r["row"] == row), None)
+            if old is not None:
+                old["field"] = done
+            else:
+                nums["list_votes"] = sorted([*nums["list_votes"], {"row": row, "field": done}],
+                                            key=lambda r: r["row"])
+
+    for dec in decisions:
+        for c in dec["changes"]:
+            put(c["item"], c["new"])
+        for e in dec["table"]:
+            put(e["item"], e["value"])
+    return out
+
+
+def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None) -> dict:
+    """The counted numbers of one report (None = not readable) plus what makes it unreliable.
+    With `rg7` decisions the corrected numbers are counted and the arithmetic rules re-run on them;
+    the physical alerts (V, P) of the original RG-2 stay."""
+    original = report
+    if rg7:
+        report = apply_rg7(report, rg7)
     nums = {k: _dash_zero(f) for k, f in report["numbers"].items() if k != "list_votes"}
     n: dict[str, int | None] = {}
     bad: list[str] = []
@@ -71,9 +115,15 @@ def extract(report: dict, doc: Doc, cfg: Config) -> dict:
             bad.append(f"list row {r['row']} {'illegible' if not f['legible'] else 'empty'}")
     found = evaluate_report(report, doc, cfg)  # the rules re-applied to the stored report (no D-rules)
     arith = sorted({f.rule for f in found if f.rule in ARITHMETIC})
-    high = sorted({f.rule for f in found if f.severity == "HIGH"})
+    high = {f.rule for f in found if f.severity == "HIGH"}
+    if rg7:  # arithmetic from the corrected numbers, everything else from the RG-2 as filed
+        high = {r for r in high if r in ARITHMETIC} | {
+            f.rule for f in evaluate_report(original, doc, cfg)
+            if f.severity == "HIGH" and f.rule not in ARITHMETIC}
+    high = sorted(high)
     return {"n": n, "l": lists, "bad": bad, "conf": report["confidence"],
-            "pq": report["visual"]["page_quality"], "arith": arith, "high": high}
+            "pq": report["visual"]["page_quality"], "arith": arith, "high": high,
+            "rg7": [{"d": d["d"], "ch": [change_text(c) for c in d["changes"]]} for d in rg7] if rg7 else []}
 
 
 def disagreements(mine: dict, others: dict[str, dict], model: str) -> tuple[list[dict], list[str]]:
@@ -173,21 +223,35 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         active = [d for d in ds if d["active"]]
         if active:  # removed forms are not counted
             mains.append(max(active, key=lambda d: (d["uploaded_at"] or "", d["id"])))
-    need = [a["id"] for d in mains for m, a in by_doc.get(d["id"], {}).items()
-            if a["id"] not in cache and (m == model or a["prompt_version"] == PROMPT_VERSION)]
-    reports = store.analysis_reports(need)
+    corr: dict[str, list[dict]] = {}  # station_key -> RG-7 decisions in decision order
+    for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION):
+        if row["doc_type"] in RG7_FIRST_ROUND and row["station_key"] is not None:
+            corr.setdefault(row["station_key"], []).append(
+                {"d": ddmm(row["uploaded_at"]), "changes": rep["changes"], "table": rep["table"]})
+    sigs = {k: hash(json.dumps(v, sort_keys=True)) for k, v in corr.items()}
+
+    def key_of(a) -> object:
+        sig = sigs.get(docobj[a["document_id"]].station_key) if a["document_id"] in docobj else None
+        return a["id"] if sig is None else (a["id"], sig)
+
     docobj = {d["id"]: _doc(d) for d in mains}
+    need = [a["id"] for d in mains for m, a in by_doc.get(d["id"], {}).items()
+            if key_of(a) not in cache and (m == model or a["prompt_version"] == PROMPT_VERSION)]
+    reports = store.analysis_reports(need)
 
     def ex_of(a) -> dict | None:
-        if a["id"] not in cache:
+        k = key_of(a)
+        if k not in cache:
+            doc = docobj[a["document_id"]]
             try:
-                cache[a["id"]] = extract(json.loads(reports[a["id"]]), docobj[a["document_id"]], cfg)
+                cache[k] = extract(json.loads(reports[a["id"]]), doc, cfg, corr.get(doc.station_key))
             except Exception:
                 log.warning("stored analysis %s could not be read for the tally", a["id"], exc_info=True)
-                cache[a["id"]] = None
-        return cache[a["id"]]
+                cache[k] = None
+        return cache[k]
 
-    for gone in set(cache) - {a["id"] for a in arows}:
+    live = {a["id"] for a in arows} | {key_of(a) for a in arows}
+    for gone in set(cache) - live:
         del cache[gone]
     forms, unanalysed = [], {}
     for d in mains:
@@ -253,6 +317,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                     _add(acc[key], f["ex"], mrows)
                     _add(overall[key], f["ex"], rows if national else [])
         row = {"m": name, "stations": stations.get(name, 0), "counted": len(mine),
+               "corrected": sum(1 for f in mine if f["ex"]["rg7"]),
                "clean": sum(1 for f in mine if not f["why"]), "unanalysed": unanalysed.get(name, 0),
                "all": _tot(acc["all"]), "cl": _tot(acc["cl"])}
         if mixed:
@@ -265,7 +330,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         for k in counts:
             counts[k] += row[k]
         munis.append(row)
-    total = {"m": "(all)", **counts, "all": _tot(overall["all"]), "cl": _tot(overall["cl"])}
+    total = {"m": "(all)", **counts, "corrected": sum(r["corrected"] for r in munis), "all": _tot(overall["all"]), "cl": _tot(overall["cl"])}
     if not national:
         for key in ("all", "cl"):
             del total[key]["lists"], total[key]["lists_valid"]
@@ -276,6 +341,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     top = ballot("", len(rows)) if national else {"nlists": 0, "names": [], "names_note": None}
     return {"model": model, "parent": parent, "title": e.title if e else parent, "scope": scope,
             "scope_note": scope_note, **top, "munis": munis, "overall": total, "notes": notes,
+            "corrected": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
+                           "rg7": f["ex"]["rg7"]} for f in forms if f["ex"]["rg7"]],
             "excluded": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                           "why": f["why"]} for f in forms if f["why"]]}
 
@@ -305,7 +372,7 @@ def format_tally(t: dict, all_forms: bool = True) -> str:
            + ("all counted forms" if all_forms else "clean forms only (leave out flagged)"), ""]
     head = ["municipality", "stations", "counted", "clean", "flagged", "cover", "registered", "voted",
             "turnout", "in box", "invalid", "valid", "outside"]
-    body = [[r["m"], str(r["stations"]), str(r["counted"]), str(r["clean"]), str(r["excluded"]),
+    body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if r["corrected"] else ""), str(r["clean"]), str(r["excluded"]),
              _pct(r["counted"] / r["stations"] if r["stations"] else None),
              *(f"{r[key][k]:,}" for k in ("registered", "voted")), _pct(r[key]["turnout"]),
              *(f"{r[key][k]:,}" for k in ("ballots_in_box", "invalid", "valid", "outside_voted"))]
@@ -331,6 +398,10 @@ def format_tally(t: dict, all_forms: bool = True) -> str:
     pending = t["overall"]["unanalysed"]
     out += ["", f"{t['overall']['counted']} form(s) counted, {t['overall']['clean']} clean, "
             f"{t['overall']['excluded']} flagged, {pending} not analysed by {t['model']}"]
+    if t["corrected"]:
+        out += ["", "* corrected by RG-7 decisions (corrected numbers counted):"]
+        out += [f"  {c['m']} BM {c['no']}: " + "; ".join(f"RG-7 {d['d']}: {', '.join(d['ch'])}" for d in c["rg7"])
+                for c in t["corrected"]]
     if t["notes"]:
         out += ["", "notes (not flagged):"] + [f"  {n['m']} BM {n['no']}: {n['note']}" for n in t["notes"]]
     if t["excluded"]:

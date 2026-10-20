@@ -165,6 +165,22 @@ Cyrillic) are a config error. Any other or unknown type (also an election withou
 municipal with the warning "unknown election type - set tally_scope"; override with
 `tally_scope = {"<parent>" = "national"}` (top-level key, before any `[table]`).
 
+## RG-7 correction decisions
+
+RG-7-1..4 and the repeat-vote 23-26 ("Решење о исправљању записника") change numbers in a station's
+RG-2. With analysis on they are analysed like RG-2 forms (same limiter, workers, spend cap and
+retries) with their own prompt and schema (`RG7_PROMPT_VERSION` r1; no names: list votes by row
+number only). Decisions already stored by an older run and never analysed are queued automatically
+at the next `watch --analyze` / `--until-done` (also `scripts/rehearse.sh <id>` on an existing DB).
+Rules: R1 HIGH (a result item 10.1-10.4 or list votes changed) or MEDIUM (only other items), R2
+MEDIUM (the decision's old number differs from our RG-2 reading; checked when the RG-7 is analysed
+and again when the station's RG-2 is analysed later), R3 LOW (no changes read). The tally applies
+the corrections of each counted RG-2 in decision order (latest wins, a decision's table is final),
+re-runs A1-A5 on the corrected numbers and keeps the RG-2's visual alerts; the CLI marks corrected
+municipalities with `*` and lists them, the page lists them too. Station rows show "RG-7 dd/mm:
+10.2 180->178, ..." (links in the child row) and have the filter "corrected by RG-7".
+Single file: `rg2watch analyze <rg7.pdf> --doc-type rg7` prints the changes.
+
 ## Visual analysis of RG-2 forms
 
 Analysis is opt-in because it calls a paid API: `watch` analyses only with `--analyze` or
