@@ -277,7 +277,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <div id="herobar"><select id="hmuni" aria-label="Општина"></select>
 <select id="hmode" aria-label="Обухваћени записници"><option value="cl">само записници без уочених проблема (без оних за проверу)</option><option value="all" selected>сви обрађени записници</option></select>
 <select id="hview" aria-label="Приказ бројева"><option value="corrected" selected>са исправкама (RG-7)</option><option value="filed">оригинални бројеви (RG-2)</option><option value="diff">разлика (са исправкама − оригинални)</option></select>
-<button id="herobtn">Режим презентације</button></div>
+<button id="herobtn">Цео екран</button></div>
 <div id="herohead"><span class="kicker">НЕЗВАНИЧНО</span><div id="herotitle"></div></div>
 <div id="heronums">
 <div class="tile"><div class="k">Излазност</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
@@ -1163,7 +1163,7 @@ function heroMunis() {
 function renderHero() {
   heroMunis();
   const foot = $("herofoot");
-  const label = T ? "НЕЗВАНИЧНО — Скенирани записници обрађени помоћу АИ; ово нису резултати РИК-а. Стање у " +
+  const label = T ? "НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а. Стање у " +
     epoch(Date.parse(D.built) / 1000).slice(-5) + "." : "НЕЗВАНИЧНО — резултати још нису доступни.";
   foot.replaceChildren(label);
   if (!T) { $("heronames").hidden = true; $("herotitle").textContent = ""; $("heronote").textContent = "Још нема анализираних записника."; for (const s of slots) s.row.hidden = true; return; }
@@ -1243,7 +1243,7 @@ function renderHero() {
 }
 function setHero(on) {
   document.body.classList.toggle("hero", on);
-  $("herobtn").textContent = on ? "Излаз (Esc)" : "Режим презентације";
+  $("herobtn").textContent = on ? "Излаз (Esc)" : "Цео екран";
   if (on) setTab("results");
 }
 $("herobtn").onclick = () => setHero(!document.body.classList.contains("hero"));
