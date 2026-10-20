@@ -200,6 +200,11 @@ def test_page_csv_is_formula_safe_and_labelled():
     assert "Unofficial - numbers read by a model from the scanned forms" in html
     assert 'new Intl.NumberFormat("en-GB")' in html
     assert 'id="tview"' in html and 'id="hview"' in html and 'p.set("nv", NV())' in html  # numbers view, in the hash
+    for label in ("Vote forms", "Withheld readable valid", "Unreconciled turnout gap",
+                  "Selected in both views", "Paired vote forms", "Vote forms not paired",
+                  "Corrected-only eligible", "Filed-only eligible"):
+        assert label in html
+    assert "invalid counts are limited to forms with reconciled valid/list totals" in html
 
 
 def test_cli_tally_prints_all_then_clean(tmp_path, capsys):
@@ -235,6 +240,10 @@ def test_hero_markup_labelled_and_safe():
     assert 'id="hero"' in html and "UNOFFICIAL - numbers read by" in html and "Very early" in html
     assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
     assert "Escape" in html and 'get("hero") === "1"' in html
+    assert 'id="hs-forms"' in html
+    assert "selected forms contributed vote totals" in html
+    assert "Unreconciled turnout gap" in html
+    assert "corrected-only eligible" in html and "filed-only eligible" in html
 
 
 def test_unreadable_by_other_model_is_a_note_not_an_exclusion():
@@ -462,7 +471,8 @@ def test_municipal_unknown_municipality_gets_no_list_totals():
     assert "lists" in nat["all"]  # national scope: one ballot, lists kept
 
 
-def test_page_diff_view_uses_paired_numbers_and_shows_station_changes():
+def test_page_diff_view_uses_paired_numbers_and_explains_unmatched_terms():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert "deltaOf(r.pair.all.c, r.pair.all.f)" in html and "Stations newly counted" in html
-    assert "Stations removed" in html and "deltaOf(r.all, r.fall)" not in html
+    assert "deltaOf(r.pair.all.c, r.pair.all.f)" in html and "terms only in corrected/filed view" in html
+    assert "vote-reconciliation eligibility" in html and "deltaOf(r.all, r.fall)" not in html
+    assert "pair_selected" in html and "pair_vote_forms" in html and "pair_not_contributing" in html

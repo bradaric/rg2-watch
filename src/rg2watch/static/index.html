@@ -281,7 +281,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <div id="heronums">
 <div class="tile"><div class="k">Turnout</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
 <div class="tile"><div class="k">Stations counted</div><div class="v" id="hv-st">-</div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
-<div class="tile"><div class="k">Forms</div><div class="v" id="hv-forms">-</div><div class="s">clean / flagged</div></div>
+<div class="tile"><div class="k">Forms</div><div class="v" id="hv-forms">-</div><div class="s" id="hs-forms"></div></div>
 <div class="tile"><div class="k">Valid votes</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"></div></div>
 </div>
 <div id="heronames" class="warnbox" hidden></div>
@@ -858,7 +858,7 @@ const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
 const ratio = (a, b) => b ? a / b : null;
 const NV = () => $("tview").value;  // numbers: corrected | filed | diff
 const NV_LABEL = {corrected: "With RG-7 corrections.", filed: "As filed on the RG-2 forms (RG-7 corrections not applied).",
-  diff: "Difference: with RG-7 corrections minus as filed, over the stations counted in both (stations that join or leave a total are shown separately)."};
+  diff: "Difference: with RG-7 corrections minus as filed, over comparable terms. Forms with terms only in corrected/filed view are shown separately; unmatched terms are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)."};
 const dnum = v => v == null ? "-" : v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + nf.format(Math.abs(v));
 const dpp = x => { if (x == null) return "-"; const v = Math.round(x * 1000) / 10; return v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + Math.abs(v).toFixed(1); };
 function deltaOf(a, b) {  // totals block: corrected minus as filed (turnout and shares in fractions)
@@ -887,9 +887,22 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come
     ["Coverage", r => ratio(r.counted, r.stations), pc, r => ratio(r.counted, r.stations) == null ? "" : (100 * r.counted / r.stations).toFixed(1)],
     ["Registered", r => t(r).registered, n], ["Voted", r => t(r).voted, n],
     ["Turnout" + (dg ? " (pp)" : ""), r => t(r).turnout, p, r => t(r).turnout == null ? "" : (100 * t(r).turnout).toFixed(1)],
-    ["In box", r => t(r).ballots_in_box, n], ["Invalid", r => t(r).invalid, n],
-    ["Valid", r => t(r).valid, n], ["Outside", r => t(r).outside_voted, n]];
-  if (dg) c.push(["Stations newly counted", r => r.nin, dnum], ["Stations removed", r => r.nout, dnum]);
+    ["In box", r => t(r).ballots_in_box, n], ["Invalid (reconciled forms)", r => t(r).invalid, n],
+    ["Reconciled valid", r => t(r).valid, n], ["Outside", r => t(r).outside_voted, n]];
+  const gap = r => t(r).voted - t(r).valid - t(r).invalid;
+  if (dg) c.push(
+    ["Withheld readable valid (difference)", r => t(r).withheld_valid, dnum],
+    ["Unreconciled turnout gap (difference)", gap, dnum],
+    ["Selected in both views", r => r.pair[mode].pair_selected, num],
+    ["Paired vote forms", r => r.pair[mode].pair_vote_forms, num],
+    ["Vote forms not paired", r => r.pair[mode].pair_not_contributing, num],
+    ["Corrected-only eligible", r => r.pair[mode].corrected_only_vote_forms, num],
+    ["Filed-only eligible", r => r.pair[mode].filed_only_vote_forms, num],
+    ["Forms with terms only in corrected view", r => r.nin, dnum],
+    ["Forms with terms only in filed view", r => r.nout, dnum]);
+  else c.push(["Vote forms", r => t(r).vote_forms, num],
+    ["Withheld readable valid", r => t(r).withheld_valid, num],
+    ["Unreconciled turnout gap (signed)", gap, dnum]);
   const share = (r, i) => dg ? t(r).sh[i] : ratio(t(r).lists[i], t(r).lists_valid);
   T.names.forEach((nm, i) => {
     c.push([(i + 1) + " \u00b7 " + nm + " votes", r => t(r).lists[i], n]);
@@ -909,7 +922,8 @@ function tallyCsv() {
   // header is row 1 (pandas/Excel read it cleanly); the unofficial note is a last column, first data row
   const note = "Unofficial - numbers read by " + T.model + " from the scanned forms; " +
     (mode === "cl" ? "clean forms only (leave out flagged)" : "all counted forms") + "; numbers: " + NV_LABEL[NV()] +
-    (NV() === "diff" ? " Turnout and shares in percentage points." : "");
+    " Reported invalid counts are limited to forms with reconciled valid/list totals." +
+    (NV() === "diff" ? " Paired cohort columns are unsigned actual sizes; turnout and shares are differences in percentage points." : "");
   if (T.scope === "municipal") {  // long format: one row per (municipality, list), shared totals repeated
     const shared = cols.slice(1), out = [];
     for (const r of rows) {
@@ -1087,11 +1101,38 @@ function renderHero() {
   put("hv-st", num(r.counted) + (r.stations ? " / " + num(r.stations) : ""));
   put("hs-st", cover == null ? "stations known: unknown" : pc(cover) + " of stations");
   $("hp-st").style.width = (cover == null ? 0 : Math.min(100, cover * 100)) + "%";
-  put("hv-forms", dg ? dnum(r.clean) + " / " + dnum(r.excluded) : num(r.clean) + " / " + num(r.excluded));
+  if (dg) {
+    put("hv-forms", dnum(r.clean) + " / " + dnum(r.excluded));
+    put("hs-forms", "clean / flagged deltas");
+  } else if (mode === "cl") {
+    put("hv-forms", num(r.clean));
+    put("hs-forms", "clean · " + num(r.excluded) + " flagged excluded");
+  } else {
+    put("hv-forms", num(r.counted));
+    put("hs-forms", num(r.clean) + " clean · " + num(r.excluded) + " flagged");
+  }
   put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));
-  put("hs-valid", none ? "" : dg ? "difference in valid votes" : !t.registered ? "" : "valid votes counted");
+  const gap = t.voted - t.valid - t.invalid;
+  const noComparableLists = (muniScope && allMunis) || !raw[mode].lists;
+  if (none) put("hs-valid", "");
+  else if (dg) {
+    const p = raw.pair[mode], neither = p.pair_not_contributing - p.corrected_only_vote_forms - p.filed_only_vote_forms;
+    put("hs-valid", "Reported invalid difference: " + dnum(t.invalid) + ". " +
+      p.pair_vote_forms + " of " + p.pair_selected + " selected forms contributed vote totals; " +
+      p.pair_not_contributing + " not paired (" + p.corrected_only_vote_forms + " corrected-only eligible, " +
+      p.filed_only_vote_forms + " filed-only eligible, " + neither + " neither). Withheld readable valid difference: " +
+      dnum(t.withheld_valid) + ". Unreconciled turnout gap difference: " + dnum(gap) + "." +
+      (noComparableLists ? " Comparable list totals are unavailable for this scope." : ""));
+  } else {
+    const selected = mode === "cl" ? r.clean : r.counted;
+    put("hs-valid", "Reported invalid: " + num(t.invalid) + ". " + t.vote_forms + " of " + selected +
+      " selected forms contributed vote totals; " + num(t.withheld_valid) +
+      " readable valid votes withheld (known partial amount). Unreconciled turnout gap: " + dnum(gap) + "." +
+      (noComparableLists ? " Comparable list totals are unavailable for this scope." : ""));
+  }
   $("heronote").textContent = none ? "No forms counted yet - no results to show."
-    : [dg ? "Stations newly counted: " + dnum(r.nin) + ", removed: " + dnum(r.nout) + " (not in the differences above; a correction made a number readable or changed a form's clean/flagged status)." : "",
+    : [dg ? "Forms with terms only in corrected/filed view: " + dnum(r.nin) + " / " + dnum(r.nout) +
+        "; unmatched terms are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)." : "",
       muniScope && allMunis ? "Local election - lists differ per municipality; pick a municipality for list results." : "",
       cover != null && cover < 0.1 ? "Very early - few stations counted. Do not read these shares as a result." : ""].filter(Boolean).join(" ");
   const rows = none || (muniScope && allMunis) || !raw[mode].lists_valid ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
