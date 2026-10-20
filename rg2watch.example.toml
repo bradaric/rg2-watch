@@ -89,3 +89,11 @@ outside_share_medium = 0.10
 # Large correction (V12): original vs final value differ by at least this many, and by this share of the original
 large_correction_abs = 5
 large_correction_share = 0.3
+
+# Tally scope per election: "national" (one ballot everywhere) or "municipal" (own lists per
+# municipality). Default from RIK's election type: 2 national, 3 municipal, else municipal.
+# tally_scope = {"779676" = "national"}
+# List names, by hand (never read from the scans): national = list, municipal = per municipality
+# [list_names]
+# "779676" = ["List A", "List B"]
+# "662405" = {"Beograd" = ["List A", "List B"]}

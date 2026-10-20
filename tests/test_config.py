@@ -80,3 +80,21 @@ def test_only_municipalities_must_be_list_of_strings(tmp_path):
         f.write_text(f"only_municipalities = {bad}\n")
         with pytest.raises(ValueError, match="only_municipalities"):
             load_config(f)
+
+
+def test_list_names_and_tally_scope_shapes(tmp_path):
+    import pytest
+    f = tmp_path / "c.toml"
+    f.write_text('tally_scope = {"1" = "national", "2" = "municipal"}\n'
+                 '[list_names]\n"1" = ["A"]\n"2" = {Beograd = ["X", "Y"]}\n')
+    c = load_config(f)
+    assert c.tally_scope == {"1": "national", "2": "municipal"}
+    assert c.list_names == {"1": ["A"], "2": {"Beograd": ["X", "Y"]}}
+    for bad in ('[list_names]\n"1" = {B = "x"}', '[list_names]\n"1" = {B = [1]}', '[list_names]\n"1" = 3'):
+        f.write_text(bad + "\n")
+        with pytest.raises(ValueError, match="list_names"):
+            load_config(f)
+    for bad in ('{"1" = "x"}', '{"1" = 1}', '["national"]'):
+        f.write_text(f"tally_scope = {bad}\n")
+        with pytest.raises(ValueError, match="tally_scope"):
+            load_config(f)

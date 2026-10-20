@@ -84,8 +84,17 @@ forms only" totals (`--clean` / the page switch show only those; every counted f
 confidence is low, the page quality is poor or unreadable, a counted number is illegible, another
 stored model read a counted number differently, or an arithmetic rule (A1-A5) fires; the reasons are
 listed, with a link to the form. List names are never read from the scans: set
-`[list_names]` `"<parent>" = ["Name 1", "Name 2"]` in the config, default "List N". The page offers a
+`[list_names]` in the config, default "List N". The page offers a
 CSV download of the per-municipality table (cells starting with = + - @ are escaped).
+
+Scope: list totals only make sense where one ballot is used everywhere. RIK's election type 2
+(parliamentary) is `national`: list votes overall and per municipality, `"<parent>" = ["Name 1", ...]`.
+Type 3 (local) is `municipal`: every municipality has its own ballot, so the modal list-row set, names
+(`"<parent>" = {"Municipality" = ["Name 1", ...]}`, Latin or Cyrillic) and list votes are per
+municipality, and the overall row has no list columns; `tally` prints one list table per
+municipality. Any other or unknown type (also an election without a stored type) is treated as
+municipal with the warning "unknown election type - set tally_scope"; override with
+`tally_scope = {"<parent>" = "national"}` (top-level key, before any `[table]`).
 
 ## Visual analysis of RG-2 forms
 

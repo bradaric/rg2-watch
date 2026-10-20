@@ -23,7 +23,9 @@ class Config:
     probe_cost_guard: bool = True
     watchlist: list[str] = field(default_factory=list)
     only_municipalities: list[str] = field(default_factory=list)
-    list_names: dict[str, list[str]] = field(default_factory=dict)  # parent -> names of list rows 1..N
+    # parent -> names of list rows 1..N (national) or {municipality -> names} (municipal)
+    list_names: dict[str, list[str] | dict[str, list[str]]] = field(default_factory=dict)
+    tally_scope: dict[str, str] = field(default_factory=dict)  # parent -> "national" | "municipal"
     ntfy_url: str = "https://ntfy.sh"
     ntfy_topic: str | None = None
     medium_digest_s: int = 600
@@ -79,10 +81,16 @@ def load_config(path: Path | None) -> Config:
     if not (isinstance(cfg.only_municipalities, list)
             and all(isinstance(n, str) for n in cfg.only_municipalities)):
         raise ValueError("only_municipalities must be a list of strings")
+    names = lambda v: isinstance(v, list) and all(isinstance(n, str) for n in v)
     if not (isinstance(cfg.list_names, dict) and all(
-            isinstance(k, str) and isinstance(v, list) and all(isinstance(n, str) for n in v)
+            isinstance(k, str) and (names(v) or (isinstance(v, dict) and all(
+                isinstance(m, str) and names(n) for m, n in v.items())))
             for k, v in cfg.list_names.items())):
-        raise ValueError("list_names must map an election id to a list of strings")
+        raise ValueError("list_names must map an election id to a list of strings "
+                         "or to {municipality = list of strings}")
+    if not (isinstance(cfg.tally_scope, dict) and all(
+            isinstance(k, str) and v in ("national", "municipal") for k, v in cfg.tally_scope.items())):
+        raise ValueError('tally_scope must map an election id to "national" or "municipal"')
     if cfg.browse_interval_s < 0:
         raise ValueError(f"browse_interval_s must be >= 0: {cfg.browse_interval_s}")
     if not 0 <= cfg.serve_port <= 65535:

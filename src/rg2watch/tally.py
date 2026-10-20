@@ -6,6 +6,7 @@ from collections import Counter
 
 from .config import Config
 from .models import Doc
+from .names import to_cyrillic
 from .pipeline import PROMPT_VERSION
 from .rules import _dash_zero, _ok, evaluate_report
 from .store import Store, _doc
@@ -16,8 +17,34 @@ ARITHMETIC = ("A1", "A2", "A3", "A4", "A5")
 FIRST_ROUND = 6  # repeat-vote forms (10, 15, 16) are another round: never mixed into the totals
 
 
-def list_name(cfg: Config, parent: str, row: int) -> str:
-    names = cfg.list_names.get(parent, [])
+UNKNOWN_TYPE_NOTE = "unknown election type - set tally_scope"
+
+
+def scope_of(store: Store, cfg: Config, parent: str) -> tuple[str, str | None]:
+    """("national" | "municipal", note). Config override first, then RIK's election type
+    (2 parliamentary, 3 local); anything else (or no elections row) is municipal plus a note."""
+    if parent in cfg.tally_scope:
+        return cfg.tally_scope[parent], None
+    e = store.get_election(parent)
+    kind = {"2": "national", "3": "municipal"}.get(e.election_type if e else None)
+    return (kind, None) if kind else ("municipal", UNKNOWN_TYPE_NOTE)
+
+
+def configured_names(cfg: Config, parent: str, scope: str, muni: str | None) -> tuple[list[str], str | None]:
+    """(names from list_names for the national ballot or one municipality, note on a wrong shape).
+    Municipality keys match as Latin or Cyrillic, case-insensitive."""
+    v = cfg.list_names.get(parent)
+    if v is None:
+        return [], None
+    if scope == "national":
+        return (v, None) if isinstance(v, list) else ([], "list_names must be a plain list for a national election")
+    if isinstance(v, list):
+        return [], "list_names must map municipality -> names for a municipal election"
+    want = to_cyrillic(muni or "")
+    return next((n for k, n in v.items() if to_cyrillic(k) == want), []), None
+
+
+def list_name(names: list[str], row: int) -> str:
     return names[row - 1] if 1 <= row <= len(names) and names[row - 1].strip() else f"List {row}"
 
 
@@ -169,50 +196,72 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         others = {m: e for m, a in got.items() if m != model and a["prompt_version"] == PROMPT_VERSION
                   and (e := ex_of(a)) is not None}
         forms.append({"d": d, "muni": muni, "ex": mine, "others": others})
-    rows = expected_rows([f["ex"] for f in forms])
-    nlists = len(rows)
-    configured = len(cfg.list_names.get(parent, []))
-    names_note = None
-    if configured and nlists and configured != nlists:
-        names_note = f"list_names has {configured} names, forms have {nlists} lists - check config"
-        if (parent, configured, nlists) not in _warned:
-            _warned.add((parent, configured, nlists))
-            log.warning("%s (election %s)", names_note, parent)
-    notes = []
-    for f in forms:
-        dis, note = disagreements(f["ex"], f["others"], model)
-        f["why"] = reasons(f["ex"], dis, rows)
-        notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
-    stations = {m: n for m, n in store.station_counts(parent).items()
-                if municipalities is None or m in municipalities}
+    scope, scope_note = scope_of(store, cfg, parent)
+    national = scope == "national"
     by_muni: dict[str, list] = {}
     for f in forms:
         by_muni.setdefault(f["muni"], []).append(f)
+    if national:
+        rows = expected_rows([f["ex"] for f in forms])
+        rows_of = {m: rows for m in by_muni}
+    else:  # every municipality has its own ballot: its own modal row set
+        rows_of = {m: expected_rows([f["ex"] for f in fs]) for m, fs in by_muni.items()}
+    info: dict[str, dict] = {}  # per ballot ("" = the national one): nlists, names, names_note
+
+    def ballot(muni: str, nrows: int) -> dict:
+        key = "" if national else muni
+        if key not in info:
+            conf, shape = configured_names(cfg, parent, scope, None if national else muni)
+            note = shape
+            if not note and conf and nrows and len(conf) != nrows:
+                note = f"list_names has {len(conf)} names, forms have {nrows} lists - check config"
+            if note and (parent, key, len(conf), nrows) not in _warned:
+                _warned.add((parent, key, len(conf), nrows))
+                log.warning("%s (election %s%s)", note, parent, "" if national else f", {muni}")
+            info[key] = {"nlists": nrows, "names": [list_name(conf, r) for r in range(1, nrows + 1)],
+                         "names_note": note}
+        return info[key]
+
+    notes = []
+    for f in forms:
+        f["rows"] = rows_of[f["muni"]]
+        dis, note = disagreements(f["ex"], f["others"], model)
+        f["why"] = reasons(f["ex"], dis, f["rows"])
+        notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
+    stations = {m: n for m, n in store.station_counts(parent).items()
+                if municipalities is None or m in municipalities}
     names = sorted({*by_muni, *unanalysed, *stations})
-    overall = {"all": _acc(nlists), "cl": _acc(nlists)}
+    nl = len(rows) if national else 0
+    overall = {"all": _acc(nl), "cl": _acc(nl)}
     counts = {"stations": 0, "counted": 0, "clean": 0, "unanalysed": 0}
     munis = []
     for name in names:
         mine = by_muni.get(name, [])
-        acc = {"all": _acc(nlists), "cl": _acc(nlists)}
+        mrows = rows if national else rows_of.get(name, [])
+        acc = {"all": _acc(len(mrows)), "cl": _acc(len(mrows))}
         for f in mine:
             for key, take in (("all", True), ("cl", not f["why"])):
                 if take:
-                    _add(acc[key], f["ex"], rows)
-                    _add(overall[key], f["ex"], rows)
+                    _add(acc[key], f["ex"], mrows)
+                    _add(overall[key], f["ex"], rows if national else [])
         row = {"m": name, "stations": stations.get(name, 0), "counted": len(mine),
                "clean": sum(1 for f in mine if not f["why"]), "unanalysed": unanalysed.get(name, 0),
                "all": _tot(acc["all"]), "cl": _tot(acc["cl"])}
+        if not national:
+            row.update(ballot(name, len(mrows)) if mine else {"nlists": 0, "names": [], "names_note": None})
         row["excluded"] = row["counted"] - row["clean"]
         for k in counts:
             counts[k] += row[k]
         munis.append(row)
     total = {"m": "(all)", **counts, "all": _tot(overall["all"]), "cl": _tot(overall["cl"])}
+    if not national:
+        for key in ("all", "cl"):
+            del total[key]["lists"], total[key]["lists_valid"]
     total["excluded"] = total["counted"] - total["clean"]
     e = store.get_election(parent)
-    return {"model": model, "parent": parent, "title": e.title if e else parent, "nlists": nlists,
-            "names": [list_name(cfg, parent, r) for r in range(1, nlists + 1)],
-            "munis": munis, "overall": total, "notes": notes, "names_note": names_note,
+    top = ballot("", len(rows)) if national else {"nlists": 0, "names": [], "names_note": None}
+    return {"model": model, "parent": parent, "title": e.title if e else parent, "scope": scope,
+            "scope_note": scope_note, **top, "munis": munis, "overall": total, "notes": notes,
             "excluded": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                           "why": f["why"]} for f in forms if f["why"]]}
 
@@ -225,6 +274,12 @@ def _table(head: list[str], rows: list[list[str]]) -> list[str]:
     w = [max(len(r[i]) for r in [head, *rows]) for i in range(len(head))]
     line = lambda r: "  ".join(c.ljust(w[i]) if i == 0 else c.rjust(w[i]) for i, c in enumerate(r))
     return [line(head), *map(line, rows)]
+
+
+def _list_table(names: list[str], rows: list[dict], key: str) -> list[str]:
+    body = [[r["m"], *(f"{v:,} ({_pct(v / r[key]['lists_valid'] if r[key]['lists_valid'] else None)})"
+                       for v in r[key]["lists"])] for r in rows]
+    return _table(["municipality", *names], body)
 
 
 def format_tally(t: dict, all_forms: bool = True) -> str:
@@ -241,13 +296,21 @@ def format_tally(t: dict, all_forms: bool = True) -> str:
              *(f"{r[key][k]:,}" for k in ("ballots_in_box", "invalid", "valid", "outside_voted"))]
             for r in rows]
     out += _table(head, body)
-    if t["nlists"]:
-        out += ["", "votes per list (share of valid votes)"]
-        body = [[r["m"], *(f"{v:,} ({_pct(v / r[key]['lists_valid'] if r[key]['lists_valid'] else None)})"
-                           for v in r[key]["lists"])] for r in rows]
-        out += _table(["municipality", *t["names"]], body)
-    if t["names_note"]:
-        out += ["", "warning: " + t["names_note"]]
+    if t["scope"] == "national":
+        if t["nlists"]:
+            out += ["", "votes per list (share of valid votes)"]
+            out += _list_table(t["names"], rows, key)
+        if t["names_note"]:
+            out += ["", "warning: " + t["names_note"]]
+    else:
+        if t["scope_note"]:
+            out += ["", "warning: " + t["scope_note"]]
+        for r in t["munis"]:
+            if r["nlists"]:
+                out += ["", f"{r['m']}: votes per list (share of valid votes)"]
+                out += _list_table(r["names"], [r], key)
+                if r["names_note"]:
+                    out += ["warning: " + r["names_note"]]
     pending = t["overall"]["unanalysed"]
     out += ["", f"{t['overall']['counted']} form(s) counted, {t['overall']['clean']} clean, "
             f"{t['overall']['excluded']} excluded, {pending} not analysed by {t['model']}"]

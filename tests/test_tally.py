@@ -15,6 +15,9 @@ from test_rules import clean_report, nf
 M = "claude-sonnet-5-5"
 
 
+NAT = Config(tally_scope={P: "national"})  # the test election has a made-up type
+
+
 def report(**kw):
     r = copy.deepcopy(clean_report())
     for k, v in kw.items():
@@ -35,7 +38,7 @@ def form(s, no, rep=None, muni="Alpha", model=M, **kw):
 
 
 def tally(s, **kw):
-    return build_tally(s, kw.pop("cfg", Config()), P, M, **kw)
+    return build_tally(s, kw.pop("cfg", NAT), P, M, **kw)
 
 
 def why(t):
@@ -154,7 +157,7 @@ def test_null_municipality_and_station_key():
 def test_list_names_mapping_and_default(tmp_path):
     s = store()
     form(s, 12, clean_report())
-    t = tally(s, cfg=Config(list_names={P: ["Zeta", " "]}))
+    t = tally(s, cfg=Config(tally_scope=NAT.tally_scope, list_names={P: ["Zeta", " "]}))
     assert t["names"] == ["Zeta", "List 2"]
     assert tally(s)["names"] == ["List 1", "List 2"]
     cfg = tmp_path / "c.toml"
@@ -277,14 +280,102 @@ def test_list_names_length_mismatch_only_warns_and_names_the_lists(caplog):
     s = store()
     form(s, 1, clean_report())
     form(s, 2, clean_report())
-    cfg = Config(list_names={P: ["A", "B", "C"]})
+    cfg = Config(tally_scope=NAT.tally_scope, list_names={P: ["A", "B", "C"]})
     t = tally(s, cfg=cfg)
     assert t["nlists"] == 2 and t["excluded"] == [] and t["overall"]["clean"] == 2  # forms decide
     assert t["names"] == ["A", "B"]  # extra names ignored
     assert t["names_note"] == "list_names has 3 names, forms have 2 lists - check config"
     tally(s, cfg=cfg)
     assert caplog.text.count("check config") == 1  # once per change
-    t = tally(s, cfg=Config(list_names={P: ["A"]}))
+    t = tally(s, cfg=Config(tally_scope=NAT.tally_scope, list_names={P: ["A"]}))
     assert t["names"] == ["A", "List 2"] and "has 1 names" in t["names_note"]
     assert "warning: list_names has 1" in format_tally(t)
     assert 'id="heronames"' in (STATIC / "index.html").read_text(encoding="utf-8")
+
+
+def muni_cfg(**kw):
+    return Config(tally_scope={P: "municipal"}, **kw)
+
+
+def two_ballots(s):
+    form(s, 1, clean_report(), muni="Alpha")
+    form(s, 2, clean_report(), muni="Alpha")
+    r3 = report(list_votes=[{"row": 1, "field": nf(100)}, {"row": 2, "field": nf(280)}, {"row": 3, "field": nf(400)}])
+    form(s, 3, r3, muni="Beta")
+
+
+def test_municipal_scope_per_municipality_lists_and_overall_without_lists():
+    s = store()
+    two_ballots(s)
+    cfg = muni_cfg(list_names={P: {"Beta": ["X", "Y", "Z"]}})
+    t = tally(s, cfg=cfg)
+    assert t["scope"] == "municipal" and t["scope_note"] is None and t["nlists"] == 0
+    a, b = t["munis"]
+    assert (a["nlists"], b["nlists"]) == (2, 3)
+    assert a["names"] == ["List 1", "List 2"] and b["names"] == ["X", "Y", "Z"]
+    assert b["all"]["lists"] == [100, 280, 400] and b["all"]["lists_valid"]
+    assert len(a["all"]["lists"]) == 2 and a["names_note"] is None
+    for k in ("all", "cl"):
+        assert "lists" not in t["overall"][k] and "lists_valid" not in t["overall"][k]
+    assert t["overall"]["counted"] == 3 and t["excluded"] == []  # row sets are per municipality
+
+
+def test_municipal_row_set_is_modal_per_municipality():
+    s = store()
+    two_ballots(s)
+    form(s, 4, clean_report(), muni="Beta")
+    form(s, 5, report(list_votes=[{"row": 1, "field": nf(100)}, {"row": 2, "field": nf(280)}, {"row": 3, "field": nf(400)}]), muni="Beta")
+    t = tally(s, cfg=muni_cfg())
+    assert {m["m"]: m["nlists"] for m in t["munis"]} == {"Alpha": 2, "Beta": 3}
+    assert [e["no"] for e in t["excluded"]] == ["4"]
+    assert t["excluded"][0]["why"][0] == "list rows differ (got 2, expected 3)"
+
+
+def test_municipal_names_match_latin_cyrillic_and_note_wrong_shape():
+    s = store()
+    form(s, 1, clean_report(), muni="Нови Сад")
+    t = tally(s, cfg=muni_cfg(list_names={P: {"Novi Sad": ["A", "B"]}}))
+    assert t["munis"][0]["names"] == ["A", "B"] and t["munis"][0]["names_note"] is None
+    t = tally(s, cfg=muni_cfg(list_names={P: {"Novi Sad": ["A"]}}))
+    assert "has 1 names" in t["munis"][0]["names_note"]
+    t = tally(s, cfg=muni_cfg(list_names={P: ["A", "B"]}))
+    assert t["munis"][0]["names"] == ["List 1", "List 2"] and "municipal election" in t["munis"][0]["names_note"]
+    t = tally(s, cfg=Config(tally_scope=NAT.tally_scope, list_names={P: {"Novi Sad": ["A"]}}))
+    assert t["names"] == ["List 1", "List 2"] and "plain list" in t["names_note"]
+
+
+@pytest.mark.parametrize("etype, scope, note", [("2", "national", None), ("3", "municipal", None),
+                                                ("9", "municipal", "unknown election type - set tally_scope")])
+def test_scope_from_election_type_and_override(etype, scope, note):
+    from rg2watch.models import Election
+    s = store()
+    s.upsert_election(Election(P, "1", etype, "T", BASE))
+    form(s, 1, clean_report())
+    t = build_tally(s, Config(), P, M)
+    assert (t["scope"], t["scope_note"]) == (scope, note)
+    other = "national" if scope == "municipal" else "municipal"
+    t = build_tally(s, Config(tally_scope={P: other}), P, M)
+    assert (t["scope"], t["scope_note"]) == (other, None)
+
+
+def test_no_elections_row_is_unknown_municipal():
+    s = Store(":memory:")
+    form(s, 1, clean_report())  # forms of P, but no elections row (as in the calib DBs)
+    t = build_tally(s, Config(), P, M)
+    assert t["scope"] == "municipal" and t["scope_note"] == "unknown election type - set tally_scope"
+    assert build_tally(s, Config(tally_scope={P: "national"}), P, M)["scope"] == "national"
+
+
+def test_cli_tally_municipal_prints_list_table_per_municipality(tmp_path, capsys):
+    db = tmp_path / "w.sqlite"
+    s = Store(db)
+    s.upsert_election(store().get_election(P))
+    two_ballots(s)
+    s.close()
+    cfg = tmp_path / "c.toml"
+    cfg.write_text(f'tally_scope = {{"{P}" = "municipal"}}\n')
+    assert main(["tally", "--config", str(cfg), "--db", str(db), "--parent", P, "--model", M]) == 0
+    out = capsys.readouterr().out
+    assert "Alpha: votes per list" in out and "Beta: votes per list" in out and "List 3" in out
+    head = out.split("Alpha: votes per list")[0]
+    assert "List 1" not in head
