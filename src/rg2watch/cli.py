@@ -19,6 +19,7 @@ from .evaluate import run_eval
 from .fetch import fetch_pdf
 from .findings import findings_for
 from .models import Doc, Event, Finding
+from .names import MunicipalityError, resolve_municipalities
 from .notify import Notifier
 from .pipeline import PROMPT_VERSION, AnalysisPipeline
 from .render import RenderError, render_tiles
@@ -61,6 +62,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--base-url", help="override the RIK base URL")
     s.add_argument("--once", action="store_true",
                    help="bootstrap, run every lane once (full passes, no page budget), exit")
+    s.add_argument("--only", help="comma-separated municipality names (Cyrillic or Latin): watch "
+                   "only these (config only_municipalities)")
     s.add_argument("--baseline", action="store_true",
                    help="record what is already published silently on each lane's first full pass")
     mode = s.add_mutually_exclusive_group()
@@ -264,6 +267,24 @@ def _cmd_watch(args) -> int:
             print("watch needs a zapisnici URL or --parent", file=sys.stderr)
             return 2
         parent = client.election.parent
+        only = None
+        wanted = args.only.split(",") if args.only else cfg.only_municipalities
+        if wanted:
+            store.upsert_election(client.election)
+            if not store.municipality_ids(parent):
+                try:
+                    store.save_municipalities(parent, client.municipalities())
+                except (RikError, httpx.HTTPError) as exc:
+                    print(f"cannot fetch the municipality list: {exc}", file=sys.stderr)
+                    return 1
+            try:
+                only = resolve_municipalities(store.municipality_ids(parent), wanted)
+            except MunicipalityError as exc:
+                print(exc, file=sys.stderr)
+                for name in exc.candidates:
+                    print(f"  {name}", file=sys.stderr)
+                return 2
+            log.info("watching only %d municipality(ies): %s", len(only), ", ".join(sorted(only)))
         notifier = Notifier(cfg, _notifier_http(), out=sys.stdout)
 
         pipeline = None
@@ -291,7 +312,7 @@ def _cmd_watch(args) -> int:
                                             _cache_dir(cfg), backlog=args.analyze_backlog)
         on_events, deliver = _handlers(store, notifier, parent, pipeline)
         watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once,
-                          on_status=notifier.status, baseline=args.baseline)
+                          on_status=notifier.status, baseline=args.baseline, only=only)
         if pipeline is not None:
             pipeline.start()
 

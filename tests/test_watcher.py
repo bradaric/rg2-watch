@@ -805,3 +805,91 @@ def test_parliament_scale_first_population_uses_full_pass():
     assert [j.filters for j in w._jobs["probe"]] == [Filters(doc_type=6)]
     assert not [f for f in listing_reqs(fake, **{"filters[election_document_type]": "6"})
                 if "filters[municipality]" in f]
+
+
+# --- municipality filter ---------------------------------------------------
+BETA = {"Beta": "102"}
+
+
+def assert_only_beta(fake):
+    reqs = [r for r in fake.request_log if r["path"] == "/get-election"]
+    assert reqs
+    assert {r["form"].get("filters[municipality]") for r in reqs} == {"102"}
+    stations = [r["form"]["municipalityId"] for r in fake.request_log
+                if r["path"].endswith("ajaxSelectMunicipality.php")]
+    assert set(stations) == {"102"}
+
+
+def test_filtered_run_requests_and_records_only_selected_municipality():
+    w, fake, store, t, batches, _ = env(guard=True, watcher_kw={"only": BETA})
+    fake.add_doc("Alpha|3", doc(9, "/extfile/101/3/rg9.pdf"))
+    fake.add_doc("Beta|3", doc(9, "/extfile/102/3/rg9.pdf"))
+    w.run_once()
+    assert_only_beta(fake)
+    assert {(e.doc.municipality, e.doc.doc_type) for e in events(batches)} == {("Beta", 6), ("Beta", 9)}
+    assert len(events(batches)) == 12
+    assert {d.municipality for d in store.known_docs(P, Scope()).values()} == {"Beta"}
+    assert store.get_count(P, "rg2") is None  # no global count
+
+
+def test_filtered_probe_and_missing_find_new_rg2_in_selected_only():
+    w, fake, store, t, batches, _ = env(watcher_kw={"only": BETA})
+    w.run_once()
+    batches.clear()
+    fake.add_doc("Alpha|12", doc(6, "/extfile/101/12/rg2_v1.pdf"))
+    fake.add_doc("Beta|12", doc(6, "/extfile/102/12/rg2_v1.pdf"))
+    t.now += 60
+    fake.request_log.clear()
+    w.run_once()
+    assert [(e.kind, e.doc.station_key) for e in events(batches)] == [("added", "Beta|12")]
+    assert {r["form"].get("filters[municipality]") for r in fake.request_log} == {"102"}
+
+
+def test_filtered_watchlist_skips_entries_outside_set():
+    w, fake, store, t, batches, _ = env(watchlist=["Alpha", "102"], watcher_kw={"only": BETA})
+    w.run_once()
+    assert_only_beta(fake)
+    assert len(events(batches)) == 11
+
+
+def test_filtered_safety_sweep_removal_is_scoped_to_selected_municipality():
+    w, fake, store, t, batches, _ = env(watcher_kw={"only": BETA, "initial_safety": True})
+    w.run_once()
+    batches.clear()
+    fake.remove_doc("Beta|4", 6)
+    fake.hide_from_sweeps("Beta|5")
+    for _ in range(3):
+        t.now += 400
+        w.run_once()
+    ev = [(e.kind, e.doc.station_key) for e in events(batches)]
+    assert ev == [("removed", "Beta|4")]
+    assert_only_beta(fake)
+
+
+def test_filtered_sweep_does_not_remove_docs_of_other_municipalities():
+    w, fake, store, t, batches, _ = env(watcher_kw={"initial_safety": True})
+    w.run_once()  # unfiltered: everything stored
+    assert len(store.known_docs(P, Scope(doc_type=6))) == 33
+    w2 = Watcher(w.client, store, w.cfg, batches.append, clock=t.clock, sleep=t.sleep,
+                 initial_safety=True, only=BETA)
+    batches.clear()
+    fake.request_log.clear()
+    for _ in range(3):
+        t.now += 400
+        w2.run_once()
+    assert events(batches) == []
+    assert len(store.known_docs(P, Scope(doc_type=6))) == 33
+    assert {r["form"].get("filters[municipality]") for r in fake.request_log
+            if r["path"] == "/get-election"} == {"102"}
+
+
+def test_filtered_replacement_in_selected_municipality_is_detected():
+    w, fake, store, t, batches, _ = env(watcher_kw={"only": BETA})
+    w.run_once()
+    batches.clear()
+    fake.replace_doc("Beta|2", 6, "/extfile/102/2/rg2_v2.pdf")
+    fake.replace_doc("Alpha|2", 6, "/extfile/101/2/rg2_v2.pdf")
+    for _ in range(3):
+        t.now += 400
+        w.run_once()
+    assert [(e.kind, e.doc.station_key) for e in events(batches)] == [("replaced", "Beta|2")]

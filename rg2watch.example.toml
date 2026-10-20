@@ -31,6 +31,8 @@ missing_max_per_tick = 10
 probe_cost_guard = true
 # Municipalities/stations to flag with priority
 watchlist = []
+# Watch only these municipalities (Cyrillic or Latin names, substring match; `watch --only` wins); [] = all
+only_municipalities = []
 # ntfy server and topic (topic can also come from env RG2W_NTFY_TOPIC, which wins)
 ntfy_url = "https://ntfy.sh"
 # ntfy_topic = "my-topic"

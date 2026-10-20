@@ -22,6 +22,7 @@ class Config:
     missing_max_per_tick: int = 10
     probe_cost_guard: bool = True
     watchlist: list[str] = field(default_factory=list)
+    only_municipalities: list[str] = field(default_factory=list)
     ntfy_url: str = "https://ntfy.sh"
     ntfy_topic: str | None = None
     medium_digest_s: int = 600

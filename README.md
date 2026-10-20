@@ -38,6 +38,11 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
    Starting mid-night on an empty DB? Add `--baseline`: each lane's first full pass records what is
    already published without alerting, prints one `[baseline] <type>: N document(s) recorded` line
    per document type, and later changes alert normally.
+   Only care about some places? `--only "Beograd,Нови Сад"` (or `only_municipalities` in the config;
+   Cyrillic or Latin, case-insensitive, exact name beats substring) limits every lane to those
+   municipalities: no global listings are requested, other documents are not recorded, and an
+   unknown or ambiguous name exits 2 with the candidates. Per-municipality counts replace the global
+   ones, so a larger set costs more requests per round.
 4. Alerts are leads for manual review, not conclusions: open the PDF link and check it yourself.
 
 ## Visual analysis of RG-2 forms

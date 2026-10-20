@@ -40,6 +40,7 @@ class _Job:
     max_page: int | None = None
     ok: bool = True
     docs: list[Doc] = field(default_factory=list)
+    extra: tuple = (None, None)  # rare jobs: (municipality name, id) under a municipality filter
     touched: set = field(default_factory=set)  # keys changed by other lanes since the job began
 
 
@@ -52,6 +53,10 @@ class _Round:
     ok: bool = True
 
 
+def _count_key(key: int | tuple[int, str]) -> str:
+    return f"type:{key}" if isinstance(key, int) else f"type:{key[0]}:m:{key[1]}"
+
+
 def _type_name(d: Doc) -> str:
     return DOC_TYPES.get(d.doc_type, d.label) if d.doc_type is not None else d.label
 
@@ -60,11 +65,13 @@ class Watcher:
     def __init__(self, client: RikClient, store: Store, cfg: Config,
                  on_events: Callable[[list[Event]], None], clock=time.monotonic, sleep=time.sleep,
                  initial_safety: bool = False, on_status: Callable[[str], None] | None = None,
-                 baseline: bool = False):
+                 baseline: bool = False, only: dict[str, str] | None = None):
         self.client, self.store, self.cfg = client, store, cfg
         self.on_events, self.clock, self.sleep = on_events, clock, sleep
         self.on_status = on_status
         self.parent = client.election.parent
+        self._only_ids = set(only.values()) if only is not None else None
+        self._only = dict(only) if only is not None else None  # name -> id; None = every municipality
         self._bootstrapped = False
         self._abort = False
         self._stats: dict[str, int] = {}
@@ -84,6 +91,7 @@ class Watcher:
         self._last: dict[str, float] = {}
         self._jobs: dict[str, list[_Job]] = {"rare": [], "watchlist": [], "probe": []}
         self._safety_job: _Job | None = None
+        self._safety_rest: list[_Job] = []  # filtered mode: municipalities still to sweep
         self._round: _Round | None = None
         self._recheck: dict[str, dict] = {}  # station key -> {doc key: removal candidate}
         self._rare_resweep_at = self._started
@@ -97,7 +105,10 @@ class Watcher:
         self.store.upsert_election(self.client.election)
         if refresh or not self.store.municipality_ids(self.parent):
             self.store.save_municipalities(self.parent, self.client.municipalities())
-        for mid in self.store.municipality_ids(self.parent).values():
+        names = self.store.municipality_ids(self.parent)
+        if self._only_ids is not None:
+            self._only = {n: i for n, i in names.items() if i in self._only_ids}
+        for mid in (self._only or names).values():
             if not self.store.station_ids(self.parent, mid):
                 options = self.client.stations(mid)  # station id -> station no
                 self.store.save_stations(self.parent, mid, {no: sid for sid, no in options.items()})
@@ -276,6 +287,8 @@ class Watcher:
         direct per-station re-check. Returns the docs kept for this scope."""
         if doc_type is not None:
             docs = [d for d in docs if d.doc_type == doc_type]
+        if self._only is not None:
+            docs = [d for d in docs if d.municipality in self._only]
         known_names = self.store.municipality_ids(self.parent)
         for name in {d.municipality for d in docs} - set(known_names):
             self._unknown_names.add(name)
@@ -364,35 +377,41 @@ class Watcher:
         """Count checks are not charged to the budget: they always run every rare_interval_s."""
         resweep = now - self._rare_resweep_at >= self.cfg.rare_resweep_interval_s
         jobs = self._jobs["rare"]
-        for t in RARE_TYPES:
+        targets = [(t, None, None) for t in RARE_TYPES] if self._only is None else [
+            (t, name, mid) for t in RARE_TYPES for name, mid in self._only.items()]
+        for t, name, mid in targets:
             if self._abort:
                 return
             try:
-                n, _ = self._count(Filters(doc_type=t), charge=False)
+                n, _ = self._count(Filters(doc_type=t, municipality_id=mid), charge=False)
             except RikUnavailable:
                 raise
             except Exception:
                 log.exception("rare lane: type %d count failed", t)
                 continue
-            key, stored = f"type:{t}", self.store.get_count(self.parent, f"type:{t}")
-            queued = next((j for j in jobs if j.key == t), None)
+            key = t if mid is None else (t, mid)
+            stored = self.store.get_count(self.parent, _count_key(key))
+            queued = next((j for j in jobs if j.key == key), None)
             if queued is not None:
                 if queued.next_page == 1:
                     queued.total = n
                 elif n != queued.total:
                     queued.stale_total = n  # may be on a page already passed: re-run when done
             elif (n != stored or (resweep and n > 0)) and not (n == 0 and stored is None):
-                jobs.append(self._rare_job(t, n, count_changed=n != stored))
+                jobs.append(self._rare_job(t, n, n != stored, name, mid))
             else:
-                self.store.set_count(self.parent, key, n)
+                self.store.set_count(self.parent, _count_key(key), n)
         self._sort_rare()
         if resweep:  # every non-empty rare type re-swept: catches count-neutral replacements
             self._rare_resweep_at = now
         self._progress["rare"] = True
 
-    def _rare_job(self, t: int, n: int, count_changed: bool) -> _Job:
-        return _Job(Filters(doc_type=t), Scope(doc_type=t), True, t, on_done=self._rare_done,
-                    total=n, key=t, prio=(not count_changed, t not in URGENT_RARE))
+    def _rare_job(self, t: int, n: int, count_changed: bool, name: str | None = None,
+                  mid: str | None = None) -> _Job:
+        key = t if mid is None else (t, mid)
+        return _Job(Filters(doc_type=t, municipality_id=mid), Scope(doc_type=t, municipality=name),
+                    True, t, on_done=self._rare_done, total=n, key=key,
+                    prio=(not count_changed, t not in URGENT_RARE), extra=(name, mid))
 
     def _sort_rare(self) -> None:
         # Started job first, then count changes before re-sweeps, RG-8/RG-9 family first.
@@ -400,10 +419,10 @@ class Watcher:
 
     def _rare_done(self, job: _Job) -> None:
         if job.stale_total is not None:
-            self._jobs["rare"].append(self._rare_job(job.key, job.stale_total, count_changed=True))
+            self._jobs["rare"].append(self._rare_job(job.doc_type, job.stale_total, True, *job.extra))
             self._sort_rare()
         elif job.ok:
-            self.store.set_count(self.parent, f"type:{job.key}", job.total)
+            self.store.set_count(self.parent, _count_key(job.key), job.total)
 
     def _rechecks(self, sweep_id: int) -> None:
         """Confirm removal candidates with a direct per-station query (charged to the budget)."""
@@ -448,6 +467,8 @@ class Watcher:
                 if name is None:
                     log.warning("watchlist entry %r matches no municipality", entry)
                     continue
+                if self._only is not None and mid not in self._only.values():
+                    continue  # outside the --only set
                 jobs.append(_Job(Filters(municipality_id=mid), Scope(municipality=name), True, None))
         self._run_jobs(sweep_id, jobs)
 
@@ -477,6 +498,11 @@ class Watcher:
                 if not self._due("probe", self.cfg.probe_interval_s, now) or self._budget < 2:
                     return
                 self._last["probe"] = now
+                if self._only is not None:
+                    # No global listing: count each selected municipality every round.
+                    self._progress["probe"] = True
+                    self._round = _Round(0, list(self._only.items()))
+                    continue
                 total, max_page = self._count(full)
                 self._progress["probe"] = True
                 if total == self.store.get_count(self.parent, "rg2"):
@@ -510,6 +536,10 @@ class Watcher:
                 else:
                     self.store.set_count(self.parent, key, n)
                 continue
+            if self._only is not None:  # per-municipality counts are stored as they are checked
+                self._round = None
+                self._last["probe"] = self.clock()
+                return
             total_after, _ = self._count(full)
             self._round = None
             self._last["probe"] = self.clock()  # next round no sooner than probe_interval_s from now
@@ -570,7 +600,7 @@ class Watcher:
         self._last["missing"] = self.clock()
         have = {k[0] for k in self.store.known_docs(self.parent, Scope(doc_type=6))}
         missing = []
-        for name, mid in self.store.municipality_ids(self.parent).items():
+        for name, mid in (self._only or self.store.municipality_ids(self.parent)).items():
             for no, sid in self.store.station_ids(self.parent, mid).items():
                 if f"{name}|{no}" not in have:
                     missing.append((f"{name}|{no}", mid, sid))
@@ -605,9 +635,18 @@ class Watcher:
     def _safety(self, sweep_id: int) -> None:
         if self._safety_job is None:
             self._safety_started = self.clock()
-            self._safety_job = _Job(Filters(doc_type=6), Scope(doc_type=6), True, 6)
-        if not self._advance(sweep_id, self._safety_job):
-            return
-        self._finish(sweep_id, self._safety_job)
+            if self._only is None:
+                self._safety_job = _Job(Filters(doc_type=6), Scope(doc_type=6), True, 6)
+            else:  # one sweep per selected municipality, diffed within that municipality only
+                jobs = [_Job(Filters(doc_type=6, municipality_id=mid), Scope(doc_type=6, municipality=name),
+                             True, 6) for name, mid in self._only.items()]
+                self._safety_job, self._safety_rest = jobs[0], jobs[1:]
+        while True:
+            if not self._advance(sweep_id, self._safety_job):
+                return
+            self._finish(sweep_id, self._safety_job)
+            if not self._safety_rest:
+                break
+            self._safety_job = self._safety_rest.pop(0)
         self._safety_job = None
         self._progress["safety"] = True
