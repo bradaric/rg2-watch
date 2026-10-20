@@ -69,7 +69,7 @@ def test_final_status_says_stopped_and_digest_flushed(rehearsal, monkeypatch):
 def test_stuck_on_spend_cap_exits_1(rehearsal, monkeypatch, capsys):
     argv, db = rehearsal
     monkeypatch.setattr(cli, "_analysis_client", lambda cfg: (object(), None))
-    monkeypatch.setattr(cli, "STUCK_AFTER_S", 0.5)
+    monkeypatch.setattr(cli, "STUCK_AFTER_S", 2.5)
     cfg = db.parent / "rg2watch.toml"
     cfg.write_text(cfg.read_text() + "max_spend_usd = 0.0\nstop_wait_s = 2\n")
     assert main([*argv, "--until-done", "--analyze"]) == 1
@@ -112,7 +112,7 @@ def queue_env(n=2):
     store.upsert_election(Election(P, "1", "3", "T", "http://x"))
     docs = [Doc("M", str(i), "S", "l", 6, f"http://x/{i}.pdf", "2026-10-19T20:00") for i in range(n)]
     store.apply_events(P, store.start_sweep(P, "t"), [Event("added", d) for d in docs])
-    watcher = SimpleNamespace(first_pass_done=True)
+    watcher = SimpleNamespace(first_pass_left=[], client=SimpleNamespace(last_ok=1.0))
     pipeline = SimpleNamespace(status_snapshot=lambda: {"paused": None})
     clock = Clock()
     return store, docs, watcher, pipeline, clock
@@ -158,10 +158,10 @@ def test_retry_and_running_count_as_unfinished():
 
 def test_waits_for_watcher_first_pass():
     store, docs, watcher, pipe, clock = queue_env(0)
-    watcher.first_pass_done = False
+    watcher.first_pass_left = ["safety"]
     d = _UntilDone(watcher, pipe, store, P, None, clock=clock, confirm=0)
     assert d.step() is None
-    watcher.first_pass_done = True
+    watcher.first_pass_left = []
     assert d.step() == 0
 
 
@@ -177,6 +177,55 @@ def test_stuck_reports_pause_reason_and_progress_resets_timer():
     assert d.step() is None
     clock.now += 2
     assert d.step() == 1 and d.remaining == 1 and "spend cap reached" in d.why
+
+
+def test_idle_start_then_forms_arrive_is_not_stuck():
+    store, docs, watcher, pipe, clock = queue_env(0)
+    d = _UntilDone(watcher, pipe, store, P, None, clock=clock, stuck_after=600, confirm=10_000)
+    watcher.first_pass_left = ["probe"]  # watcher still working, queue empty for > stuck_after
+    for _ in range(3):
+        assert d.step() is None
+        clock.now += 300
+        watcher.client.last_ok += 1
+    late = Doc("M", "9", "S", "l", 6, "http://x/9.pdf", "2026-10-19T20:00")
+    store.apply_events(P, store.start_sweep(P, "t"), [Event("added", late)])
+    assert d.step() is None and d.remaining == 1
+    clock.now += 100
+    store.mark_analysis(late.url, "done")
+    assert d.step() is None and d.remaining == 0
+
+
+def test_stuck_queue_exits_1_even_after_idle_start():
+    store, docs, watcher, pipe, clock = queue_env(0)
+    d = _UntilDone(watcher, pipe, store, P, None, clock=clock, stuck_after=600, confirm=10_000)
+    clock.now += 700
+    assert d.step() is None
+    late = Doc("M", "9", "S", "l", 6, "http://x/9.pdf", "2026-10-19T20:00")
+    store.apply_events(P, store.start_sweep(P, "t"), [Event("added", late)])
+    assert d.step() is None
+    clock.now += 601
+    assert d.step() == 1
+
+
+def test_first_pass_never_completing_exits_1_and_names_lanes():
+    store, docs, watcher, pipe, clock = queue_env(0)
+    watcher.first_pass_left = ["probe", "safety"]
+    d = _UntilDone(watcher, pipe, store, P, None, clock=clock, stuck_after=600)
+    assert d.step() is None
+    clock.now += 599
+    watcher.first_pass_left = ["safety"]  # a lane finished: timer restarts
+    assert d.step() is None
+    clock.now += 599
+    assert d.step() is None
+    clock.now += 2
+    assert d.step() == 1 and "first pass incomplete: lanes safety" in d.why
+
+
+def test_until_done_analyze_without_client_exits_2(rehearsal, monkeypatch, capsys):
+    argv, db = rehearsal
+    monkeypatch.setattr(cli, "_analysis_client", lambda cfg: (None, "no key"))
+    assert main([*argv, "--until-done", "--analyze"]) == 2
+    assert "--until-done needs analysis: no key" in capsys.readouterr().err
 
 
 def test_municipality_filter_ignores_other_municipalities():

@@ -361,6 +361,16 @@ class Store:
                 f"(analysis_status='new' OR (analysis_status='failed' AND analysis_next_at IS NOT "
                 f"NULL)))){where}", (parent, MAX_ANALYSIS_ATTEMPTS, *extra)).fetchone()[0]
 
+    def finished_analysis(self, parent: str, municipalities: Collection[str] | None = None) -> int:
+        """Active RG-2 forms of `parent` in a terminal state: done, or failed with no retry pending."""
+        where, extra = _in_municipalities(municipalities)
+        with self._lock:
+            return self._db.execute(
+                f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
+                f"({_ANALYSED}) AND (analysis_status='done' OR (analysis_status='failed' AND NOT "
+                f"(analysis_attempts < ? AND analysis_next_at IS NOT NULL))){where}",
+                (parent, MAX_ANALYSIS_ATTEMPTS, *extra)).fetchone()[0]
+
     def run_summary(self, parent: str, municipalities: Collection[str] | None = None) -> dict:
         """End-of-run counts: documents by type, RG-2 analysis outcomes, findings by severity."""
         where, extra = _in_municipalities(municipalities)

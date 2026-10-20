@@ -484,7 +484,8 @@ DONE_CONFIRM_S = 3  # --until-done: the done condition must hold this long (two 
 
 
 class _UntilDone:
-    """`watch --until-done`: step() returns None while running, 0 when done, 1 when analysis is stuck."""
+    """`watch --until-done`: step() returns None while running, 0 when done, 1 when the watcher's
+    first pass or the analysis is stuck (`why` says which)."""
 
     def __init__(self, watcher: Watcher, pipeline, store: Store, parent: str, only, clock=time.monotonic,
                  stuck_after: float = STUCK_AFTER_S, confirm: float = DONE_CONFIRM_S):
@@ -493,21 +494,35 @@ class _UntilDone:
         self.remaining = 0
         self.why = ""
         self._ok_since: float | None = None
-        self._best = None  # lowest queue size seen so far
-        self._best_at = clock()
+        self._progress: int | None = None  # forms in a terminal state, when last seen changing
+        self._progress_at = clock()
+        self._lanes: list[str] | None = None  # first-pass lanes left / last RIK success, when last changed
+        self._ok_at = None
+        self._lanes_at = clock()
 
     def step(self) -> int | None:
         self.remaining = (0 if self.pipeline is None
                           else self.store.unfinished_analysis(self.parent, self.only))
         now = self.clock()
-        if self._best is None or self.remaining < self._best:
-            self._best, self._best_at = self.remaining, now
-        if self.watcher.first_pass_done and not self.remaining:
+        if self.remaining == 0:
+            self._progress = None
+        else:
+            terminal = self.store.finished_analysis(self.parent, self.only)
+            if terminal != self._progress:
+                self._progress, self._progress_at = terminal, now
+        left, ok = self.watcher.first_pass_left, self.watcher.client.last_ok
+        if (left, ok) != (self._lanes, self._ok_at):
+            self._lanes, self._ok_at, self._lanes_at = left, ok, now
+        if not left and not self.remaining:
             if self._ok_since is None:
                 self._ok_since = now
             return 0 if now - self._ok_since >= self.confirm else None
         self._ok_since = None
-        if self.remaining and now - self._best_at >= self.stuck_after:
+        if left and now - self._lanes_at >= self.stuck_after:
+            self.why = (f"watcher first pass incomplete: lanes {', '.join(left)} "
+                        "(RIK blocked or unreachable?)")
+            return 1
+        if self.remaining and now - self._progress_at >= self.stuck_after:
             paused = self.pipeline.status_snapshot()["paused"]
             self.why = (f"analysis paused: {paused[0]}" if paused else
                         "no form analysed (Anthropic overloaded or PDF downloads failing; see the log)")
@@ -516,11 +531,11 @@ class _UntilDone:
 
 
 def _print_summary(store: Store, db_path, parent: str, only, started: float, done: _UntilDone,
-                   code: int, notifier: Notifier) -> None:
+                   code: int) -> None:
     sm = store.run_summary(parent, only)
     elapsed = int(time.monotonic() - started)
     sev = sm["findings"]
-    print(f"\n[until-done] {'finished' if code == 0 else 'STOPPED, analysis stuck'} "
+    print(f"\n[until-done] {'finished' if code == 0 else 'STOPPED, stuck'} "
           f"after {elapsed // 60} min {elapsed % 60:02d} s")
     print("documents seen: " + (", ".join(f"{k} {v}" for k, v in sm["docs"].items()) or "none"))
     if done.pipeline is not None:
@@ -528,8 +543,10 @@ def _print_summary(store: Store, db_path, parent: str, only, started: float, don
               f"remaining {done.remaining}")
     print("findings: " + ", ".join(f"{k} {sev.get(k, 0)}" for k in ("HIGH", "MEDIUM", "LOW")))
     print(f"spend for this election: ${store.total_spend(parent):.2f}")
-    if notifier.status_snapshot()["queued"]:
-        print("warning: some pushes were not delivered (ntfy unreachable)")
+    unsent = len(store.unalerted(parent, {"HIGH", "MEDIUM"}))
+    if unsent:
+        print(f"warning: {unsent} HIGH/MEDIUM alert(s) not pushed (ntfy unreachable); they go out "
+              "on the next run")
     if code:
         print(f"{done.why}; {done.remaining} form(s) not analysed. Fix the cause, then `rg2watch "
               f"requeue --parent {parent} --failed` if needed and rerun the same command: the "
@@ -603,6 +620,9 @@ def _cmd_watch(args) -> int:
                      "forms are recorded, not analysed")
         else:
             ai, why = _analysis_client(cfg)
+            if ai is None and args.until_done:
+                print(f"--until-done needs analysis: {why}", file=sys.stderr)
+                return 2
             if ai is None:
                 log.warning("analysis disabled: %s", why)
             else:
@@ -619,7 +639,7 @@ def _cmd_watch(args) -> int:
                           on_status=notifier.status, baseline=args.baseline, only=only)
         stop = threading.Event()
         server, threads = None, []
-        code, finished, started = 0, None, time.monotonic()
+        code, finished, reached, started = 0, None, False, time.monotonic()
         if args.until_done:
             finished = _UntilDone(watcher, pipeline, store, parent, set(only) if only else None,
                                   stuck_after=STUCK_AFTER_S, confirm=DONE_CONFIRM_S)
@@ -659,12 +679,11 @@ def _cmd_watch(args) -> int:
                         log.exception("done check failed; retrying next tick")
                         verdict = None
                     if verdict is not None:
-                        code = verdict
+                        code, reached = verdict, True
                         break
                 time.sleep(1)
         except KeyboardInterrupt:
             log.info("interrupted, shutting down")
-            finished = None
         finally:
             stop.set()
             if server is not None:
@@ -674,20 +693,23 @@ def _cmd_watch(args) -> int:
                 t.join(10)
             if pipeline is not None:
                 pipeline.stop()
-            if finished is not None:  # --until-done: last alerts, last page, then the summary
+            if reached:  # --until-done verdict: last alerts, last page, then the summary
                 try:
-                    deliver(flush=True)
-                    live = {"ntfy": notifier.status_snapshot(), "url": None}
-                    if pipeline is not None:
-                        live["analysis"] = pipeline.status_snapshot()
-                    write_status(store, _browse_path(cfg), parent, live)  # no "watcher": stopped
-                    if cfg.browse_interval_s > 0:
-                        build_page(store, _browse_path(cfg), _cache_dir(cfg), None, cfg,
-                                   cfg.browse_interval_s, False, opinions)
-                except Exception:
-                    log.exception("final delivery or page build failed")
-                _print_summary(store, cfg.db_path, parent, set(only) if only else None, started,
-                               finished, code, notifier)
+                    try:
+                        deliver(flush=True)
+                        live = {"ntfy": notifier.status_snapshot(), "url": None}
+                        if pipeline is not None:
+                            live["analysis"] = pipeline.status_snapshot()
+                        write_status(store, _browse_path(cfg), parent, live)  # no "watcher": stopped
+                        if cfg.browse_interval_s > 0:
+                            build_page(store, _browse_path(cfg), _cache_dir(cfg), None, cfg,
+                                       cfg.browse_interval_s, False, opinions)
+                    except Exception:
+                        log.exception("final delivery or page build failed")
+                    _print_summary(store, cfg.db_path, parent, set(only) if only else None, started,
+                                   finished, code)
+                except KeyboardInterrupt:
+                    print("[until-done] interrupted during shutdown", file=sys.stderr)
         return code
     finally:
         store.close()

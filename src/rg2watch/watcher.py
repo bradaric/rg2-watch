@@ -137,6 +137,11 @@ class Watcher:
         self._check_health()
 
     @property
+    def first_pass_left(self) -> list[str]:
+        """Lanes that have not completed a full pass in this run yet."""
+        return sorted(self._first_pass)
+
+    @property
     def first_pass_done(self) -> bool:
         """Every lane has completed a full pass in this run."""
         return not self._first_pass

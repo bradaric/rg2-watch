@@ -46,7 +46,8 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
    delivers the pending alerts (flushing the MEDIUM digest), writes the final page and status, stops
    the pipeline and prints a summary (documents by type, RG-2 analysed/failed/skipped, findings by
    severity, spend, elapsed time). If analysis makes no progress for 10 minutes (spend cap, key
-   error, PDF downloads blocked, Anthropic overloaded) it exits with code 1, saying why and how many
+   error, PDF downloads blocked, Anthropic overloaded, forms only waiting for a retry), or a lane
+   cannot finish its first pass for 10 minutes (RIK blocked or down) it exits with code 1, saying why and how many
    forms remain. Without the flag nothing changes: the loop runs until Ctrl-C.
 
    HIGH findings (RG-8/RG-9 published, RG-2 replaced, with the old URL as "was: ...") are pushed
