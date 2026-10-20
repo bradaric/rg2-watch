@@ -1,4 +1,5 @@
 """Background analysis of newly published RG-2 forms: fetch -> render -> analyze -> rules."""
+import dataclasses
 import logging
 import threading
 import time
@@ -96,6 +97,7 @@ class AnalysisPipeline:
         self._overload_alerted = False
         self._pause_reason = ""
         self._cap_since: float | None = None
+        self._spent = 0.0  # last total_spend seen by a worker (the status panel reads this)
         self._durations: deque[float] = deque(maxlen=50)  # seconds per form that reached the API
 
     # control ----------------------------------------------------------------
@@ -150,15 +152,14 @@ class AnalysisPipeline:
                 self._wake.clear()
 
     def status_snapshot(self) -> dict:
-        """In-memory state for the status panel (no I/O). `paused` is [why, since] or None."""
-        paused = None
-        if self._paused:
-            paused = [self._pause_reason, self._paused_since]
-        elif self._cap_since is not None and self.store.total_spend(self.parent) >= self.cfg.max_spend_usd:
-            paused = ["spend cap reached", self._cap_since]
-        elif self._rik_paused():
+        """In-memory state for the status panel (no DB access). `paused` is [why, since] or None."""
+        with self._state:
+            paused = [self._pause_reason, self._paused_since] if self._paused else None
+            if paused is None and self._cap_since is not None and self._spent >= self.cfg.max_spend_usd:
+                paused = ["spend cap reached", self._cap_since]
+            d = list(self._durations)
+        if paused is None and self._rik_paused():
             paused = ["RIK blocked, downloads paused", None]
-        d = list(self._durations)
         return {"model": self.cfg.model, "workers": max(1, self.cfg.analysis_workers),
                 "paused": paused, "avg_s": round(sum(d) / len(d), 1) if d else None,
                 "cap": self.cfg.max_spend_usd}
@@ -192,7 +193,7 @@ class AnalysisPipeline:
                 or self.clock() < self._download_paused_until)
 
     def _over_cap(self) -> bool:
-        spent = self.store.total_spend(self.parent)
+        spent = self._spent = self.store.total_spend(self.parent)
         if spent < self.cfg.max_spend_usd:
             return False
         with self._state:
@@ -218,7 +219,8 @@ class AnalysisPipeline:
         try:
             out = self._run(doc, probe)
             if out == "api":
-                self._durations.append(time.monotonic() - t0)
+                with self._state:
+                    self._durations.append(time.monotonic() - t0)
             return out
         except Exception as exc:  # a store write failed (e.g. closed at shutdown) or a bug
             if not self._stop.is_set():
@@ -290,7 +292,11 @@ class AnalysisPipeline:
             return "api" if isinstance(exc, (AnalysisError, anthropic.APIStatusError)) else None
         self._api_ok()
         try:  # first write after a billed call: never lose its cost
-            self.store.save_analysis(doc.url, result, PROMPT_VERSION)
+            # keyed by the requested model (cache lookups hit); the responding one stays in the report
+            self.store.save_analysis(
+                doc.url, dataclasses.replace(result, model=stored_model(self.cfg.model),
+                                             report={**result.report, "responding_model": result.model}),
+                PROMPT_VERSION)
         except Exception:
             log.error("analysis of %s cost $%.3f but could not be recorded", doc.url, result.cost_usd)
             raise
@@ -405,7 +411,7 @@ class AnalysisPipeline:
         if not cost:
             return
         try:
-            self.store.save_failed_analysis(doc.url, self.cfg.model, PROMPT_VERSION, cost,
+            self.store.save_failed_analysis(doc.url, stored_model(self.cfg.model), PROMPT_VERSION, cost,
                                             _short(exc))
         except Exception:
             log.error("billed failure of %s ($%.3f) could not be recorded", doc.url, cost)

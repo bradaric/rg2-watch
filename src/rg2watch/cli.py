@@ -2,6 +2,7 @@ import argparse
 import dataclasses
 import json
 import logging
+import math
 import signal
 import sys
 import threading
@@ -45,6 +46,16 @@ def _positive_int(text: str) -> int:
     return n
 
 
+def _port(text: str) -> int:
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a port number: {text}") from None
+    if not 0 <= n <= 65535:
+        raise argparse.ArgumentTypeError(f"port must be 0-65535: {text}")
+    return n
+
+
 def _parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", type=Path, help="path to rg2watch.toml")
@@ -68,7 +79,7 @@ def _parser() -> argparse.ArgumentParser:
                    "only these (config only_municipalities)")
     s.add_argument("--baseline", action="store_true",
                    help="record what is already published silently on each lane's first full pass")
-    s.add_argument("--serve-port", type=int, help="port of the local web server (config serve_port, "
+    s.add_argument("--serve-port", type=_port, help="port of the local web server (config serve_port, "
                    "default 8770; 0 = off)")
     mode = s.add_mutually_exclusive_group()
     mode.add_argument("--analyze", action="store_true",
@@ -123,7 +134,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--out", type=Path, help="HTML path (default: index.html next to the DB)")
 
     s = sub.add_parser("serve", parents=[common], help="serve the browse page on 127.0.0.1 (no watching)")
-    s.add_argument("--port", type=int, help="port (config serve_port, default 8770)")
+    s.add_argument("--port", type=_port, help="port (config serve_port, default 8770)")
 
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
@@ -234,7 +245,7 @@ def _live(watcher: Watcher, pipeline, notifier: Notifier, url: str | None):
     return live
 
 
-def _background(name: str, stop: threading.Event, period: float, fn, first=None) -> None:
+def _background(name: str, stop: threading.Event, period: float, fn, first=None) -> threading.Thread:
     """Run fn every `period` s in a daemon thread; failures are logged and swallowed, so the watch
     loop never waits for (or is hurt by) page building."""
     def run() -> None:
@@ -250,16 +261,22 @@ def _background(name: str, stop: threading.Event, period: float, fn, first=None)
                 log.exception("%s update failed", name)
             stop.wait(period)
 
-    threading.Thread(target=run, name=name, daemon=True).start()
+    t = threading.Thread(target=run, name=name, daemon=True)
+    t.start()
+    return t
 
 
 def _cmd_serve(args) -> int:
     cfg = _config(args)
     port = cfg.serve_port if args.port is None else args.port
+    if port == 0:
+        print("serve needs a port (--port or serve_port > 0)", file=sys.stderr)
+        return 2
     out = _browse_path(cfg)
+    copy_static(out.parent)
     store = _open_store(cfg)
     try:
-        if not (out.parent / "index.html").is_file():
+        if not (out.parent / "data.json").is_file():
             build_page(store, out, _cache_dir(cfg), cfg=cfg)
     finally:
         store.close()
@@ -394,23 +411,25 @@ def _cmd_watch(args) -> int:
         on_events, deliver = _handlers(store, notifier, parent, pipeline)
         watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once,
                           on_status=notifier.status, baseline=args.baseline, only=only)
-        if pipeline is not None:
-            pipeline.start()
-
         stop = threading.Event()
-        server = None
-        if not args.once:  # `--once` is a diff check: no page build, no server
-            port = cfg.serve_port if args.serve_port is None else args.serve_port
-            if port:
-                server = start_server(_browse_path(cfg).parent, _cache_dir(cfg), port)
-            url = f"http://127.0.0.1:{server.server_port}" if server else None
-            live = _live(watcher, pipeline, notifier, url)
-            _background("status", stop, STATUS_EVERY_S, lambda: write_status(
-                store, _browse_path(cfg), parent, live()), first=lambda: copy_static(_browse_path(cfg).parent))
-            if cfg.browse_interval_s > 0:
-                _background("browse", stop, cfg.browse_interval_s, lambda: build_page(
-                    store, _browse_path(cfg), _cache_dir(cfg), None, cfg, live(), cfg.browse_interval_s, parent))
-        try:
+        server, threads = None, []
+        try:  # everything after pipeline.start() is inside the try: the pipeline cannot leak
+            if pipeline is not None:
+                pipeline.start()
+            if not args.once:  # `--once` is a diff check: no page build, no server
+                port = cfg.serve_port if args.serve_port is None else args.serve_port
+                if port:
+                    server = start_server(_browse_path(cfg).parent, _cache_dir(cfg), port)
+                url = f"http://127.0.0.1:{server.server_port}" if server else None
+                live = _live(watcher, pipeline, notifier, url)
+                threads.append(_background("status", stop, STATUS_EVERY_S, lambda: write_status(
+                    store, _browse_path(cfg), parent, live()),
+                    first=lambda: copy_static(_browse_path(cfg).parent)))
+                if cfg.browse_interval_s > 0:
+                    opinions: dict = {}  # evaluated second opinions, kept between builds
+                    threads.append(_background("browse", stop, cfg.browse_interval_s, lambda: build_page(
+                        store, _browse_path(cfg), _cache_dir(cfg), None, cfg, cfg.browse_interval_s,
+                        False, opinions)))
             while True:
                 try:
                     watcher.run_once()
@@ -430,6 +449,8 @@ def _cmd_watch(args) -> int:
             if server is not None:
                 server.shutdown()
                 server.server_close()
+            for t in threads:  # a build in flight must finish before the store is closed
+                t.join(10)
             if pipeline is not None:
                 pipeline.stop()
         return 0
@@ -473,9 +494,12 @@ def _cmd_analyze_batch(args, cfg: Config) -> int:
         if is_ollama(cfg.model):
             print("local model, no API cost")
         elif todo:
-            line, _ = describe_estimate(todo, _cache_dir(cfg), cfg)
+            line, usd = describe_estimate(todo, _cache_dir(cfg), cfg)
             print(line)
             print(f"the batch stops at ${max_usd:.2f} (--max-usd, default max_spend_usd)")
+            if usd > max_usd:
+                print(f"warning: the estimate ${usd:.2f} exceeds ${max_usd:.2f}: the batch will "
+                      "stop before every form is analysed")
             if not args.yes:
                 print("not calling the API without --yes")
                 return 0
@@ -489,7 +513,10 @@ def _cmd_analyze_batch(args, cfg: Config) -> int:
         store.close()
     print(f"{res['analysed']} analysed, {res['cached']} cached, {res['failed']} failed, "
           f"${res['cost_usd']:.3f} spent")
-    return 1 if res["stopped"] or res["failed"] else 0
+    if res["unrecorded"]:
+        print(f"warning: {res['unrecorded']} analysis result(s) could not be recorded (spend "
+              "missing from the totals; see the log)", file=sys.stderr)
+    return 1 if res["stopped"] or res["failed"] or res["unrecorded"] else 0
 
 
 def _cmd_analyze(args) -> int:
@@ -501,6 +528,9 @@ def _cmd_analyze(args) -> int:
         return 2
     if not args.parent and not args.source:
         print("analyze needs a source (PDF path or URL) or --parent for batch mode", file=sys.stderr)
+        return 2
+    if args.max_usd is not None and not (math.isfinite(args.max_usd) and args.max_usd > 0):
+        print("--max-usd must be a positive number", file=sys.stderr)
         return 2
     if args.parent:
         return _cmd_analyze_batch(args, cfg)

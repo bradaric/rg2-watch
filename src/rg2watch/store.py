@@ -14,8 +14,15 @@ if TYPE_CHECKING:
 
 ANALYSED_TYPES = (6, 10, 15, 16)  # RG-2 and repeat-vote RG-2
 MAX_ANALYSIS_ATTEMPTS = 3
+BROWSE_CHUNK = 2000
 STATUS_RARE = (7, 8, 9, 14, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)  # RG-7/8/9 families, Primedba
 _ANALYSED = ",".join(map(str, ANALYSED_TYPES))
+
+INDEXES = """
+CREATE INDEX IF NOT EXISTS analyses_doc ON analyses(document_id, model);
+CREATE INDEX IF NOT EXISTS analyses_parent_cost ON analyses(parent, cost_usd);
+CREATE INDEX IF NOT EXISTS events_parent_kind ON events(parent, kind);
+"""  # after the migrations: older DBs lack some of these columns until then
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS elections(
@@ -107,6 +114,7 @@ class Store:
                 # documents recorded before analysis existed are never analysed implicitly
                 # (`requeue --skipped` or `watch --analyze-backlog` opts them in)
                 self._db.execute("UPDATE documents SET analysis_status='skipped'")
+        self._db.executescript(INDEXES)
 
     def close(self) -> None:
         with self._lock:
@@ -441,29 +449,58 @@ class Store:
         return json.loads(row["result_json"]) if row else None
 
     def browse_rows(self, parent: str | None = None) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
-        """(RG-2 documents, their findings), oldest first; optionally of one election."""
+        """(RG-2 documents, their findings), oldest first; optionally of one election. Read in
+        chunks so the store lock is never held for one giant fetch."""
         where, args = f"doc_type IN ({_ANALYSED})", ()
         if parent is not None:
             where, args = where + " AND parent=?", (parent,)
-        with self._lock:
-            docs = self._db.execute(f"SELECT * FROM documents WHERE {where} ORDER BY id",
-                                    args).fetchall()
-            found = self._db.execute(
-                "SELECT document_id, rule, severity, summary FROM findings WHERE document_id IN "
-                f"(SELECT id FROM documents WHERE {where}) ORDER BY id", args).fetchall()
+        docs: list[sqlite3.Row] = []
+        found: list[sqlite3.Row] = []
+        for table, out, extra in (
+                ("documents", docs, ""),
+                ("findings", found, f"document_id IN (SELECT id FROM documents WHERE {where}) AND ")):
+            cols = "*" if table == "documents" else "id, document_id, rule, severity, summary"
+            sql_where = (where + " AND " if table == "documents" else extra)
+            last = 0
+            while True:
+                with self._lock:
+                    rows = self._db.execute(
+                        f"SELECT {cols} FROM {table} WHERE {sql_where}id > ? ORDER BY id LIMIT ?",
+                        (*args, last, BROWSE_CHUNK)).fetchall()
+                out.extend(rows)
+                if len(rows) < BROWSE_CHUNK:
+                    break
+                last = rows[-1]["id"]
         return docs, found
 
-    def browse_analyses(self, parent: str | None = None) -> list[sqlite3.Row]:
-        """Stored successful analyses (any model, any parent they were recorded under, incl. adhoc
-        second opinions) of RG-2 documents, oldest first."""
-        where, args = f"d.doc_type IN ({_ANALYSED})", ()
+    def browse_analyses(self, parent: str | None = None,
+                        prompt_version: str | None = None) -> list[sqlite3.Row]:
+        """Newest successful analysis of each (RG-2 document, model), without the report (see
+        `analysis_reports`): any parent it was recorded under, incl. adhoc second opinions. The
+        current `prompt_version` wins over older ones when a model has both."""
+        where, args = f"d.doc_type IN ({_ANALYSED})", []
         if parent is not None:
-            where, args = where + " AND d.parent=?", (parent,)
+            where, args = where + " AND d.parent=?", [parent]
         with self._lock:
             return self._db.execute(
-                "SELECT a.id, a.document_id, a.model, a.prompt_version, a.result_json, a.created_at "
+                "SELECT a.id, a.document_id, a.model, a.prompt_version, a.created_at "
                 f"FROM analyses a JOIN documents d ON d.id=a.document_id WHERE {where} "
-                "AND a.status='done' AND a.result_json IS NOT NULL ORDER BY a.id", args).fetchall()
+                "AND a.status='done' AND a.result_json IS NOT NULL AND a.id=(SELECT b.id FROM analyses b "
+                "WHERE b.document_id=a.document_id AND b.model IS a.model AND b.status='done' "
+                "AND b.result_json IS NOT NULL ORDER BY b.prompt_version IS ? DESC, b.id DESC LIMIT 1) "
+                "ORDER BY a.id", (*args, prompt_version)).fetchall()
+
+    def analysis_reports(self, ids: list[int]) -> dict[int, str]:
+        """result_json by analysis id, fetched in small chunks."""
+        out: dict[int, str] = {}
+        for i in range(0, len(ids), 50):
+            chunk = ids[i:i + 50]
+            with self._lock:
+                rows = self._db.execute(
+                    f"SELECT id, result_json FROM analyses WHERE id IN ({','.join('?' * len(chunk))})",
+                    chunk).fetchall()
+            out.update((r["id"], r["result_json"]) for r in rows)
+        return out
 
     def latest_document_parent(self) -> str | None:
         with self._lock:

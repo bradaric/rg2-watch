@@ -99,9 +99,3 @@ parliamentary one.
 | Sonnet 5.5 | ~$0.06 (measured) | ~$15-30 | ~$530 | yes (4 workers in parallel) |
 | Opus 5.5 | ~$0.13 (5-form pilot) | ~$30-60 | ~$1,100 | yes |
 | Local (Qwen) | $0, ~78 s | 5-10 h | ~1 week | local elections only |
-
-## 6. Not supported yet
-
-- Restricting the watch or the analysis to some municipalities (`watchlist` only puts them first).
-- Re-analysing a batch (e.g. all of one municipality, or every form with a given alert) with
-  another model in one command; today it is one `analyze` per form.

@@ -1121,3 +1121,25 @@ def test_notifier_status_snapshot_tracks_delivery():
     s = n.status_snapshot()
     assert s["enabled"] and s["failing"] and s["last_fail"] and s["last_ok"] is None and s["queued"] == 1
     assert Notifier(Config(), None, out=io.StringIO()).status_snapshot()["enabled"] is False
+
+
+def test_analysis_stored_under_requested_model_with_responding_in_report(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    e.publish(doc())
+    assert e.drain() == 1
+    model, blob = e.store._db.execute("SELECT model, result_json FROM analyses").fetchone()
+    assert model == e.cfg.model and "responding_model" in json.loads(blob)
+    assert e.store.latest_report(doc().url, e.cfg.model, PROMPT_VERSION) is not None
+
+
+def test_status_snapshot_does_no_db_access(tmp_path):
+    e = Env(tmp_path, resp(clean_report(), tin=1_000_000, tout=0), max_spend_usd=3.0)
+    e.publish(doc("a.pdf", no="1"))
+    e.drain()
+    e.pipe.process_next()
+
+    def boom(*a):
+        raise AssertionError("db access")
+
+    e.store.total_spend = boom
+    assert e.pipe.status_snapshot()["paused"][0] == "spend cap reached"

@@ -210,3 +210,27 @@ def test_retry_wait_capped(run, monkeypatch):
     ai = FakeAnthropic(api_error(anthropic.InternalServerError, 529))
     code, cap = run(ai, "--yes")
     assert code == 1 and ai.calls == 2 and "still busy" in cap.err
+
+
+def test_max_usd_must_be_positive_and_finite(run):
+    ai = FakeAnthropic(resp(clean_report()))
+    for bad in ("0", "-1", "nan", "inf"):
+        code, cap = run(ai, "--yes", "--max-usd", bad)
+        assert code == 2 and "positive" in cap.err
+    assert ai.calls == 0
+
+
+def test_gate_warns_when_estimate_exceeds_max_usd(run):
+    ai = FakeAnthropic(resp(clean_report()))
+    code, cap = run(ai, "--max-usd", "0.001")
+    assert code == 0 and "exceeds $0.00" in cap.out and ai.calls == 0
+
+
+def test_summary_reports_unrecorded(run, monkeypatch):
+    def boom(*a, **k):
+        raise OSError("disk")
+
+    monkeypatch.setattr(Store, "save_analysis", boom)
+    ai = FakeAnthropic(resp(clean_report()))
+    code, cap = run(ai, "--yes", "--limit", "1")
+    assert code == 1 and "1 analysis result(s) could not be recorded" in cap.err

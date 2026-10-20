@@ -18,6 +18,8 @@ def srv(tmp_path_factory):
     (out / "index.html").write_text("<html>page</html>")
     (out / "data.json").write_text('{"rows": []}')
     (out / "status.js").write_text("window.RG2_STATUS = {};")
+    (out / "status.json").write_text("{}")
+    (out / "data.js").write_text("window.RG2_DATA = {};")
     (out / "w.sqlite").write_text("secret")
     (tmp_path / ".env").write_text("KEY=1")
     (cache / (H + ".pdf")).write_bytes(b"%PDF-1.4 body")
@@ -45,9 +47,29 @@ def test_serves_allow_listed_files(srv):
     assert "default-src 'self'" in r.getheader("Content-Security-Policy")
     assert req(srv, "/index.html?t=1")[0] == 200
     assert req(srv, "/data.json")[:2] == (200, "application/json")
-    assert req(srv, "/status.js")[1].startswith("text/javascript")
-    s, ct, body, _ = req(srv, f"/pdfs/{H}.pdf")
+    s, ct, body, r = req(srv, f"/pdfs/{H}.pdf")
     assert (s, ct, body) == (200, "application/pdf", b"%PDF-1.4 body")
+    assert r.getheader("Content-Security-Policy") == "sandbox"
+    csp = req(srv, "/")[3].getheader("Content-Security-Policy")
+    assert all(x in csp for x in ("frame-ancestors 'none'", "base-uri 'none'", "form-action 'none'"))
+
+
+def test_script_variants_are_not_served_over_http(srv):
+    # a cross-origin <script src> could read their globals; the page fetch()es the .json files
+    assert req(srv, "/status.js")[0] == 404 and req(srv, "/data.js")[0] == 404
+
+
+def test_cross_site_requests_refused(srv):
+    for path in ("/", "/data.json", "/status.json", "/jquery.min.js"):
+        c = http.client.HTTPConnection("127.0.0.1", srv.server_port)
+        c.putrequest("GET", path, skip_host=True)
+        c.putheader("Host", f"127.0.0.1:{srv.server_port}")
+        c.putheader("Sec-Fetch-Site", "cross-site")
+        c.endheaders()
+        r = c.getresponse()
+        r.read()
+        assert r.status == 404
+        c.close()
 
 
 def test_head_has_length_and_no_body(srv):
@@ -59,7 +81,7 @@ def test_head_has_length_and_no_body(srv):
     "/w.sqlite", "/../.env", "/%2e%2e/.env", "/..%2f.env", "/pdfs/../w.sqlite", "/pdfs/", "/pdfs",
     "/pdfs/notes.txt", f"/pdfs/{H}.pdf/x", f"/pdfs/{H[:-1]}.pdf", f"/pdfs/{H.upper()}.pdf",
     f"/pdfs/..%2f{H}.pdf", f"/pdfs/%2e%2e/{H}.pdf", "/pdfs/" + "0" * 64 + ".pdf",
-    "/index.html/", "/status.json", "/static/", "/.env", "/%00", "/data.js%00.png", "\\..\\.env"])
+    "/index.html/", "/static/", "/.env", "/%00", "/data.js%00.png", "\\..\\.env"])
 def test_everything_else_is_404(srv, path):
     s, _, body, _ = req(srv, path)
     assert s == 404 and b"secret" not in body and b"KEY" not in body

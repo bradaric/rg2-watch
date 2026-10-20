@@ -50,7 +50,7 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
 `watch` serves the page at `http://127.0.0.1:8770` (the URL is logged at start; `serve_port` in the
 config or `--serve-port`, `0` = off). `rg2watch serve [--port N]` serves the same files without
 watching. The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed allow-list
-(`index.html`, `status.js[on]`, `data.js[on]`, the vendored libraries, `pdfs/<sha256>.pdf`); the DB,
+(`index.html`, `status.json`, `data.json`, the vendored libraries, `pdfs/<sha256>.pdf`; the `.js` twins are not served, and cross-site requests are refused); the DB,
 `.env` and everything else are 404. Port taken: a warning, and the watcher carries on.
 
 - **Forms table** (DataTables + jQuery, vendored in `src/rg2watch/static/`, versions and sha256 in
@@ -59,7 +59,7 @@ watching. The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed 
   has local copy and "models disagree"; the filters survive a refresh (URL hash / saved state). The
   "+" opens older versions and the findings of every stored analysis model (second opinions from
   `analyze --parent`, current rules re-applied, no API); a HIGH that another model lacks is
-  highlighted. Columns "Local PDF" (only when cached under `pdfs/` next to the page) and "RIK" open in
+  highlighted. Station, times and status are merged columns; a "columns" menu shows or hides any column. Columns "Local PDF" (only when cached under `pdfs/` next to the page) and "RIK" open in
   a new tab. Times are Serbian local time, DD/MM/YYYY HH:MM.
 - **Status panel** (top of the page, updates in place, nothing reloads): watcher (running since, last
   tick, last RIK success, RIK health ok/slow/blocked/blind, rate, requests per tick, lanes, municipality

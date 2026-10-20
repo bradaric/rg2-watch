@@ -9,6 +9,8 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from .config import Config
+from .models import Doc
+from .pipeline import PROMPT_VERSION
 from .rules import evaluate_report
 from .status import build_status, to_belgrade
 from .store import Store, _doc
@@ -33,23 +35,33 @@ def _rik_link(url: str, base: str | None) -> str | None:
     return full if urlsplit(full).scheme in ("http", "https") else None
 
 
-def _opinions(store: Store, parent: str | None, cfg: Config) -> dict[int, list[dict]]:
-    """document id -> [{m, at, f}]: findings of the newest stored analysis of each model,
-    from the current rules (pure, no API)."""
-    docs = {d["id"]: _doc(d) for d in store.browse_rows(parent)[0]}
-    newest: dict[tuple, object] = {}
-    for a in store.browse_analyses(parent):
-        newest[(a["document_id"], a["model"])] = a
-    out: dict[int, list[dict]] = {}
-    for (did, model), a in newest.items():
+def _opinions(store: Store, docs: dict[int, Doc], parent: str | None, cfg: Config,
+              cache: dict) -> dict[int, list[dict]]:
+    """document id -> [{m, at, f}]: findings of the newest stored analysis of each model (current
+    prompt version preferred), from the current rules (pure, no API). `cache` keeps the evaluated
+    findings by analysis id across builds (None = could not be evaluated, logged once)."""
+    rows = [a for a in store.browse_analyses(parent, PROMPT_VERSION) if a["document_id"] in docs]
+    live = {a["id"] for a in rows}
+    for gone in set(cache) - live:
+        del cache[gone]
+    todo = [a["id"] for a in rows if a["id"] not in cache]
+    reports = store.analysis_reports(todo)
+    by_id = {a["id"]: a for a in rows}
+    for aid in todo:
+        a = by_id[aid]
         try:
-            found = evaluate_report(json.loads(a["result_json"]), docs[did], cfg)
+            found = evaluate_report(json.loads(reports[aid]), docs[a["document_id"]], cfg)
+            cache[aid] = sorted(([x.rule, x.severity, x.summary] for x in found),
+                                key=lambda x: -SEV_RANK.get(x[1], 0))
         except Exception:
-            log.warning("stored analysis %s of document %s could not be re-evaluated", a["id"], did,
-                        exc_info=True)
-            continue
-        f = sorted(([x.rule, x.severity, x.summary] for x in found), key=lambda x: -SEV_RANK.get(x[1], 0))
-        out.setdefault(did, []).append({"m": model or "?", "at": to_belgrade(a["created_at"]), "f": f})
+            log.warning("stored analysis %s of document %s could not be re-evaluated", aid,
+                        a["document_id"], exc_info=True)
+            cache[aid] = None
+    out: dict[int, list[dict]] = {}
+    for a in rows:
+        if cache[a["id"]] is not None:
+            out.setdefault(a["document_id"], []).append(
+                {"m": a["model"] or "?", "at": to_belgrade(a["created_at"]), "f": cache[a["id"]]})
     for ops in out.values():
         ops.sort(key=lambda o: o["m"])
     return out
@@ -73,13 +85,14 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None) 
 
 
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
-               cfg: Config | None = None, interval: int = 0) -> dict:
+               cfg: Config | None = None, interval: int = 0, cache: dict | None = None) -> dict:
     cache_dir = Path(cache_dir).resolve()
     docs, findings = store.browse_rows(parent)
     found: dict[int, list] = {}
     for f in findings:
         found.setdefault(f["document_id"], []).append(f)
-    opinions = _opinions(store, parent, cfg or Config())
+    opinions = _opinions(store, {d["id"]: _doc(d) for d in docs}, parent, cfg or Config(),
+                         {} if cache is None else cache)
     elections = {e.parent: e for e in store.elections()}
     groups: dict[tuple, list] = {}
     for d in docs:  # a NULL station_key cannot be grouped: the document stands alone
@@ -138,6 +151,7 @@ def _clean(out_dir: Path) -> None:
 
 def copy_static(out_dir: Path) -> None:
     """Copy the page and its vendored libraries next to the data, only when they differ."""
+    out_dir.mkdir(parents=True, exist_ok=True)
     for name in STATIC_FILES:
         src = (STATIC / name).read_bytes()
         dst = out_dir / name
@@ -162,19 +176,25 @@ def write_status(store: Store, out_path: Path, parent: str | None, live: dict | 
 
 
 def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None = None,
-               cfg: Config | None = None, live: dict | None = None, interval: int = 0,
-               status_parent: str | None = None) -> int:
-    """Write index.html (+ vendored libraries), data.js/json and status.js/json next to `out_path`'s
-    directory; returns the number of rows. Without `live` the status says the watcher is not running."""
+               cfg: Config | None = None, interval: int = 0, with_status: bool = True,
+               cache: dict | None = None) -> int:
+    """Write index.html (+ vendored libraries) and data.js/json next to `out_path`'s directory;
+    returns the number of rows. `with_status` also writes status.js/json saying the watcher is not
+    running (`watch` has its own status thread and passes False). `cache` keeps evaluated second
+    opinions between builds."""
     t0 = time.monotonic()
     out_dir = Path(out_path).resolve().parent
     out_dir.mkdir(parents=True, exist_ok=True)
     _clean(out_dir)
-    data = build_data(store, cache_dir, parent, cfg, interval)
+    data = build_data(store, cache_dir, parent, cfg, interval, cache)
+    t1 = time.monotonic()
     copy_static(out_dir)
     if Path(out_path).name != "index.html":
         _atomic(Path(out_path), (STATIC / "index.html").read_bytes())
     _write_pair(out_dir, "data", "RG2_DATA", data)
-    write_status(store, out_path, status_parent or parent, live)
-    log.info("browse page built: %d form(s) in %.1f s", len(data["rows"]), time.monotonic() - t0)
+    if with_status:
+        write_status(store, out_path, parent)
+    log.info("browse page built: %d form(s), %d second opinion(s); data %.2f s, total %.2f s",
+             len(data["rows"]), sum(len(r["ops"]) for r in data["rows"]), t1 - t0,
+             time.monotonic() - t0)
     return len(data["rows"])

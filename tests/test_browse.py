@@ -326,7 +326,7 @@ def _watch(tmp_path, monkeypatch, interval, ticks, extra=(), run_once=lambda sel
 def test_watch_builds_in_background_at_start_and_status_is_written(tmp_path, monkeypatch):
     pages, everything = _watch(tmp_path, monkeypatch, 120, 3)
     assert len(pages) == 1 and ("status",) in everything
-    assert pages[0][3] is None and pages[0][-1] == P  # all elections' rows, status of this watch
+    assert pages[0][3] is None and pages[0][6] is False  # all elections' rows; the status thread owns status
 
 
 def test_watch_browse_off_with_zero(tmp_path, monkeypatch):
@@ -352,8 +352,8 @@ def test_slow_build_does_not_delay_run_once(tmp_path, monkeypatch):
     t0 = time.monotonic()
     try:
         _watch(tmp_path, monkeypatch, 120, 5, run_once=lambda self: ticks.append(time.monotonic()),
-               build=lambda *a: release.wait(10))
-        assert len(ticks) == 5 and time.monotonic() - t0 < 5  # build still blocked
+               build=lambda *a: release.wait(2))
+        assert len(ticks) == 5 and ticks[-1] - t0 < 1.5  # ticks ran while the build was blocked
     finally:
         release.set()
 
@@ -411,3 +411,80 @@ def test_status_without_registered_election_uses_documents_parent(tmp_path):
     build_page(s, tmp_path / "index.html", tmp_path / "pdfs")
     st = json.loads((tmp_path / "status.json").read_text())
     assert st["parent"] == "eval" and st["docs"]["rg2_seen"] == 1
+
+
+def test_opinions_cached_across_builds_and_logged_once(tmp_path, monkeypatch, caplog):
+    import rg2watch.browse as br
+    s = store()
+    d = doc(BASE + "/e/a.pdf", no="12")
+    add(s, d)
+    _analysis(s, d, "ok", clean_report())
+    _analysis(s, d, "weird", {"nonsense": 1})
+    calls = []
+    real = br.evaluate_report
+    monkeypatch.setattr(br, "evaluate_report", lambda *a: calls.append(1) or real(*a))
+    cache = {}
+    out = tmp_path / "index.html"
+    for _ in range(3):
+        build_page(s, out, tmp_path / "pdfs", cache=cache)
+    assert len(calls) == 2  # one evaluation per analysis, not per build
+    assert caplog.text.count("could not be re-evaluated") == 1
+    assert [o["m"] for o in rows_of(out)[0]["ops"]] == ["ok"]
+
+
+def test_current_prompt_version_preferred_per_model(tmp_path):
+    s = store()
+    d = doc(BASE + "/e/a.pdf", no="12")
+    add(s, d)
+    s.save_analysis(d.url, AnalysisResult(_report(ballots_in_box=nf(900)), 0, 0, 0.0, "m", "stop"), "v6")
+    s.save_analysis(d.url, AnalysisResult(clean_report(), 0, 0, 0.0, "m", "stop"), "v5")  # newer, old prompt
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs")
+    (o,) = rows_of(out)[0]["ops"]
+    assert any(f[1] == "HIGH" for f in o["f"])
+    assert len(s.analysis_reports([1, 2])) == 2
+
+
+def test_browse_rows_are_chunked(monkeypatch):
+    import rg2watch.store as st
+    monkeypatch.setattr(st, "BROWSE_CHUNK", 2)
+    s = store()
+    for i in range(5):
+        d = doc(BASE + f"/e/{i}.pdf", no=str(i))
+        add(s, d)
+        s.add_finding(P, Finding("X1", "LOW", d, "s"), d.url)
+    docs, found = s.browse_rows(P)
+    assert [d["station_no"] for d in docs] == ["0", "1", "2", "3", "4"] and len(found) == 5
+
+
+def test_watch_style_build_writes_no_status(tmp_path):
+    s = store()
+    add(s, doc(BASE + "/e/a.pdf"))
+    build_page(s, tmp_path / "index.html", tmp_path / "pdfs", with_status=False)
+    assert (tmp_path / "data.json").exists() and not (tmp_path / "status.json").exists()
+
+
+def test_ports_validated_and_serve_needs_one(tmp_path, capsys):
+    import pytest
+    for argv in (["serve", "--port", "70000"], ["watch", "--serve-port", "-1"], ["serve", "--port", "x"]):
+        with pytest.raises(SystemExit) as e:
+            main(argv)
+        assert e.value.code == 2
+    assert main(["serve", "--db", str(tmp_path / "w.sqlite"), "--port", "0"]) == 2
+
+
+def test_serve_always_copies_static(tmp_path, monkeypatch):
+    db = tmp_path / "w.sqlite"
+    s = Store(db)
+    add_el = s.upsert_election(Election(P, "1", "t", "T", BASE))
+    s.close()
+    (tmp_path / "index.html").write_text("old")
+    (tmp_path / "data.json").write_text("{}")
+    monkeypatch.setattr(cli, "start_server", lambda *a: None)
+    assert main(["serve", "--db", str(db), "--port", "8123"]) == 1
+    assert (tmp_path / "index.html").read_bytes() == (STATIC / "index.html").read_bytes()
+
+
+def test_page_filters_include_versions_and_models():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "only in" in html and 'r.sev = r._sev' in html and "hashchange" in html

@@ -9,23 +9,28 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 log = logging.getLogger("rg2watch.server")
-FILES = {  # the only names served from the page directory
-    "index.html": "text/html; charset=utf-8", "status.js": "text/javascript; charset=utf-8",
-    "status.json": "application/json", "data.js": "text/javascript; charset=utf-8",
+# The only names served from the page directory. status.js/data.js are deliberately absent: a
+# cross-origin <script src> could read their globals; over http the page fetch()es the .json files.
+FILES = {
+    "index.html": "text/html; charset=utf-8", "status.json": "application/json",
     "data.json": "application/json", "jquery.min.js": "text/javascript; charset=utf-8",
     "dataTables.min.js": "text/javascript; charset=utf-8",
     "dataTables.dataTables.min.css": "text/css; charset=utf-8"}
 PDF = re.compile(r"/pdfs/([0-9a-f]{64})\.pdf")
-CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'"
+CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+       "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "rg2watch"
+    timeout = 30  # socket timeout: an idle or stalled client cannot hold a thread forever
 
     def _target(self) -> tuple[Path, str] | None:
         host = (self.headers.get("Host") or "").lower()
         if host not in (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"):
             return None  # DNS rebinding
+        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+            return None
         path = unquote(urlsplit(self.path).path)
         if path == "/":
             path = "/index.html"
@@ -59,6 +64,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("X-Content-Type-Options", "nosniff")
             if t[1].startswith("text/html"):
                 self.send_header("Content-Security-Policy", CSP)
+            elif t[1] == "application/pdf":
+                self.send_header("Content-Security-Policy", "sandbox")
             self.end_headers()
             if body:
                 shutil.copyfileobj(f, self.wfile)
