@@ -282,7 +282,7 @@ def test_hero_markup_labelled_and_safe():
     for text in ("Општина", "Обухваћени записници", "Приказ бројева", "Режим презентације",
                  "Излаз (Esc)", "Излазност", "Обрађена бирачка места", "Записници", "Важећи гласови"):
         assert text in html
-    assert "изабраних записника" in html and "допринело је збировима гласова" in html
+    assert "изабраних записника допринело је збировима гласова" in html
     assert "Неусаглашена разлика излазности" in html
     assert "прихватљиво само са исправкама" in html and "прихватљиво само како је предато" in html
 
@@ -299,8 +299,12 @@ def test_hero_warning_translates_every_current_tally_warning_and_preserves_unkno
         "list_names has {len(conf)} names, forms have {nrows} lists - check config",
     ]
     assert all(message in source for message in warnings)
-    helper = html[html.index("function heroWarning"):html.index("function initHero")]
-    script = 'const assert = require("assert");\n' + helper + r'''
+    start = html.index("function heroWarning")
+    end = html.index("function initHero", start)
+    helper = html[start:end]
+    script = r'''
+const assert = require("assert");
+''' + helper + r'''
 const cases = [
   ["unknown election type - set tally_scope", "Непозната врста избора — подесите tally_scope"],
   ["municipality unknown - forms may be from different ballots, no list totals", "Општина није позната — записници могу бити са различитих гласачких листића, без збирова по листама"],
@@ -664,7 +668,10 @@ assert(els.herofoot.children[0].includes("opaque-model-v1"));
 assert(els.herotitle.textContent.includes("Избори Ћирилица"));
 assert.equal(slots[0].nm.textContent, "Листа А");
 assert.equal(slots[1].nm.textContent, "Листа 2");
-els.tmode.value = "cl"; renderHero(); assert(els["hs-forms"].textContent.includes("чистих")); els.tmode.value = "all";
+els.tmode.value = "cl";
+renderHero();
+assert(els["hs-forms"].textContent.includes("чистих"));
+els.tmode.value = "all";
 let gapCol = resultCols("all").find(x => x.t === "Unreconciled turnout gap (signed)");
 assert.equal(gapCol.f(gapCol.v(vrow(r))), "0");
 r.all.voted = r.cl.voted = 101;
@@ -698,7 +705,7 @@ els.tview.value = "diff";
 r = row([60, 40], [55, 45]);
 setData(r);
 renderHero();
-assert(els["hs-valid"].textContent.includes("изабраних записника у оба приказа допринело"));
+assert(els["hs-valid"].textContent.includes("изабраних записника допринело је збировима гласова у оба приказа"));
 assert(slots[0].val.textContent.includes("п. п."));
 const diffCols = resultCols("all");
 const selected = diffCols.find(x => x.t === "Selected in both views");
@@ -745,6 +752,7 @@ assert.equal(slots[0].nm.textContent, "List 1");
 heroMuni = ""; heroPicked = true;
 renderHero();
 assert(els.herotitle.textContent.startsWith("Све општине"));
+
 T.scope_note = "future <opaque> warning";
 renderHero();
 assert(els.heronames.textContent.includes("future <opaque> warning"));

@@ -1150,7 +1150,7 @@ function renderHero() {
   else if (dg) {
     const p = raw.pair[mode], neither = p.pair_not_contributing - p.corrected_only_vote_forms - p.filed_only_vote_forms;
     put("hs-valid", "Разлика пријављених неважећих: " + dnum(t.invalid) + ". " +
-      p.pair_vote_forms + " од " + p.pair_selected + " изабраних записника у оба приказа допринело је збировима гласова; " +
+      p.pair_vote_forms + " од " + p.pair_selected + " изабраних записника допринело је збировима гласова у оба приказа; " +
       p.pair_not_contributing + " није упарено (" + p.corrected_only_vote_forms + " прихватљиво само са исправкама, " +
       p.filed_only_vote_forms + " прихватљиво само како је предато, " + neither + " ни у једном). Разлика задржаних читљивих важећих гласова: " +
       dnum(t.withheld_valid) + ". Разлика неусаглашене разлике излазности: " + dnum(gap) + "." +
