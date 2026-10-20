@@ -270,6 +270,7 @@ def test_status_for_browse_says_watcher_not_running_with_db_counts(tmp_path):
     assert st["docs"]["rg2_seen"] == 1 and st["docs"]["new10"] == 1 and st["docs"]["rare"] == {"RG-9": 1}
     assert st["analysis"]["on"] is False and st["analysis"]["queued"] == 1
     assert st["alerts"][0][1:3] == ["HIGH", "X9"]
+    assert st["alerts"][0][7].startswith(BASE)  # document URL: the panel links to the form
     assert (tmp_path / "status.js").read_text().startswith("window.RG2_STATUS = {")
 
 
@@ -561,3 +562,8 @@ def test_status_prints_page_url_only_while_running(tmp_path):
 def test_page_banner_on_status_data_db_mismatch():
     html = (STATIC / "index.html").read_text()
     assert "status and data are from different databases" in html and "D.db !== S.db" in html
+
+
+def test_alert_links_are_built_from_url_in_status_and_data():
+    html = (STATIC / "index.html").read_text()
+    assert "alertForm(x[7])" in html and 'link("PDF", loc)' in html and "showForm(r.id" in html

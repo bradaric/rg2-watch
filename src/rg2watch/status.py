@@ -44,7 +44,7 @@ def build_status(store: Store, parent: str, live: dict | None = None) -> dict:
             "spend": spend, "cap": a["cap"] if a else None, "avg_s": avg,
             "eta_s": round(queued * avg / a["workers"]) if a and avg and queued else None},
         "alerts": [[to_belgrade(r["created_at"]), r["severity"], r["rule"], r["municipality"] or "",
-                    r["station_no"] or "", r["summary"], r["alerted_at"] is not None]
+                    r["station_no"] or "", r["summary"], r["alerted_at"] is not None, r["url"]]
                    for r in store.recent_findings(parent, 20)],
         "ntfy": live.get("ntfy"),
     }

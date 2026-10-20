@@ -46,6 +46,8 @@ h3{font-size:11.5px;font-weight:700;margin:0 0 var(--s2);text-transform:uppercas
 .card td:first-child{white-space:nowrap;font-variant-numeric:tabular-nums}
 .card td:nth-child(3){font-weight:650;white-space:nowrap}
 .card td:nth-child(4){white-space:nowrap}
+.card td.lk{white-space:nowrap;text-align:right}
+.card td.lk a,.card td.lk .chip{font-size:11px;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:9px;background:none;color:inherit;text-decoration:none;cursor:pointer;font-weight:400;line-height:1.5;min-height:0;box-shadow:none}
 .bad{color:var(--hi);font-weight:700}.warn{color:var(--md);font-weight:700}.good{color:var(--good);font-weight:600}
 /* severity badges: fill style differs (solid dark / solid light / outline) and the word is always shown */
 .b{display:inline-block;min-width:5.6em;padding:1px 6px;border:1.5px solid transparent;border-radius:4px;font-size:10.5px;line-height:15px;font-weight:800;letter-spacing:.06em;text-align:center;margin-right:var(--s2);vertical-align:1px;white-space:nowrap}
@@ -366,6 +368,11 @@ function setTitle() {
   document.title = (down ? "⏸ " : "") + (todo ? "[" + todo + "] " : "") + label + id + " | rg2-watch";
   $("ele").textContent = title === el ? el : shortTitle(title) + " · " + el;
 }
+function alertForm(url) {  // [row, version] of the form an alert is about (from the data), or null
+  if (!url) return null;
+  for (const r of D.rows) for (const v of [r, ...r.v]) if (v.u === url) return [r, v];
+  return null;
+}
 function renderStatus() {
   setTitle();
   const box = $("status"), ban = $("banner");
@@ -415,6 +422,14 @@ function renderStatus() {
     rc.append(ruleEl(x[2]));
     sv.append(mk("span", x[1], "b " + (SEV.includes(x[1]) ? x[1] : "")));
     tr.append(mk("td", when(x[0]), "mut"), sv, rc, mk("td", x[3] + (x[4] ? " BM " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
+    const hit = alertForm(x[7]), lk = mk("td", null, "lk");
+    if (hit) {
+      const [r, v] = hit, loc = localHref(v.pdf), rik = rikHref(v.rik);
+      if (loc) lk.append(link("PDF", loc));
+      if (rik) lk.append(link("RIK", rik));
+      const b = mk("button", "show", "chip"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); lk.append(b);
+    }
+    tr.append(lk);
     t.append(tr);
   }
   al.append(t);
