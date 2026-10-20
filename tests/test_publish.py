@@ -409,6 +409,132 @@ async function tick() { await new Promise(resolve => setImmediate(resolve)); }
     subprocess.run(["node", "-e", script], check=True)
 
 
+def test_case_ui_executes_all_operator_states_and_preserves_serbian_content():
+    html = Path("src/rg2watch/static/index.html").read_text(encoding="utf-8")
+    source = html[html.index("function copyButton"):html.index("function rowOf")]
+    script = r'''
+class El {
+  constructor(tag) { this.tag = tag; this.children = []; this.hidden = false; this.disabled = false;
+    this.textContent = ""; this.value = ""; this.checked = false; this.className = "";
+    this.attrs = {}; this.readOnly = false; }
+  append(...xs) { this.children.push(...xs); }
+  prepend(...xs) { this.children.unshift(...xs); }
+  replaceChildren(...xs) { this.children = xs; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  querySelector(sel) { if (sel === ".rvmsg") return find(this, x => x.className === "rvmsg"); }
+}
+function find(root, pred) { if (root instanceof El && pred(root)) return root;
+  for (const child of root.children || []) { const got = child instanceof El && find(child, pred); if (got) return got; }
+  return null; }
+function findText(root, text) { return find(root, x => x.textContent === text); }
+function allText(root) { if (!(root instanceof El)) return String(root || "");
+  return root.textContent + root.children.map(allText).join(""); }
+function check(ok, message) { if (!ok) throw new Error(message); }
+const document = {createElement: tag => new El(tag)};
+const clipboard = [];
+const navigator = {clipboard: {writeText: text => { clipboard.push(text); return Promise.resolve(); }}};
+let HTTP = true;
+function mk(tag, text, cls) { const e = new El(tag); if (text != null) e.textContent = text; e.className = cls || ""; return e; }
+function link(text, href) { const e = mk("a", text); e.href = href; return e; }
+function rvOf(v) { return v.rv || {v: "escalate"}; }
+const publications = new Map(), jobs = new Map();
+let prepareId = "prepare", publishId = "publish";
+function caseFetch(path) {
+  if (path.startsWith("case/publication")) {
+    const url = decodeURIComponent(path.split("url=")[1]);
+    return Promise.resolve(publications.get(url) || {status: "none"});
+  }
+  if (path === "case/prepare") return Promise.resolve({job_id: prepareId});
+  if (path === "case/publish") return Promise.resolve({job_id: publishId});
+  const id = path.split("/").pop(), values = jobs.get(id), value = Array.isArray(values) ? values.shift() : values;
+  return Promise.resolve(value);
+}
+function setTimeout(fn) { fn(); }
+''' + source + r'''
+async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); }
+(async () => {
+  HTTP = false;
+  let box = caseBox({u: "offline", pdf: "hash"});
+  check(allText(box).includes("only through the local rg2watch server"), "local-server guidance");
+  HTTP = true;
+
+  publications.set("missing", {status: "none"});
+  box = caseBox({u: "missing", pdf: ""}); await flush();
+  check(allText(box).includes("No locally cached PDF is available"), "missing-PDF guidance");
+
+  publications.set("ai", {status: "none"});
+  jobs.set("prepare-ai", {state: "done", result: {summary: "Српски јавни опис", warning: true}});
+  prepareId = "prepare-ai";
+  box = caseBox({u: "ai", pdf: "hash"}); await flush();
+  findText(box, "Prepare draft").onclick(); await flush();
+  check(allText(box).includes("AI draft failed; use the manual template."), "AI fallback");
+  const aiArea = find(box, x => x.tag === "textarea");
+  check(aiArea.value === "Српски јавни опис", "Serbian prepared summary unchanged");
+  check(aiArea.attrs["aria-label"] === "public case summary in Serbian Cyrillic", "textarea label");
+
+  publications.set("running", {status: "none"});
+  jobs.set("prepare-running", [{state: "running"},
+    {state: "done", result: {summary: "Текст после чекања"}}]);
+  prepareId = "prepare-running";
+  box = caseBox({u: "running", pdf: "hash"}); await flush();
+  const runningPrep = findText(box, "Prepare draft"); runningPrep.onclick();
+  check(runningPrep.disabled && allText(box).includes("Preparing..."), "running job status");
+  await flush();
+  check(!runningPrep.disabled && find(box, x => x.tag === "textarea").value === "Текст после чекања",
+    "running job completion");
+
+  publications.set("pending", {status: "uploaded", summary: "Замрзнути опис", retryable: true});
+  box = caseBox({u: "pending", pdf: "hash"}); await flush();
+  const pendingArea = find(box, x => x.tag === "textarea");
+  check(pendingArea.value === "Замрзнути опис" && pendingArea.readOnly, "frozen summary unchanged");
+  check(findText(box, "Retry frozen publication") && allText(box).includes("frozen publication is pending"),
+    "pending retry UI");
+
+  publications.set("published", {status: "published", url: "https://drive.test/case",
+    viber_text: "Могућа неправилност - Вибер порука"});
+  box = caseBox({u: "published", pdf: "hash"}); await flush();
+  check(allText(box).includes("Case published"), "published success");
+  check(allText(box).includes("Могућа неправилност - Вибер порука"), "Serbian Viber unchanged");
+  const copy = findText(box, "Copy"); copy.onclick(); await flush();
+  check(copy.textContent === "Copied" && clipboard[0] === "https://drive.test/case", "copy feedback");
+
+  publications.set("success", {status: "none"});
+  jobs.set("prepare-success", {state: "done", result: {summary: "Одобрени опис"}});
+  jobs.set("publish-success", {state: "done", result: {status: "published",
+    url: "https://drive.test/new", viber_text: "Вибер успех"}});
+  prepareId = "prepare-success"; publishId = "publish-success";
+  box = caseBox({u: "success", pdf: "hash"}); await flush();
+  findText(box, "Prepare draft").onclick(); await flush();
+  const confirm = find(box, x => x.tag === "input");
+  const publish = findText(box, "Publish public case"); confirm.checked = true; publish.onclick(); await flush();
+  check(allText(box).includes("Case published") && allText(box).includes("Вибер успех"), "publish success");
+
+  publications.set("errors", {status: "none"});
+  jobs.set("prepare-error", {state: "error", error: "preparation unavailable"});
+  prepareId = "prepare-error";
+  box = caseBox({u: "errors", pdf: "hash"}); await flush();
+  const prep = findText(box, "Prepare draft"); prep.onclick(); await flush();
+  check(!prep.disabled && allText(box).includes("Preparation error: preparation unavailable"),
+    "prepare error and re-enable");
+
+  jobs.set("prepare-for-publish-error", {state: "done", result: {summary: "Опис"}});
+  jobs.set("publish-error", {state: "error",
+    error: "Drive file ID preallocation did not complete; retry safely"});
+  prepareId = "prepare-for-publish-error"; publishId = "publish-error";
+  box = caseBox({u: "errors", pdf: "hash"}); await flush();
+  findText(box, "Prepare draft").onclick(); await flush();
+  const failedPublish = findText(box, "Publish public case");
+  find(box, x => x.tag === "input").checked = true; failedPublish.onclick(); await flush();
+  check(!failedPublish.disabled && allText(box).includes(
+    "Publication error: Drive file ID preallocation did not complete; retry safely"),
+    "publish error and re-enable");
+  check(!allText(box).includes("secret-token-value") && !allText(box).includes("provider debug"),
+    "raw provider details absent from UI");
+})().catch(e => { console.error(e); process.exit(2); });
+'''
+    subprocess.run(["node", "-e", script], check=True)
+
+
 def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_path):
     _, cases, _ = handoff(tmp_path)
     jobs = PublicationJobs(cases, None, workers=1)
