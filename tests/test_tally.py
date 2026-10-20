@@ -253,8 +253,7 @@ def test_malformed_row_set_is_excluded_and_never_widens_the_table():
     t = tally(s)
     assert t["nlists"] == 2 and why(t)["3"][0] == "list rows differ (got 5, expected 2)"
     assert t["overall"]["all"]["lists"] == [800, 760]  # the odd form's lists are not mixed in
-    t = tally(s, cfg=Config(list_names={P: ["A", "B", "C"]}))  # configured names win
-    assert t["nlists"] == 3 and len(t["excluded"]) == 3
+    assert t["names_note"] is None
 
 
 def test_tally_municipalities_for_cli_names():
@@ -270,3 +269,22 @@ def test_page_rebuild_csv_and_filter_details():
     assert tally(store())["overall"]["m"] == "(all)"
     assert "other filters cleared" in html and "replace(/[^\\w.-]+/g" in html
     assert "draw(false)" in html and "tkey" in html
+
+
+def test_list_names_length_mismatch_only_warns_and_names_the_lists(caplog):
+    import rg2watch.tally as tl
+    tl._warned.clear()
+    s = store()
+    form(s, 1, clean_report())
+    form(s, 2, clean_report())
+    cfg = Config(list_names={P: ["A", "B", "C"]})
+    t = tally(s, cfg=cfg)
+    assert t["nlists"] == 2 and t["excluded"] == [] and t["overall"]["clean"] == 2  # forms decide
+    assert t["names"] == ["A", "B"]  # extra names ignored
+    assert t["names_note"] == "list_names has 3 names, forms have 2 lists - check config"
+    tally(s, cfg=cfg)
+    assert caplog.text.count("check config") == 1  # once per change
+    t = tally(s, cfg=Config(list_names={P: ["A"]}))
+    assert t["names"] == ["A", "List 2"] and "has 1 names" in t["names_note"]
+    assert "warning: list_names has 1" in format_tally(t)
+    assert 'id="heronames"' in (STATIC / "index.html").read_text(encoding="utf-8")

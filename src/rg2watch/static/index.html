@@ -119,6 +119,7 @@ td.disagree{color:var(--hi);font-weight:600}
 <div class="tile"><div class="k">Forms</div><div class="v" id="hv-forms">-</div><div class="s">clean / excluded</div></div>
 <div class="tile"><div class="k">Valid votes</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"></div></div>
 </div>
+<div id="heronames" class="warnbox" hidden></div>
 <div id="heronote"></div>
 <div id="herochart"></div>
 <div id="herofoot"></div>
@@ -512,6 +513,8 @@ function renderHero() {
     ($("tmode").value === "cl" ? "Clean forms only. " : "All counted forms. ") +
     "As of " + epoch(Date.parse(D.built) / 1000).slice(-5) + " (Serbian time)." : "UNOFFICIAL - no results yet.";
   foot.replaceChildren(label, ...(stale ? [mk("span", " Watcher not running: numbers may be out of date.", "stale")] : []));
+  $("heronames").hidden = !(T && T.names_note);
+  if (T && T.names_note) $("heronames").textContent = T.names_note;
   if (!T) { $("herotitle").textContent = ""; $("heronote").textContent = "No analysed forms yet."; for (const s of slots) s.row.hidden = true; return; }
   const r = (heroMuni && T.munis.find(m => m.m === heroMuni)) || T.overall, t = r[$("tmode").value], none = !r.counted;
   const cover = r.stations ? r.counted / r.stations : null;

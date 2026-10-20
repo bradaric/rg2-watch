@@ -102,16 +102,17 @@ def _tot(acc: dict) -> dict:
             "turnout": acc["voted"] / acc["registered"] if acc["registered"] else None}
 
 
-def expected_rows(cfg: Config, parent: str, exs: list[dict]) -> list[int]:
-    """The list rows every form should have: len(list_names) when configured, else the most common
-    row set (ties: the larger). A stray extra row on one form never widens the table."""
-    if cfg.list_names.get(parent):
-        return list(range(1, len(cfg.list_names[parent]) + 1))
+def expected_rows(exs: list[dict]) -> list[int]:
+    """The list rows every form should have: the most common row set (ties: the larger). A stray
+    extra row on one form never widens the table; list_names only supplies names."""
     common = Counter(tuple(sorted(e["l"])) for e in exs).most_common()
     if not common:
         return []
     top = max(n for _, n in common)
     return list(max((r for r, n in common if n == top), key=len))
+
+
+_warned: set[tuple] = set()
 
 
 def build_tally(store: Store, cfg: Config, parent: str, model: str,
@@ -168,8 +169,15 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         others = {m: e for m, a in got.items() if m != model and a["prompt_version"] == PROMPT_VERSION
                   and (e := ex_of(a)) is not None}
         forms.append({"d": d, "muni": muni, "ex": mine, "others": others})
-    rows = expected_rows(cfg, parent, [f["ex"] for f in forms])
+    rows = expected_rows([f["ex"] for f in forms])
     nlists = len(rows)
+    configured = len(cfg.list_names.get(parent, []))
+    names_note = None
+    if configured and nlists and configured != nlists:
+        names_note = f"list_names has {configured} names, forms have {nlists} lists - check config"
+        if (parent, configured, nlists) not in _warned:
+            _warned.add((parent, configured, nlists))
+            log.warning("%s (election %s)", names_note, parent)
     notes = []
     for f in forms:
         dis, note = disagreements(f["ex"], f["others"], model)
@@ -204,7 +212,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     e = store.get_election(parent)
     return {"model": model, "parent": parent, "title": e.title if e else parent, "nlists": nlists,
             "names": [list_name(cfg, parent, r) for r in range(1, nlists + 1)],
-            "munis": munis, "overall": total, "notes": notes,
+            "munis": munis, "overall": total, "notes": notes, "names_note": names_note,
             "excluded": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                           "why": f["why"]} for f in forms if f["why"]]}
 
@@ -238,6 +246,8 @@ def format_tally(t: dict, all_forms: bool = False) -> str:
         body = [[r["m"], *(f"{v:,} ({_pct(v / r[key]['lists_valid'] if r[key]['lists_valid'] else None)})"
                            for v in r[key]["lists"])] for r in rows]
         out += _table(["municipality", *t["names"]], body)
+    if t["names_note"]:
+        out += ["", "warning: " + t["names_note"]]
     pending = t["overall"]["unanalysed"]
     out += ["", f"{t['overall']['counted']} form(s) counted, {t['overall']['clean']} clean, "
             f"{t['overall']['excluded']} excluded, {pending} not analysed by {t['model']}"]
