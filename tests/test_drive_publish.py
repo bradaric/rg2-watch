@@ -1,5 +1,6 @@
 import hashlib
 import json
+import multiprocessing
 import os
 from types import SimpleNamespace
 import threading
@@ -122,6 +123,56 @@ class RootDrive:
         return bool(self.files[file_id].get("public"))
 
 
+class ProcessRootDrive:
+    """Process-safe fake whose remote state survives a worker's hard exit."""
+    def __init__(self, state, crash_stage=None):
+        self.state = state
+        self.crash_stage = crash_stage
+
+    def account_permission_id(self):
+        return "process-account"
+
+    def generate_ids(self, count):
+        self.state["generated"] += 1
+        return ["process-root-id"]
+
+    def get_my_drive_root_id(self):
+        return "my-drive-root"
+
+    def get_file(self, file_id):
+        if self.crash_stage == "reserved" and file_id == "process-root-id":
+            os._exit(71)
+        return self.state["files"].get(file_id)
+
+    def create_folder(self, file_id, name, parent):
+        files = dict(self.state["files"])
+        files[file_id] = {
+            "id": file_id, "name": name, "mimeType": ROOT_MIME, "parents": [parent],
+            "owners": [{"permissionId": "process-account"}], "trashed": False,
+        }
+        self.state["files"] = files
+        self.state["created"] += 1
+        if self.crash_stage == "created":
+            os._exit(72)
+
+    def folder_is_public(self, file_id):
+        return False
+
+
+def _setup_root_process(token, db, state, start, ready, output, crash_stage=None):
+    store = Store(db)
+    try:
+        if ready is not None:
+            ready.put(True)
+        if start is not None:
+            start.wait()
+        root_id = DriveRoot(token, ProcessRootDrive(state, crash_stage)).setup()
+        if output is not None:
+            output.put(root_id)
+    finally:
+        store.close()
+
+
 def test_drive_root_is_shared_by_token_path_and_durable(tmp_path):
     token = tmp_path / "drive-token.json"
     drive = RootDrive()
@@ -164,6 +215,64 @@ def test_competing_databases_share_one_root_for_the_same_token(tmp_path):
     for worker in workers: worker.join(5)
     assert results == ["shared-root-id", "shared-root-id"]
     assert drive.generated == drive.created == 1
+
+
+def test_separate_processes_contend_and_share_one_root_across_databases(tmp_path):
+    token = tmp_path / "shared-token.json"
+    with multiprocessing.Manager() as manager:
+        state = manager.dict(files={}, generated=0, created=0)
+        start = multiprocessing.Event()
+        ready = multiprocessing.Queue()
+        output = multiprocessing.Queue()
+        workers = [multiprocessing.Process(
+            target=_setup_root_process,
+            args=(token, tmp_path / f"election-{index}.sqlite", state, start, ready, output),
+        ) for index in range(2)]
+        for worker in workers:
+            worker.start()
+        assert ready.get(timeout=5) is True
+        assert ready.get(timeout=5) is True
+        start.set()
+        for worker in workers:
+            worker.join(10)
+            assert worker.exitcode == 0
+        assert sorted([output.get(timeout=1), output.get(timeout=1)]) == [
+            "process-root-id", "process-root-id"]
+        assert state["generated"] == 1
+        assert state["created"] == 1
+
+
+@pytest.mark.parametrize("crash_stage,exitcode", [("reserved", 71), ("created", 72)])
+def test_fresh_process_recovers_root_after_durable_crash_point(
+        tmp_path, crash_stage, exitcode):
+    token = tmp_path / "crash-token.json"
+    state_path = Path(str(token.resolve()) + ".root.json")
+    with multiprocessing.Manager() as manager:
+        state = manager.dict(files={}, generated=0, created=0)
+        crashed = multiprocessing.Process(
+            target=_setup_root_process,
+            args=(token, tmp_path / "crashed.sqlite", state, None, None, None, crash_stage),
+        )
+        crashed.start()
+        crashed.join(10)
+        assert crashed.exitcode == exitcode
+        durable = json.loads(state_path.read_text(encoding="utf-8"))
+        assert durable["root_id"] == "process-root-id"
+        assert durable["phase"] == "reserved"
+
+        output = multiprocessing.Queue()
+        recovery = multiprocessing.Process(
+            target=_setup_root_process,
+            args=(token, tmp_path / "recovery.sqlite", state, None, None, output),
+        )
+        recovery.start()
+        recovery.join(10)
+        assert recovery.exitcode == 0
+        assert output.get(timeout=1) == "process-root-id"
+        assert state["generated"] == 1
+        assert state["created"] == 1
+        assert set(state["files"]) == {"process-root-id"}
+        assert json.loads(state_path.read_text(encoding="utf-8"))["phase"] == "created"
 
 
 def test_root_recovers_after_remote_create_before_created_state_write(tmp_path):
