@@ -9,8 +9,8 @@ from .config import Config
 from .models import Doc
 from .names import to_cyrillic
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
-from .rules import (RG7_ITEMS, _dash_zero, _ok, change_text, decision_label, decision_sort_key, evaluate_report,
-                    rg2_value, rg7_mismatch)
+from .rules import (RG7_FIELDS, _dash_zero, _ok, change_text, decision_label, decision_sort_key, evaluate_report,
+                    rg2_value, rg7_field, rg7_mismatch)
 from .store import Store, _doc
 
 log = logging.getLogger("rg2watch.tally")
@@ -67,15 +67,16 @@ def apply_rg7(report: dict, decisions: list[dict]) -> tuple[dict, list[dict], li
     used: list[dict] = []
 
     def put(item: str, value: int | None, table: bool) -> bool:
+        item = rg7_field(item)
         if value is None:
             return False
         done = {"value": value, "legible": True, "mark": "clean", "note": "corrected by RG-7",
                 "original_value": None}
-        if item in RG7_ITEMS:
-            f = _dash_zero(nums[RG7_ITEMS[item]])
+        if item in RG7_FIELDS:
+            f = _dash_zero(nums[item])
             if not table and not _ok(f):
                 return False
-            nums[RG7_ITEMS[item]] = done
+            nums[item] = done
             return True
         if item.startswith("list:") and item[5:].isdigit():
             row = int(item[5:])

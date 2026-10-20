@@ -266,24 +266,38 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
     return out
 
 
-RG7_ITEMS = {"3": "registered", "10.1": "voted", "10.2": "ballots_in_box", "10.3": "invalid", "10.4": "valid"}
-_RG7_RESULT = ("10.1", "10.2", "10.3", "10.4")
+# Canonical RG-7 item names are field meanings: registered, voted, ballots_in_box, invalid, valid,
+# outside_voted, outside_confirmations, list:N, other: <label>. Reports read with the r1 prompt carry
+# the 2022 item numbers instead; they map as below (the numbering differs between form versions).
+RG7_FIELDS = ("registered", "voted", "ballots_in_box", "invalid", "valid", "outside_voted",
+              "outside_confirmations")
+_LEGACY_FIELD = {"3": "registered", "10.1": "voted", "10.2": "ballots_in_box", "10.3": "invalid",
+                 "10.4": "valid"}
+_RG7_RESULT = ("voted", "ballots_in_box", "invalid", "valid")
+
+
+def rg7_field(item: str) -> str:
+    """Canonical field of a stored RG-7 item name (old numbered names included)."""
+    return _LEGACY_FIELD.get(item, item)
 
 
 def _is_result(item: str) -> bool:
-    return item in _RG7_RESULT or item.startswith("list:")
+    f = rg7_field(item)
+    return f in _RG7_RESULT or f.startswith("list:")
 
 
 def change_text(c: dict) -> str:
     old = "?" if c["old"] is None else c["old"]
     new = "?" if c["new"] is None else c["new"]
-    return f"{c['item']} {old}->{new}"
+    printed = c.get("printed")
+    return f"{c['item']}{f' (item {printed})' if printed and printed not in c['item'] else ''} {old}->{new}"
 
 
 def rg2_value(rg2: dict, item: str) -> int | None:
     """The number the watch model read for an RG-7 item on an RG-2 report (None = not readable)."""
-    if item in RG7_ITEMS:
-        f = _dash_zero(rg2["numbers"][RG7_ITEMS[item]])
+    item = rg7_field(item)
+    if item in RG7_FIELDS:
+        f = _dash_zero(rg2["numbers"][item])
     elif item.startswith("list:") and item[5:].isdigit():
         row = int(item[5:])
         f = next((_dash_zero(r["field"]) for r in rg2["numbers"]["list_votes"] if r["row"] == row), None)
@@ -295,12 +309,13 @@ def rg2_value(rg2: dict, item: str) -> int | None:
 def _prior_new(item: str, prior: list[dict]) -> int | None:
     """The value earlier decisions left for an item: their latest non-null new (a table is final)."""
     out = None
+    f = rg7_field(item)
     for rep in prior:
         for c in rep["changes"]:
-            if c["item"] == item and c["new"] is not None:
+            if rg7_field(c["item"]) == f and c["new"] is not None:
                 out = c["new"]
         for e in rep["table"]:
-            if e["item"] == item and e["value"] is not None:
+            if rg7_field(e["item"]) == f and e["value"] is not None:
                 out = e["value"]
     return out
 

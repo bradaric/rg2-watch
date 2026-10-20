@@ -394,12 +394,14 @@ class Store:
                 "skipped": ast.get("skipped", 0), "findings": sev}
 
     def requeue_rg7(self, parent: str, municipalities: Collection[str] | None = None,
-                    prompt_version: str = "r1") -> int:
+                    prompt_version: str = "r2") -> int:
         """Queue active RG-7 decisions without a successful `prompt_version` analysis that are
         never analysed (NULL/skipped: recorded before RG-7 analysis existed or before analysis was
-        enabled), or marked done/failed after an analysis with another (the RG-2) prompt. Genuinely
-        failed RG-7 documents stay failed (`requeue --failed`); queued, running or retrying ones are
-        left alone. They are few and cheap, so no opt-in is needed."""
+        enabled), or marked done/failed after a successful analysis with another prompt (an older RG-7
+        prompt version: a deliberate upgrade) or any analysis with the RG-2 prompt (versions "vN"; the
+        RG-7 prompts are "rN"). Genuinely failed RG-7 documents (failed with an RG-7 prompt) stay
+        failed (`requeue --failed`), and so do documents whose `prompt_version` analysis failed;
+        queued, running or retrying ones are left alone. They are few and cheap, so no opt-in is needed."""
         where, extra = _in_municipalities(municipalities)
         return self._write(
             "UPDATE documents SET analysis_status='new', analysis_attempts=0, analysis_next_at=NULL, "
@@ -407,9 +409,10 @@ class Store:
             f"AND doc_type IN ({','.join(map(str, RG7_TYPES))}) "
             "AND (analysis_status IS NULL OR analysis_status='skipped' OR (analysis_status IN "
             "('done', 'failed') AND analysis_next_at IS NULL AND EXISTS "
-            "(SELECT 1 FROM analyses w WHERE w.document_id=documents.id AND w.prompt_version<>?))) "
+            "(SELECT 1 FROM analyses w WHERE w.document_id=documents.id AND w.prompt_version<>? AND "
+            "(w.status='done' OR w.prompt_version NOT LIKE 'r%')))) "
             "AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.document_id=documents.id "
-            f"AND a.status='done' AND a.prompt_version=?){where}",
+            f"AND a.status IN ('done', 'failed') AND a.prompt_version=?){where}",
             (parent, prompt_version, prompt_version, *extra)).rowcount
 
     def delete_rg2_findings(self, url: str) -> int:

@@ -66,8 +66,40 @@ def test_normalise_canonical_items_and_first_entry_wins():
               [("LISTA 1", 144), ("10.4", 175), ("10.4", 9)])
     n = _normalise_rg7(raw)
     assert [(c["item"], c["old"], c["new"]) for c in n["changes"]] == [
-        ("list:2", 5, 6), ("10.2", 180, 178), ("list:3", None, 4)]
-    assert [(e["item"], e["value"]) for e in n["table"]] == [("list:1", 144), ("10.4", 175)]
+        ("list:2", 5, 6), ("ballots_in_box", 180, 178), ("list:3", None, 4)]  # old r1 numbering maps
+    assert [(e["item"], e["value"]) for e in n["table"]] == [("list:1", 144), ("valid", 175)]
+    legacy_other = _normalise_rg7(rg7([("11.1", 6, 73), ("12", 1, 2)]))
+    assert [c["item"] for c in legacy_other["changes"]] == ["other: 11.1", "other: 12"]
+
+
+def r2_entry(field, old, new, item="", row=None, label=""):
+    return {"field": field, "row": row, "label": label, "item": item, "old": old, "new": new}
+
+
+def test_normalise_r2_maps_by_field_meaning_not_item_number():
+    raw = rg7() | {"changes": [r2_entry("voted", 6, 73, "11.1"), r2_entry("valid", 5, 6, "10.4"),
+                               r2_entry("list", 1, 2, "11.5", row=3), r2_entry("list", 1, 2, row=None, label="x"),
+                               r2_entry("other", 1, 2, "14", label="Posmatraci"),
+                               r2_entry("outside_voted", 1, 2, "12")],
+                  "table": [{"field": "voted", "row": None, "label": "", "item": "11.1", "value": 73}]}
+    n = _normalise_rg7(raw)
+    assert [(c["item"], c["printed"]) for c in n["changes"]] == [
+        ("voted", "11.1"), ("valid", "10.4"), ("list:3", "11.5"), ("other: x", ""),
+        ("other: Posmatraci", "14"), ("outside_voted", "12")]
+    assert n["table"] == [{"item": "voted", "printed": "11.1", "value": 73}]
+
+
+def test_2026_numbering_voted_11_1_is_a_high_applied_result_change():
+    from rg2watch.rules import RG7_FIELDS as F
+    assert "voted" in F
+    n = _normalise_rg7(rg7() | {"changes": [r2_entry("voted", 6, 73, "11.1")]})
+    f = evaluate_rg7(n, bdoc("/e/r7.pdf", no="42"), cfg())
+    assert [(x.rule, x.severity) for x in f] == [("R1", "HIGH")] and "voted (item 11.1) 6->73" in f[0].summary
+    s = bstore()
+    station(s, clean_report(), [(n, "2026-10-20T10:00:00Z")], voted=nf(6), ballots_in_box=nf(6), invalid=nf(0),
+            valid=nf(6), list_votes=[{"row": 1, "field": nf(6)}])
+    o = tally(s)["overall"]
+    assert o["all"]["voted"] == 73 and o["fall"]["voted"] == 6
 
 
 def test_analyze_document_rg7_kind_uses_its_schema_and_prompt():
@@ -255,7 +287,7 @@ def test_pipeline_analyses_rg7_with_its_own_prompt_version_and_rules(tmp_path):
     e.publish(d)
     assert e.drain() == 1
     assert e.rules() == ["R1"] and e.status(d.url) == ("done", 1)
-    assert e.store._db.execute("SELECT prompt_version FROM analyses").fetchone()[0] == RG7_PROMPT_VERSION == "r1"
+    assert e.store._db.execute("SELECT prompt_version FROM analyses").fetchone()[0] == RG7_PROMPT_VERSION == "r2"
     assert e.store.total_spend() > 0
 
 
@@ -325,9 +357,9 @@ def test_cli_analyze_doc_type_rg7_prints_changes(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_anthropic_client", lambda: (FakeAnthropic(rg7_reply(NEGOTIN)), None))
     assert cli.main(["analyze", str(pdf), "--doc-type", "rg7", "--db", str(tmp_path / "d.sqlite")]) == 0
     out = capsys.readouterr().out
-    assert "changes: 10.2 180->178; 10.4 177->175; list:1 146->144" in out and "[HIGH] R1" in out
+    assert "changes: ballots_in_box (item 10.2) 180->178; valid (item 10.4) 177->175; list:1 146->144" in out and "[HIGH] R1" in out
     s = Store(tmp_path / "d.sqlite")
-    assert s._db.execute("SELECT prompt_version FROM analyses").fetchone()[0] == "r1"
+    assert s._db.execute("SELECT prompt_version FROM analyses").fetchone()[0] == "r2"
     s.close()
 
 
@@ -354,7 +386,7 @@ def test_normalise_restricts_items_and_cleans_text():
                             ("11", 5, 4), ("X" * 100, 1, 2), ("3", 1, 2)])
                        | {"reason": "a\x00b\nc " + "z" * 300, "station_no": "3\t7"})
     assert [c["item"] for c in n["changes"]] == ["list:2", "list:3", "list:4", "other: 10.5", "other: 11",
-                                                  "other: " + "x" * 40, "3"]
+                                                  "other: " + "x" * 40, "registered"]
     assert len(n["reason"]) == 200 and "\x00" not in n["reason"] and "\n" not in n["reason"]
     assert n["station_no"] == "3 7"
 
@@ -574,3 +606,23 @@ def test_unverified_correction_changes_neither_view():
     assert o["cl"]["valid"] == 0 and o["fcl"]["valid"] == 160  # only the flag differs
     assert t["excluded_filed"] == [] and o["fclean"] == 1  # as filed: judged on the RG-2 alone
     assert set(_delta(o["all"], o["fall"])["lists"]) == {0}
+
+
+def test_requeue_rg7_upgrades_r1_reads_but_never_rebills_failed_docs():
+    s = bstore()
+    r1_done, r1_failed, r2_done, r2_failed_after_r1 = (d7(str(i), url=f"/e/{i}.pdf") for i in range(4))
+    for x in (r1_done, r1_failed, r2_done, r2_failed_after_r1):
+        add(s, x)
+    ok = lambda x, v: s.save_analysis(x.url, AnalysisResult(NEGOTIN, 1, 1, 0.0, M, "stop"), v)
+    ok(r1_done, "r1")
+    ok(r2_done, "r2")
+    ok(r2_failed_after_r1, "r1")
+    s.save_failed_analysis(r1_failed.url, M, "r1", 0.1, "boom")
+    s.save_failed_analysis(r2_failed_after_r1.url, M, "r2", 0.1, "boom")
+    for x in (r1_done, r2_done):
+        s.mark_analysis(x.url, "done")
+    for x in (r1_failed, r2_failed_after_r1):
+        s.mark_analysis(x.url, "failed", "boom")
+    assert s.requeue_rg7(BP, None, "r2") == 1
+    st = lambda x: s._db.execute("SELECT analysis_status FROM documents WHERE url=?", (x.url,)).fetchone()[0]
+    assert [st(x) for x in (r1_done, r1_failed, r2_done, r2_failed_after_r1)] == ["new", "failed", "done", "failed"]
