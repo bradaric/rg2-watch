@@ -113,11 +113,12 @@ class Notifier:
         while self._status and self._post(self._status[0], self._status[0], "high", "warning"):
             self._status.pop(0)
 
-    def send(self, findings_with_ids: list[tuple[int, Finding]]) -> list[int]:
+    def send(self, findings_with_ids: list[tuple[int, Finding]], flush: bool = False) -> list[int]:
+        """`flush` pushes the MEDIUM digest now instead of waiting for medium_digest_s."""
         with self._lock:
-            return self._send(findings_with_ids)
+            return self._send(findings_with_ids, flush)
 
-    def _send(self, findings_with_ids: list[tuple[int, Finding]]) -> list[int]:
+    def _send(self, findings_with_ids: list[tuple[int, Finding]], flush: bool = False) -> list[int]:
         delivered: list[int] = []
         push = bool(self.cfg.ntfy_topic)
         self._flush_status()
@@ -136,7 +137,7 @@ class Notifier:
         if (
             self._pending
             and self._pending_since is not None
-            and self.clock() - self._pending_since >= self.cfg.medium_digest_s
+            and (flush or self.clock() - self._pending_since >= self.cfg.medium_digest_s)
         ):
             lines = []
             for f in self._pending.values():

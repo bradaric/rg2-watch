@@ -1,0 +1,213 @@
+import io
+import sqlite3
+import threading
+from types import SimpleNamespace
+
+import httpx
+import pytest
+
+import rg2watch.cli as cli
+from rg2watch.cli import _UntilDone, main
+from rg2watch.config import Config
+from rg2watch.models import Doc, Election, Event
+from rg2watch.notify import Notifier
+from rg2watch.replay import make_replay_server
+from rg2watch.store import Store
+from test_e2e_replay import make_fixture_dir
+from test_watcher import doc, env
+
+P = "662405"
+
+
+@pytest.fixture
+def rehearsal(tmp_path, monkeypatch):
+    """A replayed election plus a fast watch loop; returns (argv for watch, db path)."""
+    root = make_fixture_dir(tmp_path)
+    server = make_replay_server(root, port=0, speed=1e9)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    cfg, db = tmp_path / "rg2watch.toml", tmp_path / "w.sqlite"
+    cfg.write_text("max_rps = 1000.0\ntick_request_budget = 5\nbrowse_interval_s = 0\nprobe_interval_s = 1\n")
+    common = ["--db", str(db), "--config", str(cfg)]
+    assert main(["add", f"{base}/zapisnici/{P}", *common]) == 0
+    real_sleep = cli.time.sleep
+    monkeypatch.setattr(cli.time, "sleep", lambda s: real_sleep(0.01))
+    monkeypatch.setattr(cli, "DONE_CONFIRM_S", 0.05)
+    yield ["watch", "--parent", P, "--base-url", base, "--serve-port", "0", *common], db
+    server.shutdown()
+    server.server_close()
+
+
+def test_exits_after_full_passes_without_analysis(rehearsal, capsys):
+    argv, db = rehearsal
+    assert main([*argv, "--until-done", "--baseline"]) == 0
+    out = capsys.readouterr().out
+    assert "[until-done] finished" in out
+    assert "documents seen: RG-2" in out and "RG-7-1 1" in out
+    assert "spend for this election: $0.00" in out
+    assert f"rg2watch serve --db {db}" in out
+    assert "RG-2 analysed" not in out  # analysis off: no analysis line
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM documents").fetchone()[0] > 0
+    assert list(db.parent.rglob("status.json"))
+
+
+def test_final_status_says_stopped_and_digest_flushed(rehearsal, monkeypatch):
+    argv, db = rehearsal
+    calls = []
+    real = cli._handlers
+
+    def handlers(*a):
+        on_events, deliver = real(*a)
+        return on_events, lambda flush=False: (calls.append(flush), deliver(flush))[1]
+    monkeypatch.setattr(cli, "_handlers", handlers)
+    assert main([*argv, "--until-done"]) == 0
+    assert calls[-1] is True and not any(calls[:-1])
+    status = next(db.parent.rglob("status.json")).read_text()
+    assert '"watching": false' in status
+
+
+def test_stuck_on_spend_cap_exits_1(rehearsal, monkeypatch, capsys):
+    argv, db = rehearsal
+    monkeypatch.setattr(cli, "_analysis_client", lambda cfg: (object(), None))
+    monkeypatch.setattr(cli, "STUCK_AFTER_S", 0.5)
+    cfg = db.parent / "rg2watch.toml"
+    cfg.write_text(cfg.read_text() + "max_spend_usd = 0.0\nstop_wait_s = 2\n")
+    assert main([*argv, "--until-done", "--analyze"]) == 1
+    cap = capsys.readouterr()
+    assert "[until-done] STOPPED" in cap.out and "RG-2 analysed 0" in cap.out
+    assert "analysis paused: spend cap reached; " in cap.err
+    assert "form(s) not analysed" in cap.err and "rg2watch requeue" in cap.err
+
+
+def test_until_done_conflicts_with_once():
+    with pytest.raises(SystemExit) as e:
+        main(["watch", "--parent", P, "--once", "--until-done"])
+    assert e.value.code == 2
+
+
+def test_flag_absent_loop_unchanged(rehearsal, monkeypatch):
+    argv, db = rehearsal
+    ticks = []
+
+    def stop_after_two(self):
+        ticks.append(1)
+        if len(ticks) >= 2:
+            raise KeyboardInterrupt
+    monkeypatch.setattr(cli.Watcher, "run_once", stop_after_two)
+    assert main(argv) == 0
+    assert len(ticks) == 2
+
+
+# --- _UntilDone with a controllable queue --------------------------------------------------
+
+class Clock:
+    now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def queue_env(n=2):
+    store = Store(":memory:")
+    store.upsert_election(Election(P, "1", "3", "T", "http://x"))
+    docs = [Doc("M", str(i), "S", "l", 6, f"http://x/{i}.pdf", "2026-10-19T20:00") for i in range(n)]
+    store.apply_events(P, store.start_sweep(P, "t"), [Event("added", d) for d in docs])
+    watcher = SimpleNamespace(first_pass_done=True)
+    pipeline = SimpleNamespace(status_snapshot=lambda: {"paused": None})
+    clock = Clock()
+    return store, docs, watcher, pipeline, clock
+
+
+def test_waits_for_queue_then_two_checks():
+    store, docs, watcher, pipe, clock = queue_env()
+    d = _UntilDone(watcher, pipe, store, P, None, clock=clock, stuck_after=600, confirm=3)
+    assert d.step() is None and d.remaining == 2
+    store.mark_analysis(docs[0].url, "done")
+    clock.now += 5
+    assert d.step() is None and d.remaining == 1
+    store.mark_analysis(docs[1].url, "failed")  # permanent failure: no retry time
+    clock.now += 1
+    assert d.step() is None  # first check with everything finished
+    clock.now += 3
+    assert d.step() == 0
+
+
+def test_race_resets_the_confirmation():
+    store, docs, watcher, pipe, clock = queue_env(1)
+    store.mark_analysis(docs[0].url, "done")
+    d = _UntilDone(watcher, pipe, store, P, None, clock=clock, stuck_after=600, confirm=3)
+    assert d.step() is None
+    late = Doc("M", "9", "S", "l", 6, "http://x/9.pdf", "2026-10-19T20:00")
+    store.apply_events(P, store.start_sweep(P, "t"), [Event("added", late)])  # new form arrives
+    clock.now += 3
+    assert d.step() is None and d.remaining == 1
+    store.mark_analysis(late.url, "done")
+    clock.now += 1
+    assert d.step() is None
+    clock.now += 3
+    assert d.step() == 0
+
+
+def test_retry_and_running_count_as_unfinished():
+    store, docs, watcher, pipe, clock = queue_env()
+    store.mark_analysis(docs[0].url, "failed", "boom", retry_at=1e12)
+    store.next_for_analysis(1, parent=P)  # claims the other as running
+    d = _UntilDone(watcher, pipe, store, P, None, clock=clock)
+    assert d.step() is None and d.remaining == 2
+
+
+def test_waits_for_watcher_first_pass():
+    store, docs, watcher, pipe, clock = queue_env(0)
+    watcher.first_pass_done = False
+    d = _UntilDone(watcher, pipe, store, P, None, clock=clock, confirm=0)
+    assert d.step() is None
+    watcher.first_pass_done = True
+    assert d.step() == 0
+
+
+def test_stuck_reports_pause_reason_and_progress_resets_timer():
+    store, docs, watcher, pipe, clock = queue_env()
+    pipe.status_snapshot = lambda: {"paused": ["spend cap reached", 1.0]}
+    d = _UntilDone(watcher, pipe, store, P, None, clock=clock, stuck_after=600)
+    assert d.step() is None
+    clock.now += 599
+    store.mark_analysis(docs[0].url, "done")  # progress at 599 s
+    assert d.step() is None
+    clock.now += 599
+    assert d.step() is None
+    clock.now += 2
+    assert d.step() == 1 and d.remaining == 1 and "spend cap reached" in d.why
+
+
+def test_municipality_filter_ignores_other_municipalities():
+    store, docs, watcher, pipe, clock = queue_env(1)
+    other = Doc("Other", "1", "S", "l", 6, "http://x/o.pdf", "2026-10-19T20:00")
+    store.apply_events(P, store.start_sweep(P, "t"), [Event("added", other)])
+    store.mark_analysis(docs[0].url, "done")
+    d = _UntilDone(watcher, pipe, store, P, {"M"}, clock=clock, confirm=0)
+    assert d.step() == 0
+
+
+# --- MEDIUM digest ---------------------------------------------------------------------------
+
+def test_flush_pushes_medium_digest_immediately():
+    from rg2watch.models import Finding
+    posts = []
+    http = httpx.Client(transport=httpx.MockTransport(
+        lambda r: (posts.append(r.headers["Title"]), httpx.Response(200))[1]))
+    n = Notifier(Config(ntfy_topic="t", ntfy_url="http://ntfy.test", medium_digest_s=600), http,
+                 out=io.StringIO())
+    f = Finding("A1", "MEDIUM", Doc("M", "1", "S", "l", 6, "http://x/1.pdf", "2026-10-19T20:00"), "s")
+    assert n.send([(1, f)]) == []
+    assert posts == []
+    assert n.send([], flush=True) == [1]
+    assert posts == ["[MEDIUM] 1 finding"]
+
+
+def test_first_pass_done_without_baseline():
+    w, fake, store, t, batches, _ = env()
+    assert not w.first_pass_done
+    for _ in range(40):
+        w.run_once()
+        t.now += 60
+    assert w.first_pass_done

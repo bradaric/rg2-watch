@@ -351,6 +351,35 @@ class Store:
                 f"(analysis_status='failed' AND analysis_next_at IS NOT NULL)){where}",
                 (parent, MAX_ANALYSIS_ATTEMPTS, *extra)).fetchone()[0]
 
+    def unfinished_analysis(self, parent: str, municipalities: Collection[str] | None = None) -> int:
+        """Active RG-2 forms of `parent` queued, running or waiting for a retry."""
+        where, extra = _in_municipalities(municipalities)
+        with self._lock:
+            return self._db.execute(
+                f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
+                f"({_ANALYSED}) AND (analysis_status='running' OR (analysis_attempts < ? AND "
+                f"(analysis_status='new' OR (analysis_status='failed' AND analysis_next_at IS NOT "
+                f"NULL)))){where}", (parent, MAX_ANALYSIS_ATTEMPTS, *extra)).fetchone()[0]
+
+    def run_summary(self, parent: str, municipalities: Collection[str] | None = None) -> dict:
+        """End-of-run counts: documents by type, RG-2 analysis outcomes, findings by severity."""
+        where, extra = _in_municipalities(municipalities)
+        with self._lock:
+            rows = lambda sql: self._db.execute(sql, (parent, *extra)).fetchall()
+            docs = {DOC_TYPES.get(t, str(t)): n for t, n in rows(
+                f"SELECT doc_type, COUNT(*) FROM documents WHERE parent=? AND active=1{where} "
+                "GROUP BY 1")}
+            ast = {r[0]: r[1] for r in rows(
+                f"SELECT analysis_status, COUNT(*) FROM documents WHERE parent=? AND active=1 AND "
+                f"doc_type IN ({_ANALYSED}){where} GROUP BY 1")}
+            retrying = rows(f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND "
+                            f"doc_type IN ({_ANALYSED}) AND analysis_status='failed' AND "
+                            f"analysis_next_at IS NOT NULL{where}")[0][0]
+            sev = {r[0]: r[1] for r in rows(
+                f"SELECT severity, COUNT(*) FROM findings WHERE parent=?{where} GROUP BY 1")}
+        return {"docs": docs, "done": ast.get("done", 0), "failed": ast.get("failed", 0) - retrying,
+                "skipped": ast.get("skipped", 0), "findings": sev}
+
     def requeue_skipped(self, parent: str | None = None,
                         municipalities: Collection[str] | None = None) -> int:
         """Queue skipped RG-2 forms (the backlog from before analysis was enabled)."""

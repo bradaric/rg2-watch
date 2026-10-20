@@ -76,8 +76,13 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("url", nargs="?", help="zapisnici URL (alternative to --parent after add)")
     s.add_argument("--parent", help="election id registered with `add`")
     s.add_argument("--base-url", help="override the RIK base URL")
-    s.add_argument("--once", action="store_true",
-                   help="bootstrap, run every lane once (full passes, no page budget), exit")
+    stopper = s.add_mutually_exclusive_group()
+    stopper.add_argument("--once", action="store_true",
+                         help="bootstrap, run every lane once (full passes, no page budget), exit")
+    stopper.add_argument("--until-done", action="store_true",
+                         help="rehearsals/audits of past elections: exit when every lane has "
+                              "completed a full pass and the analysis queue is empty (exit 1 if "
+                              "analysis is stuck for 10 minutes)")
     s.add_argument("--only", help="comma-separated municipality names (Cyrillic or Latin): watch "
                    "only these (config only_municipalities)")
     s.add_argument("--baseline", action="store_true",
@@ -418,10 +423,11 @@ def _review_api(store: Store) -> tuple:
 
 
 def _handlers(store: Store, notifier: Notifier, parent: str, pipeline=None):
-    def deliver() -> None:
-        """Called once per tick by the watch loop."""
+    def deliver(flush: bool = False) -> None:
+        """Called once per tick by the watch loop; `flush` also pushes the MEDIUM digest now."""
         try:
-            store.mark_alerted(notifier.send(store.unalerted(parent, {"HIGH", "MEDIUM", "LOW"})))
+            store.mark_alerted(notifier.send(store.unalerted(parent, {"HIGH", "MEDIUM", "LOW"}),
+                                             flush))
         except Exception:
             log.exception("alert delivery failed; retrying next tick")
 
@@ -454,6 +460,64 @@ def _store_finding(store: Store, parent: str, f: Finding) -> None:
     except Exception:
         log.error("finding not stored: %s %s %s BM %s %s", f.rule, f.severity, f.doc.municipality,
                   f.doc.station_no, f.doc.url, exc_info=True)
+
+
+STUCK_AFTER_S = 600  # --until-done: no form leaves the analysis queue for this long -> give up
+DONE_CONFIRM_S = 3  # --until-done: the done condition must hold this long (two checks) before exit
+
+
+class _UntilDone:
+    """`watch --until-done`: step() returns None while running, 0 when done, 1 when analysis is stuck."""
+
+    def __init__(self, watcher: Watcher, pipeline, store: Store, parent: str, only, clock=time.monotonic,
+                 stuck_after: float = STUCK_AFTER_S, confirm: float = DONE_CONFIRM_S):
+        self.watcher, self.pipeline, self.store, self.parent, self.only = watcher, pipeline, store, parent, only
+        self.clock, self.stuck_after, self.confirm = clock, stuck_after, confirm
+        self.remaining = 0
+        self.why = ""
+        self._ok_since: float | None = None
+        self._best = None  # lowest queue size seen so far
+        self._best_at = clock()
+
+    def step(self) -> int | None:
+        self.remaining = (0 if self.pipeline is None
+                          else self.store.unfinished_analysis(self.parent, self.only))
+        now = self.clock()
+        if self._best is None or self.remaining < self._best:
+            self._best, self._best_at = self.remaining, now
+        if self.watcher.first_pass_done and not self.remaining:
+            if self._ok_since is None:
+                self._ok_since = now
+            return 0 if now - self._ok_since >= self.confirm else None
+        self._ok_since = None
+        if self.remaining and now - self._best_at >= self.stuck_after:
+            paused = self.pipeline.status_snapshot()["paused"]
+            self.why = (f"analysis paused: {paused[0]}" if paused else
+                        "no form analysed (Anthropic overloaded or PDF downloads failing; see the log)")
+            return 1
+        return None
+
+
+def _print_summary(store: Store, db_path, parent: str, only, started: float, done: _UntilDone,
+                   code: int, notifier: Notifier) -> None:
+    sm = store.run_summary(parent, only)
+    elapsed = int(time.monotonic() - started)
+    sev = sm["findings"]
+    print(f"\n[until-done] {'finished' if code == 0 else 'STOPPED, analysis stuck'} "
+          f"after {elapsed // 60} min {elapsed % 60:02d} s")
+    print("documents seen: " + (", ".join(f"{k} {v}" for k, v in sm["docs"].items()) or "none"))
+    if done.pipeline is not None:
+        print(f"RG-2 analysed {sm['done']}, failed {sm['failed']}, skipped {sm['skipped']}, "
+              f"remaining {done.remaining}")
+    print("findings: " + ", ".join(f"{k} {sev.get(k, 0)}" for k in ("HIGH", "MEDIUM", "LOW")))
+    print(f"spend for this election: ${store.total_spend(parent):.2f}")
+    if notifier.status_snapshot()["queued"]:
+        print("warning: some pushes were not delivered (ntfy unreachable)")
+    if code:
+        print(f"{done.why}; {done.remaining} form(s) not analysed. Fix the cause, then `rg2watch "
+              f"requeue --parent {parent} --failed` if needed and rerun the same command: the "
+              "queue resumes", file=sys.stderr)
+    print(f"browse: rg2watch serve --db {db_path}")
 
 
 def _cmd_watch(args) -> int:
@@ -533,10 +597,15 @@ def _cmd_watch(args) -> int:
                                             _cache_dir(cfg), backlog=args.analyze_backlog,
                                             **({"municipalities": set(only)} if only else {}))
         on_events, deliver = _handlers(store, notifier, parent, pipeline)
-        watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once,
+        watcher = Watcher(client, store, cfg, on_events,
+                          initial_safety=args.once or args.until_done,
                           on_status=notifier.status, baseline=args.baseline, only=only)
         stop = threading.Event()
         server, threads = None, []
+        code, finished, started = 0, None, time.monotonic()
+        if args.until_done:
+            finished = _UntilDone(watcher, pipeline, store, parent, set(only) if only else None,
+                                  stuck_after=STUCK_AFTER_S, confirm=DONE_CONFIRM_S)
         try:  # everything after pipeline.start() is inside the try: the pipeline cannot leak
             if pipeline is not None:
                 pipeline.start()
@@ -566,9 +635,19 @@ def _cmd_watch(args) -> int:
                     log.exception("delivery failed; retrying next tick")
                 if args.once:
                     break
+                if finished is not None:
+                    try:
+                        verdict = finished.step()
+                    except Exception:
+                        log.exception("done check failed; retrying next tick")
+                        verdict = None
+                    if verdict is not None:
+                        code = verdict
+                        break
                 time.sleep(1)
         except KeyboardInterrupt:
             log.info("interrupted, shutting down")
+            finished = None
         finally:
             stop.set()
             if server is not None:
@@ -578,7 +657,21 @@ def _cmd_watch(args) -> int:
                 t.join(10)
             if pipeline is not None:
                 pipeline.stop()
-        return 0
+            if finished is not None:  # --until-done: last alerts, last page, then the summary
+                try:
+                    deliver(flush=True)
+                    live = {"ntfy": notifier.status_snapshot(), "url": None}
+                    if pipeline is not None:
+                        live["analysis"] = pipeline.status_snapshot()
+                    write_status(store, _browse_path(cfg), parent, live)  # no "watcher": stopped
+                    if cfg.browse_interval_s > 0:
+                        build_page(store, _browse_path(cfg), _cache_dir(cfg), None, cfg,
+                                   cfg.browse_interval_s, False, opinions)
+                except Exception:
+                    log.exception("final delivery or page build failed")
+                _print_summary(store, cfg.db_path, parent, set(only) if only else None, started,
+                               finished, code, notifier)
+        return code
     finally:
         store.close()
 

@@ -25,6 +25,15 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
 
    `--analyze` turns on the paid Claude analysis of RG-2 forms (see below); leave it out to only watch.
 
+   For rehearsals and audits of a past election add `--until-done` (not with `--once`): the watcher
+   exits by itself when every lane has completed a full pass and, with analysis on, no RG-2 of the
+   election (or of the `--only` municipalities) is queued, running or waiting for a retry. It then
+   delivers the pending alerts (flushing the MEDIUM digest), writes the final page and status, stops
+   the pipeline and prints a summary (documents by type, RG-2 analysed/failed/skipped, findings by
+   severity, spend, elapsed time). If analysis makes no progress for 10 minutes (spend cap, key
+   error, PDF downloads blocked, Anthropic overloaded) it exits with code 1, saying why and how many
+   forms remain. Without the flag nothing changes: the loop runs until Ctrl-C.
+
    HIGH findings (RG-8/RG-9 published, RG-2 replaced, with the old URL as "was: ...") are pushed
    immediately, MEDIUM in digests, LOW only printed. Every finding is also printed (and flushed) to
    stdout. If ntfy is unreachable, findings stay un-alerted and pushes back off (5 s doubling to

@@ -110,16 +110,21 @@ election-night data.
 1. Register and start (keep `RG2W_NTFY_TOPIC` in `.env` to practise the pushes and digests too):
 
        uv run rg2watch add https://www.rik.parlament.gov.rs/zapisnici/662405 --config rg2watch.toml --db data/rehearsal-662405.sqlite
-       uv run --env-file .env rg2watch watch --parent 662405 --config rg2watch.toml --db data/rehearsal-662405.sqlite --analyze --baseline
+       uv run --env-file .env rg2watch watch --parent 662405 --config rg2watch.toml --db data/rehearsal-662405.sqlite --analyze --baseline --until-done
 
    `--baseline` records what is already published without "new document" alerts; every RG-2 is
-   still downloaded and analysed, and its findings alert as on the night.
+   still downloaded and analysed, and its findings alert as on the night. `--until-done` makes
+   the watcher exit by itself (exit 0) once every lane has completed a full pass and the analysis
+   queue is empty: it pushes the last alerts (MEDIUM digest included), writes the final page and
+   prints a summary (documents by type, RG-2 analysed/failed/skipped, findings by severity, spend,
+   elapsed time). If analysis is stuck for 10 minutes (spend cap, key error, downloads blocked,
+   Anthropic overloaded) it exits 1 and says why and how many forms remain: fix the cause and rerun.
 2. Open http://127.0.0.1:8770: watch the status panel (queue, spend, ETA), the forms filling in,
    the Results tab and presentation mode. List names come from `list_names` under `"662405"`.
 3. Practise the review: filter "to review", open PDFs, record OK / ESCALATE / UNSURE, export the
    escalated CSV.
-4. The watcher does not stop by itself: Ctrl-C once the status panel shows the analysis queue at 0.
-   Browse the result afterwards with:
+4. The summary ends with the browse command (Ctrl-C still stops the watcher early; the status
+   panel shows the queue meanwhile). Browse the result afterwards with:
 
        uv run rg2watch serve --config rg2watch.toml --db data/rehearsal-662405.sqlite
 

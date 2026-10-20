@@ -102,6 +102,7 @@ class Watcher:
         early = initial_safety or baseline
         self._safety_started = self._started - (cfg.safety_sweep_interval_s if early else 0)
         self._baseline = set(BASELINE_LANES) if baseline else set()
+        self._first_pass = set(BASELINE_LANES)  # lanes yet to finish a full pass (baseline or not)
         self._baseline_counts: Counter[str] = Counter()
         self._progress = {"rare": False, "probe": False, "missing": False, "safety": False}
         self._tick_wall: float | None = None  # wall time the last tick finished
@@ -134,6 +135,11 @@ class Watcher:
             self._tick()
             self._tick_used, self._tick_wall = self._tick_budget - self._budget, time.time()
         self._check_health()
+
+    @property
+    def first_pass_done(self) -> bool:
+        """Every lane has completed a full pass in this run."""
+        return not self._first_pass
 
     def status_snapshot(self) -> dict:
         """Plain in-memory state for the status panel: cheap, no I/O, safe to call from any thread."""
@@ -199,7 +205,7 @@ class Watcher:
         if self._abort or not wants(self.clock()):
             return
         self._run_lane(name, fn)
-        if self._baseline:
+        if self._first_pass:
             self._baseline_update()
 
     def _capped(self, fn, cap: int):
@@ -285,10 +291,12 @@ class Watcher:
             "missing": self._progress["missing"],
             "safety": self._progress["safety"],
         }
-        for lane in list(self._baseline):
+        recording = bool(self._baseline)
+        for lane in list(self._first_pass):
             if done[lane]:
+                self._first_pass.discard(lane)
                 self._baseline.discard(lane)
-        if self._baseline:
+        if self._first_pass or not recording:
             return
         for code, n in sorted(self._baseline_counts.items()):
             print(f"[baseline] {code}: {n} document(s) recorded", flush=True)
@@ -674,7 +682,7 @@ class Watcher:
                     raise
                 except Exception:
                     log.exception("missing lane: station %s failed", key)
-        if "probe" not in self._baseline and not self._abort:
+        if "probe" not in self._first_pass and not self._abort:
             self._progress["missing"] = True
 
     def _safety(self, sweep_id: int) -> None:
