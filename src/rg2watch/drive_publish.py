@@ -70,15 +70,21 @@ class GoogleDriveAdapter:
             raise DriveError("Drive file metadata could not be inspected") from exc
 
     def create_folder(self, file_id: str, name: str):
-        self.service.files().create(body={"id": file_id, "name": name, "mimeType": FOLDER_MIME},
-                                    fields="id").execute()
+        try:
+            self.service.files().create(body={"id": file_id, "name": name, "mimeType": FOLDER_MIME},
+                                        fields="id").execute()
+        except Exception as exc:
+            raise DriveError("Drive folder creation did not complete; retry to reconcile it") from exc
 
     def upload(self, file_id: str, name: str, mime: str, parent: str, data: bytes):
         from googleapiclient.http import MediaIoBaseUpload
         media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime, resumable=False)
-        self.service.files().create(
-            body={"id": file_id, "name": name, "mimeType": mime, "parents": [parent]},
-            media_body=media, fields="id,md5Checksum").execute()
+        try:
+            self.service.files().create(
+                body={"id": file_id, "name": name, "mimeType": mime, "parents": [parent]},
+                media_body=media, fields="id,md5Checksum").execute()
+        except Exception as exc:
+            raise DriveError("Drive file upload did not complete; retry to reconcile it") from exc
 
     def _permissions(self, file_id: str) -> list[dict]:
         return self.service.permissions().list(
@@ -90,9 +96,12 @@ class GoogleDriveAdapter:
                    for p in self._permissions(folder_id))
 
     def share_folder(self, folder_id: str):
-        self.service.permissions().create(fileId=folder_id,
-                                          body={"type": "anyone", "role": "reader"},
-                                          fields="id").execute()
+        try:
+            self.service.permissions().create(fileId=folder_id,
+                                              body={"type": "anyone", "role": "reader"},
+                                              fields="id").execute()
+        except Exception as exc:
+            raise DriveError("Drive public permission did not complete; retry to reconcile it") from exc
 
     def children_inherit_public(self, folder_id: str, child_ids: list[str]) -> bool:
         for child in child_ids:
@@ -157,10 +166,16 @@ class DrivePublisher:
             for file_id, name, mime, parents, data in expected:
                 found = self.drive.get_file(file_id)
                 if found is None:
-                    if mime == FOLDER_MIME:
-                        self.drive.create_folder(file_id, name)
-                    else:
-                        self.drive.upload(file_id, name, mime, parents[0], data)
+                    try:
+                        if mime == FOLDER_MIME:
+                            self.drive.create_folder(file_id, name)
+                        else:
+                            self.drive.upload(file_id, name, mime, parents[0], data)
+                    except Exception:
+                        # An uncertain response or 409 may mean this exact preallocated ID exists.
+                        found = self.drive.get_file(file_id)
+                        if found is None:
+                            raise
                     found = self.drive.get_file(file_id)
                 self._verify(found, file_id, name, mime, parents, data)
             self.store.advance_publication(url, "uploaded")

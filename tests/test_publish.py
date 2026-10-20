@@ -88,8 +88,8 @@ def test_claim_freezes_summary_and_pdf_and_refuses_changed_retry(tmp_path):
     assert Path(first["staged_pdf_path"]).read_bytes() == cache.read_bytes()
     assert Path(first["staged_pdf_path"]).stat().st_mode & 0o777 == 0o600
     cache.write_bytes(b"%PDF-1.4\nchanged")
-    with pytest.raises(CaseError, match="frozen"):
-        service.claim(URL, "Опрезан јавни опис.")
+    # Recovery uses the frozen staging copy, never a newer cache file.
+    assert service.claim(URL, "Опрезан јавни опис.")["pdf_sha256"] == first["pdf_sha256"]
     with pytest.raises(CaseError, match="frozen"):
         service.claim(URL, "Други опис")
     store.close()

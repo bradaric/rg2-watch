@@ -77,15 +77,15 @@ class CaseHandoff:
         summary = summary.strip()
         if len(summary.encode("utf-8")) > SUMMARY_MAX:
             raise CaseError(f"public summary is longer than {SUMMARY_MAX} bytes")
-        cached, digest = self._cached_pdf(url)
         summary_hash = hashlib.sha256(summary.encode("utf-8")).hexdigest()
         if existing:
-            if existing["summary_sha256"] != summary_hash or existing["pdf_sha256"] != digest:
+            if existing["summary_sha256"] != summary_hash:
                 raise CaseError("inputs differ from the frozen pending package; inspect the frozen case")
             staged = Path(existing["staged_pdf_path"])
-            if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != digest:
+            if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != existing["pdf_sha256"]:
                 raise CaseError("frozen staged PDF is missing or changed")
             return dict(existing)
+        cached, digest = self._cached_pdf(url)
         case = self._case(url)
         stage_dir = Path(self.cfg.db_path).resolve().parent / ".rg2watch-publications"
         stage_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
