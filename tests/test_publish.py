@@ -662,7 +662,7 @@ class _ProcessDrive:
         self.state["share_calls"] += 1
         self.state["public"] = True
 
-    def children_inherit_public(self, folder_id, child_ids):
+    def children_have_public_reader(self, child_ids):
         return self.state["public"] and all(i in self.state["files"] for i in child_ids)
 
 

@@ -126,7 +126,7 @@ class GoogleDriveAdapter:
     def _permissions(self, file_id: str) -> list[dict]:
         try:
             return self.service.permissions().list(
-                fileId=file_id, fields="permissions(id,type,role,permissionDetails)").execute().get(
+                fileId=file_id, fields="permissions(id,type,role)").execute().get(
                     "permissions", [])
         except Exception as exc:
             raise DriveError("Drive permissions could not be inspected") from exc
@@ -142,14 +142,12 @@ class GoogleDriveAdapter:
         except Exception as exc:
             raise DriveError("Drive public permission did not complete; retry to reconcile it") from exc
 
-    def children_inherit_public(self, folder_id: str, child_ids: list[str]) -> bool:
+    def children_have_public_reader(self, child_ids: list[str]) -> bool:
         for child in child_ids:
             permissions = self._permissions(child)
             if not any(
-                p.get("type") == "anyone" and p.get("role") == "reader" and any(
-                    detail.get("inherited") is True and detail.get("inheritedFrom") == folder_id
-                    for detail in p.get("permissionDetails", [])
-                ) for p in permissions
+                p.get("type") == "anyone" and p.get("role") == "reader"
+                for p in permissions
             ):
                 return False
         return True
@@ -187,6 +185,7 @@ class DrivePublisher:
             case = json.loads(publication["case_json"])
             folder_name = f"RG2 предмет — {case['municipality']} БМ {case['station']}"
             bound = publication.get("drive_account_id")
+            legacy_pending = bound is None and bool(publication["folder_id"])
             if bound is not None and bound != account_id:
                 raise DriveError("the pending publication belongs to a different Google Drive account")
             if bound is None and not publication["folder_id"]:
@@ -239,7 +238,8 @@ class DrivePublisher:
                         if found is None:
                             raise
                     found = self.drive.get_file(file_id)
-                self._verify(found, file_id, name, mime, parents, data)
+                self._verify(found, file_id, name, mime, parents, data,
+                             legacy_parent_recovery=legacy_pending and mime == FOLDER_MIME)
                 if mime == FOLDER_MIME:
                     owners = found.get("owners") or []
                     if len(owners) != 1 or owners[0].get("permissionId") != account_id:
@@ -269,7 +269,7 @@ class DrivePublisher:
                 if not self.drive.folder_is_public(publication["folder_id"]):
                     raise DriveError("Drive did not confirm anyone-with-link reader access")
                 children = [publication["pdf_file_id"], publication["text_file_id"]]
-                if not self.drive.children_inherit_public(publication["folder_id"], children):
+                if not self.drive.children_have_public_reader(children):
                     raise DriveError("Drive account policy did not expose both folder children")
                 final = "https://drive.google.com/drive/folders/" + publication["folder_id"]
                 viber = self.cases.viber_text(case, publication["summary"], final)
@@ -286,12 +286,16 @@ class DrivePublisher:
         return text.encode("utf-8")
 
     @staticmethod
-    def _verify(found, file_id, name, mime, parents, data):
+    def _verify(found, file_id, name, mime, parents, data, legacy_parent_recovery=False):
         if not found or found.get("id") != file_id or found.get("name") != name or \
                 found.get("mimeType") != mime or found.get("parents", []) != parents or found.get("trashed"):
             if mime == FOLDER_MIME and found and found.get("parents") != parents:
-                raise DriveError("move the existing empty case folder manually into the private "
-                                 "RG2 Watch folder, then retry")
+                if legacy_parent_recovery:
+                    raise DriveError("inspect the existing case folder for any files, confirm it is "
+                                     "empty, then move that same folder manually into the private "
+                                     "RG2 Watch folder and retry")
+                raise DriveError("the Drive case folder has an unexpected parent; investigate it "
+                                 "manually without moving or replacing it")
             raise DriveError("remote file metadata does not match the frozen case")
         if data is not None:
             expected = hashlib.md5(data).hexdigest()

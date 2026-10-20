@@ -37,6 +37,7 @@ class FakeDrive:
         self.public = False
         self.root_public = False
         self.share_calls = 0
+        self.share_targets = []
         self.crash = crash
         self.steps = []
 
@@ -77,10 +78,11 @@ class FakeDrive:
 
     def share_folder(self, folder_id):
         self.share_calls += 1
+        self.share_targets.append(folder_id)
         self.public = True
         self._step("share")
 
-    def children_inherit_public(self, folder_id, child_ids):
+    def children_have_public_reader(self, child_ids):
         return self.public and all(i in self.files for i in child_ids)
 
     def _step(self, name):
@@ -457,7 +459,7 @@ def test_legacy_pending_folder_requires_manual_move_then_reuses_same_id(tmp_path
         "trashed": False,
     }
     pub = DrivePublisher(cases, drive, root)
-    with pytest.raises(DriveError, match="move.*manually"):
+    with pytest.raises(DriveError, match="inspect.*confirm.*empty.*same.*manually"):
         pub.publish(URL, "Замрзнут јавни опис")
     assert store.get_publication(URL)["drive_account_id"] == drive.account
     assert not drive.public and drive.share_calls == 0
@@ -468,6 +470,25 @@ def test_legacy_pending_folder_requires_manual_move_then_reuses_same_id(tmp_path
     assert result["status"] == "published"
     assert set(drive.ids) <= set(drive.files)
     assert drive.share_calls == 1 and not drive.root_public
+    assert drive.share_targets == ["folder-id"]
+
+
+def test_nonlegacy_case_parent_mismatch_requires_investigation_not_move(tmp_path):
+    _, cases = setup_case(tmp_path)
+    drive = FakeDrive("folder")
+    pub = make_publisher(cases, drive, tmp_path)
+    with pytest.raises(SimulatedCrash):
+        pub.publish(URL, "Јавни опис")
+    drive.files["folder-id"]["parents"] = [drive.my_drive_root]
+
+    with pytest.raises(DriveError) as caught:
+        pub.publish(URL, "Јавни опис")
+
+    message = str(caught.value)
+    assert "investigate" in message
+    assert "empty" not in message
+    assert "move" not in message
+    assert not drive.public
 
 
 def test_visible_unexpected_child_blocks_case_upload_and_share(tmp_path):
@@ -560,19 +581,24 @@ class PermissionService:
         return PermissionRequest({"permissions": self.by_file[fileId]})
 
 
-def test_child_public_permission_must_be_inherited_from_expected_folder():
-    anyone_from = lambda parent: {
-        "type": "anyone", "role": "reader",
-        "permissionDetails": [{"inherited": True, "inheritedFrom": parent}],
-    }
+def test_my_drive_children_report_effective_anyone_reader_without_permission_details():
+    anyone_reader = {"id": "anyoneWithLink", "type": "anyone", "role": "reader"}
     service = PermissionService({
-        "pdf": [anyone_from("folder")],
-        "text": [anyone_from("other-public-folder")],
+        "pdf": [anyone_reader],
+        "text": [{"id": "owner", "type": "user", "role": "owner"}],
     })
     adapter = GoogleDriveAdapter(service)
-    assert not adapter.children_inherit_public("folder", ["pdf", "text"])
-    service.by_file["text"] = [anyone_from("folder")]
-    assert adapter.children_inherit_public("folder", ["pdf", "text"])
+    assert not adapter.children_have_public_reader(["pdf", "text"])
+    service.by_file["text"] = [anyone_reader]
+    assert adapter.children_have_public_reader(["pdf", "text"])
+
+
+def test_child_effective_access_requires_anyone_reader_role():
+    service = PermissionService({
+        "pdf": [{"id": "anyoneWithLink", "type": "anyone", "role": "writer"}],
+        "text": [{"id": "anyoneWithLink", "type": "anyone", "role": "reader"}],
+    })
+    assert not GoogleDriveAdapter(service).children_have_public_reader(["pdf", "text"])
 
 
 def test_adapter_inspects_every_page_of_app_visible_children():
