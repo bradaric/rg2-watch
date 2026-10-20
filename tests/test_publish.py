@@ -346,9 +346,16 @@ def test_page_has_explicit_safe_case_controls():
     assert '"case/prepare"' in html and '"case/publish"' in html
     assert 'document.createElement("textarea")' in html
     assert ".textContent" in html and "innerHTML = draft" not in html
-    assert "свако са везом" in html
+    for text in ("Prepare draft", "Publish public case", "Anyone with the link can open",
+                 "public case summary in Serbian Cyrillic", "Copy", "Copied",
+                 "Retry frozen publication", "Publication error:"):
+        assert text in html
+    for old in ("Припреми нацрт", "Објави јавни предмет", "Понови објаву замрзнутог предмета",
+                "Грешка:", "Копирано"):
+        assert old not in html
+    # Prepared/public content is still Serbian Cyrillic and is never translated here.
+    assert "area.value = result.summary" in html
     assert "area.value = pending.summary" in html
-    assert "Понови објаву замрзнутог предмета" in html
 
 
 def test_case_ui_reenables_prepare_and_publish_after_async_job_errors():
@@ -386,14 +393,14 @@ async function tick() { await new Promise(resolve => setImmediate(resolve)); }
 (async () => {
   jobs.prepare = {state: "error", error: "prepare boom"};
   let box = caseBox({u: "https://example.test/a.pdf", pdf: "hash"}); await tick();
-  let prep = findText(box, "Припреми нацрт"); prep.onclick(); await tick(); await tick();
+  let prep = findText(box, "Prepare draft"); prep.onclick(); await tick(); await tick();
   if (prep.disabled || !box.querySelector(".rvmsg").textContent.includes("prepare boom")) process.exit(2);
 
   jobs.prepare = {state: "done", result: {summary: "Опис"}};
   jobs.publish = {state: "error", error: "publish boom"};
   box = caseBox({u: "https://example.test/a.pdf", pdf: "hash"}); await tick();
-  prep = findText(box, "Припреми нацрт"); prep.onclick(); await tick(); await tick();
-  const publish = findText(box, "Објави јавни предмет");
+  prep = findText(box, "Prepare draft"); prep.onclick(); await tick(); await tick();
+  const publish = findText(box, "Publish public case");
   const confirm = find(box, x => x.tag === "input"); confirm.checked = true;
   publish.onclick(); await tick(); await tick();
   if (publish.disabled || !box.querySelector(".rvmsg").textContent.includes("publish boom")) process.exit(3);

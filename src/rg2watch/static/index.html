@@ -555,12 +555,12 @@ function caseFetch(path, options) {
     .then(res => res.json().catch(() => ({})).then(j => res.ok ? j : Promise.reject(new Error(j.error || "HTTP " + res.status))));
 }
 function copyButton(text) {
-  const b = mk("button", "Копирај"); b.type = "button";
-  b.onclick = () => navigator.clipboard.writeText(text).then(() => { b.textContent = "Копирано"; });
+  const b = mk("button", "Copy"); b.type = "button";
+  b.onclick = () => navigator.clipboard.writeText(text).then(() => { b.textContent = "Copied"; });
   return b;
 }
 function publishedCase(box, data) {
-  box.replaceChildren(mk("strong", "Предмет је већ јавно објављен"));
+  box.replaceChildren(mk("strong", "Case published"));
   const p = mk("div", null, "caseout"), a = link(data.url, data.url);
   p.append(a, " ", copyButton(data.url));
   const message = mk("div", data.viber_text || "", "caseout");
@@ -578,46 +578,46 @@ function waitCaseJob(id) {
 function caseBox(v) {
   const box = mk("div", null, "casebox"), msg = mk("span", null, "rvmsg");
   box.append(msg);
-  if (!HTTP) { msg.textContent = "Објављивање је доступно само преко локалног rg2watch сервера."; return box; }
+  if (!HTTP) { msg.textContent = "Publication is available only through the local rg2watch server."; return box; }
   const controls = pending => {
     const rv = rvOf(v);
-    if (!pending && (!rv || rv.v !== "escalate")) { msg.textContent = "Нова објава тражи најновију одлуку escalate за ову верзију."; return; }
-    if (!pending && !v.pdf) { msg.textContent = "Нема локално кешираног PDF-а; rg2watch га неће поново преузети са РИК-а."; return; }
-    const prep = mk("button", "Припреми нацрт"); prep.type = "button";
+    if (!pending && (!rv || rv.v !== "escalate")) { msg.textContent = "A new publication requires the latest verdict for this version to be escalate."; return; }
+    if (!pending && !v.pdf) { msg.textContent = "No locally cached PDF is available; rg2watch will not download it again from RIK."; return; }
+    const prep = mk("button", "Prepare draft"); prep.type = "button";
     const area = document.createElement("textarea"); area.hidden = true;
-    area.setAttribute("aria-label", "јавни опис предмета на српској ћирилици");
-    const label = mk("label", " Објавом фасциклу може да отвори свако са везом.", "publicwarn");
+    area.setAttribute("aria-label", "public case summary in Serbian Cyrillic");
+    const label = mk("label", " Anyone with the link can open the published case folder.", "publicwarn");
     const confirm = document.createElement("input"); confirm.type = "checkbox"; label.prepend(confirm);
-    const publish = mk("button", "Објави јавни предмет"); publish.type = "button"; publish.hidden = true;
+    const publish = mk("button", "Publish public case"); publish.type = "button"; publish.hidden = true;
     prep.onclick = () => {
-      prep.disabled = true; msg.textContent = "Припрема... Интерна напомена се шаље AI провајдеру ако је доступан.";
+      prep.disabled = true; msg.textContent = "Preparing... The internal note is sent to the AI provider if available.";
       caseFetch("case/prepare", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"}, body: JSON.stringify({url: v.u})})
         .then(j => waitCaseJob(j.job_id)).then(result => {
           area.value = result.summary || ""; area.hidden = publish.hidden = label.hidden = false;
-          msg.textContent = result.warning ? "AI нацрт није доступан: " + result.warning : "Проверите и измените нацрт пре објаве.";
+          msg.textContent = result.warning ? "AI draft failed; use the manual template." : "Review and edit the draft before publishing.";
           prep.disabled = false;
-        }).catch(e => { prep.disabled = false; msg.textContent = "Грешка: " + e.message; });
+        }).catch(e => { prep.disabled = false; msg.textContent = "Preparation error: " + e.message; });
     };
     label.hidden = true;
     publish.onclick = () => {
-      if (!confirm.checked) { msg.textContent = "Потврдите да фасцикла постаје доступна свакоме са везом."; return; }
-      publish.disabled = true; msg.textContent = "Отпремање је у току; остале контроле остају доступне.";
+      if (!confirm.checked) { msg.textContent = "Confirm that anyone with the link may open the case folder."; return; }
+      publish.disabled = true; msg.textContent = "Uploading; other controls remain available.";
       caseFetch("case/publish", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
         body: JSON.stringify({url: v.u, summary: area.value, confirm: true})})
         .then(j => waitCaseJob(j.job_id)).then(result => publishedCase(box, result))
-        .catch(e => { publish.disabled = false; msg.textContent = "Грешка: " + e.message; });
+        .catch(e => { publish.disabled = false; msg.textContent = "Publication error: " + e.message; });
     };
     if (pending) {
       area.value = pending.summary || ""; area.hidden = label.hidden = publish.hidden = false;
-      area.readOnly = true; publish.textContent = "Понови објаву замрзнутог предмета";
-      msg.textContent = "Постоји замрзнут незавршен предмет. Проверите текст и изричито поновите објаву; кеш и нови нацрт се не користе.";
+      area.readOnly = true; publish.textContent = "Retry frozen publication";
+      msg.textContent = "A frozen publication is pending. Review its text and explicitly retry; the cache and a new draft are not used.";
       box.append(" ", area, label, publish);
     } else box.append(" ", prep, area, label, publish);
   };
   caseFetch("case/publication?url=" + encodeURIComponent(v.u)).then(data => {
     if (data.status === "published") publishedCase(box, data);
     else controls(data.status && data.status !== "none" ? data : null);
-  }).catch(e => { msg.textContent = "Стање објаве није доступно: " + e.message; });
+  }).catch(e => { msg.textContent = "Publication status unavailable: " + e.message; });
   return box;
 }
 function rowOf(id) {
