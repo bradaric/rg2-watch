@@ -1,0 +1,1145 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rg2-watch</title>
+<link rel="stylesheet" href="dataTables.dataTables.min.css">
+<style>
+/* tokens: 4px spacing scale, system fonts only (works offline) */
+:root{color-scheme:light dark;
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--r:6px;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --bg:#f4f5f7;--panel:#fff;--surface:#f7f8fa;--surface2:#eceff3;--fg:#14181d;--mut:#5a636e;
+  --line:#e1e5ea;--line2:#c4cbd3;--accent:#0b57d0;--accent-bg:#e8f0fe;--link:#0b57d0;
+  --hi:#b42318;--hi-fg:#fff;--md:#8a5300;--md-bg:#f7b84b;--md-fg:#2b1a00;--lo:#3d5a80;--good:#18794e;
+  --warn:#a35f00;--warn-bg:#fff5e0;--warn-line:#f0c46c;--banner:#b42318;--track:#e3e7ec;
+  --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08)}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0d1014;--panel:#151a20;--surface:#1a2027;--surface2:#232a33;--fg:#e8ebef;--mut:#9aa4b0;
+  --line:#262d36;--line2:#3a434e;--accent:#8ab4ff;--accent-bg:#1c2a44;--link:#8ab4ff;
+  --hi:#e5484d;--hi-fg:#fff;--md:#f5b54a;--md-bg:#f5b54a;--md-fg:#231700;--lo:#a9bdd6;--good:#4cc38a;
+  --warn:#f0a73a;--warn-bg:#2a2112;--warn-line:#6b4d17;--banner:#c62828;--track:#252c35;
+  --shadow:0 1px 2px rgba(0,0,0,.4)}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;padding:var(--s4) var(--s5) var(--s6);background:var(--bg);color:var(--fg);font:14px/1.45 var(--font)}
+a{color:var(--link);text-underline-offset:2px}
+a:hover{text-decoration-thickness:2px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+h1{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s1) var(--s3);font-size:20px;font-weight:750;letter-spacing:-.01em;margin:0 0 var(--s3)}
+h1 #built{font-size:13px;font-weight:400;font-variant-numeric:tabular-nums}
+h3{font-size:11.5px;font-weight:700;margin:0 0 var(--s2);text-transform:uppercase;letter-spacing:.07em;color:var(--mut)}
+.mut{color:var(--mut)}
+/* alarms: never subtle */
+#banner{display:none;margin:0 0 var(--s3);padding:10px var(--s4);border-radius:var(--r);background:var(--banner);color:#fff;font-weight:700;font-size:15px;box-shadow:var(--shadow)}
+#banner::before{content:"!";display:inline-block;width:1.45em;height:1.45em;line-height:1.45em;text-align:center;border-radius:50%;background:#fff;color:var(--banner);font-weight:900;margin-right:var(--s2)}
+.warnbox{margin:0 0 var(--s3);padding:var(--s2) var(--s3);background:var(--warn-bg);border:1px solid var(--warn-line);border-left:5px solid var(--warn);border-radius:var(--r);font-weight:650}
+.warnbox button{margin-left:var(--s2)}
+/* status panel */
+#status{display:flex;flex-wrap:wrap;gap:var(--s3);margin-bottom:var(--s4)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:var(--s3) var(--s4);box-shadow:var(--shadow);min-width:0;flex:1 1 280px}
+.card dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:3px var(--s3)}
+.card dt{color:var(--mut)}.card dd{margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.card.wide{flex-basis:100%;max-height:19rem;overflow:auto;padding-top:0}
+.card.wide h3{position:sticky;top:0;z-index:1;background:var(--panel);margin:0;padding:var(--s3) 0 var(--s2)}
+.card table{width:100%;border-collapse:collapse}
+.card td{padding:4px var(--s2) 4px 0;border-top:1px solid var(--line);vertical-align:baseline}
+.card td:first-child{white-space:nowrap;font-variant-numeric:tabular-nums}
+.card td:nth-child(3){font-weight:650;white-space:nowrap}
+.card td:nth-child(4){white-space:nowrap}
+.card td.lk{white-space:nowrap;text-align:right}
+.card td.lk a,.card td.lk .chip,.lk a,.lk .chip{font-size:11px;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:9px;background:none;color:inherit;text-decoration:none;cursor:pointer;font-weight:400;line-height:1.5;min-height:0;box-shadow:none}
+.bad{color:var(--hi);font-weight:700}.warn{color:var(--md);font-weight:700}.good{color:var(--good);font-weight:600}
+/* severity badges: fill style differs (solid dark / solid light / outline) and the word is always shown */
+.b{display:inline-block;min-width:5.6em;padding:1px 6px;border:1.5px solid transparent;border-radius:4px;font-size:10.5px;line-height:15px;font-weight:800;letter-spacing:.06em;text-align:center;margin-right:var(--s2);vertical-align:1px;white-space:nowrap}
+.b.HIGH{background:var(--hi);border-color:var(--hi);color:var(--hi-fg)}
+.b.MEDIUM{background:var(--md-bg);border-color:var(--md-bg);color:var(--md-fg)}
+.b.LOW{background:transparent;border-color:var(--lo);color:var(--lo);font-weight:700}
+.b.dis{outline:2px solid var(--hi);outline-offset:2px}
+/* controls */
+input,select,button{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);min-height:30px;padding:3px var(--s2)}
+button{cursor:pointer;padding:3px var(--s3);font-weight:550}
+button:hover,select:hover{border-color:var(--mut)}
+input[type=checkbox]{min-height:0;width:15px;height:15px;margin:0;accent-color:var(--accent);vertical-align:-2px}
+input[type=search]{width:15em}
+#ctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;margin-bottom:var(--s3);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
+#ctl>label{white-space:nowrap;display:inline-flex;align-items:center;gap:6px;color:var(--mut)}
+#ctl>label:has(>input[type=checkbox]){min-height:30px;padding:0 10px;border:1px solid var(--line2);border-radius:15px;color:var(--fg);cursor:pointer;user-select:none}
+#ctl>label:has(>input:checked){background:var(--accent-bg);border-color:var(--accent)}
+#ctl>label:has(>input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+#ctl>label[hidden]{display:none}
+#rulesbox,#colbox{position:relative}
+#rulesbox summary,#colbox summary{cursor:pointer;min-height:30px;display:flex;align-items:center;padding:0 var(--s3);border:1px solid var(--line2);border-radius:var(--r);background:var(--panel);list-style:none;white-space:nowrap}
+#rulesbox summary::-webkit-details-marker,#colbox summary::-webkit-details-marker{display:none}
+#rulesbox summary::after,#colbox summary::after{content:"";margin-left:var(--s2);border:4px solid transparent;border-top-color:currentColor;border-bottom:0}
+#rulesbox[open] summary,#colbox[open] summary{border-color:var(--accent);background:var(--accent-bg)}
+#rules,#cols{position:absolute;z-index:5;top:100%;left:0;margin-top:var(--s1);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line2);border-radius:8px;max-height:18em;overflow:auto;display:grid;grid-template-columns:repeat(3,auto);gap:var(--s1) var(--s4);box-shadow:0 8px 24px rgba(0,0,0,.18)}
+#legendbox{position:relative}
+#legendbox summary{cursor:pointer;min-height:30px;display:flex;align-items:center;padding:0 var(--s3);border:1px solid var(--line2);border-radius:var(--r);background:var(--panel);list-style:none;white-space:nowrap}
+#legendbox summary::-webkit-details-marker{display:none}
+#legendbox summary::after{content:"";margin-left:var(--s2);border:4px solid transparent;border-top-color:currentColor;border-bottom:0}
+#legendbox[open] summary{border-color:var(--accent);background:var(--accent-bg)}
+#legend{position:absolute;z-index:6;top:100%;right:0;margin:var(--s1) 0 0;padding:var(--s2) var(--s3);width:min(40em,90vw);max-height:24em;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);display:grid;grid-template-columns:auto 1fr;gap:3px var(--s3)}
+#legend dt{font-weight:700;font-variant-numeric:tabular-nums}
+#legend dd{margin:0;color:var(--fg)}
+.rc{text-decoration:underline dotted;text-decoration-thickness:1px;text-underline-offset:3px;cursor:help;position:relative}
+.rc:focus-visible::after{content:attr(data-d);position:absolute;left:0;top:calc(100% + 6px);z-index:30;width:max-content;max-width:26em;white-space:normal;padding:5px 9px;border-radius:5px;background:var(--fg);color:var(--panel);font-size:12.5px;font-weight:500;line-height:1.35;letter-spacing:0;text-transform:none;box-shadow:0 4px 12px rgba(0,0,0,.25)}
+#rules label,#cols label{white-space:nowrap;display:flex;align-items:center;gap:6px;color:var(--fg);padding:2px 0}
+/* tabs */
+#tabs{display:flex;gap:var(--s1);margin:0 0 var(--s3);border-bottom:1px solid var(--line2)}
+#tabs button{border:0;border-bottom:3px solid transparent;border-radius:0;background:none;padding:var(--s2) var(--s3);margin-bottom:-1px;color:var(--mut);font-weight:600;font-size:15px}
+#tabs button:hover{color:var(--fg)}
+#tabs button.on{border-bottom-color:var(--accent);color:var(--fg)}
+#tabs button[hidden]{display:none}
+/* tables */
+#wrap,.wrapx,#toverall{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:0 var(--s3);box-shadow:var(--shadow)}
+#wrap{overflow-x:auto}
+.dt-container{color:var(--fg)}
+div.dt-container div.dt-layout-row{margin:var(--s2) 0}
+div.dt-container .dt-input{background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);padding:3px var(--s2)}
+div.dt-container .dt-length label,div.dt-container .dt-search label,div.dt-container .dt-info{color:var(--mut)}
+div.dt-container .dt-search input{margin-left:var(--s2)}
+div.dt-container .dt-paging .dt-paging-button{border:1px solid transparent;border-radius:var(--r);padding:4px 10px;margin-left:2px;background:none!important;color:var(--fg)!important;font-variant-numeric:tabular-nums}
+div.dt-container .dt-paging .dt-paging-button:hover{background:var(--surface2)!important;border-color:var(--line2);color:var(--fg)!important}
+div.dt-container .dt-paging .dt-paging-button.current,div.dt-container .dt-paging .dt-paging-button.current:hover{background:var(--accent-bg)!important;border-color:var(--accent);color:var(--fg)!important;font-weight:700}
+div.dt-container .dt-paging .dt-paging-button.disabled,div.dt-container .dt-paging .dt-paging-button.disabled:hover{background:none!important;border-color:transparent;color:var(--mut)!important;opacity:.6}
+table.dataTable>thead>tr>*{color:var(--mut);white-space:nowrap;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;border-bottom:2px solid var(--line2)!important;padding:10px var(--s2)!important;background:var(--panel)}
+table.dataTable>thead>tr>th.dt-ordering-asc,table.dataTable>thead>tr>th.dt-ordering-desc{color:var(--fg)}
+table.dataTable>thead>tr>th.dt-orderable-asc:hover,table.dataTable>thead>tr>th.dt-orderable-desc:hover{outline:none;color:var(--fg)}
+table.dataTable>tbody>tr>*{box-shadow:none!important;background:transparent!important;color:var(--fg);vertical-align:top;padding:var(--s2)!important;border-top:1px solid var(--line)!important}
+table.dataTable>tbody>tr:first-child>*{border-top:0!important}
+table.dataTable.display>tbody>tr:hover>*{background:var(--surface)!important}
+table.dataTable>tbody>tr.dt-hasChild>*{background:var(--surface)!important}
+table.dataTable>tbody>tr.child>td{background:var(--surface)!important;border-top:0!important;padding:var(--s1) var(--s3) var(--s3)!important}
+table.dataTable tbody td.dt-control{width:28px;padding-top:11px!important}
+table.dataTable tbody td.dt-control:before{border-left-color:var(--mut)}
+table.dataTable tbody tr.dt-hasChild td.dt-control:before{border-top-color:var(--accent);border-left-color:transparent}
+table.dataTable td.dt-empty{color:var(--mut);padding:var(--s5)!important}
+#forms th,#forms td{text-align:left!important}
+table.dataTable td.dt-right,table.dataTable th.dt-right{text-align:right;font-variant-numeric:tabular-nums}
+table.dataTable td.scol{min-width:11em}
+table.dataTable td.scol::first-line{font-weight:650}
+table.dataTable td.nw{white-space:nowrap}
+#forms td.nw{font-variant-numeric:tabular-nums}
+table.dataTable td.fcol{min-width:24em;width:40%;white-space:normal;overflow-wrap:anywhere}
+table.dataTable th.dt-orderable-none .dt-column-order{display:none}
+.f{display:flex;align-items:baseline;margin:0 0 var(--s1)}
+.f .b{flex:none}
+.note{display:block;color:var(--mut);font-size:12px;font-style:italic;margin-top:2px}
+td.disagree{color:var(--hi);font-weight:700}
+.sub{margin:var(--s1) 0 var(--s1) var(--s5);padding-left:var(--s3);border-left:2px solid var(--line2)}
+.sub strong{margin-right:var(--s1)}
+.sub .f{margin-top:var(--s1)}
+/* review verdicts: pill shape (severity badges are square), word always shown */
+.rv{display:inline-block;padding:0 8px;border:1.5px solid transparent;border-radius:999px;font-size:11px;line-height:17px;font-weight:750;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+.rv-escalate{background:var(--fg);border-color:var(--fg);color:var(--panel)}
+.rv-ok{border-color:var(--good);color:var(--good)}
+.rv-unsure{border-style:dashed;border-color:var(--mut);color:var(--mut)}
+.rv.pending{opacity:.55}
+.rv-older{display:table;margin-top:var(--s1);font-size:10px;line-height:15px}
+td .rv+.rv-older{margin-top:var(--s1)}
+.review{margin:var(--s1) 0 var(--s2);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+.rvhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s2);margin-bottom:var(--s2)}
+.rvnote{overflow-wrap:anywhere}
+.rvctl{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
+.rvctl input{flex:1 1 16em;max-width:34em}
+.vb{min-width:6.5em;text-transform:uppercase;font-size:12px;letter-spacing:.04em;font-weight:700}
+.vb[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.vb-escalate[aria-pressed=true]{background:var(--fg);border-color:var(--fg);color:var(--panel);box-shadow:none}
+button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
+.rvmsg{color:var(--hi);font-weight:700}
+#texcl td button{white-space:nowrap;min-height:26px;padding:1px 10px;font-size:13px}
+/* results */
+#tctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;margin:0 0 var(--s3)}
+#tctl label{color:var(--mut);display:inline-flex;align-items:center;gap:6px}
+#resview h3{margin:var(--s5) 0 var(--s2)}
+#toverall{overflow-x:auto;margin-bottom:var(--s3);padding:var(--s1) var(--s3)}
+#toverall table{border-collapse:collapse;font-variant-numeric:tabular-nums}
+#toverall th,#toverall td{padding:6px 10px;text-align:right;white-space:nowrap}
+#toverall th{color:var(--mut);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border-bottom:2px solid var(--line2)}
+#toverall td{font-weight:650}
+#toverall th:first-child,#toverall td:first-child{text-align:left}
+.wrapx{padding:0 var(--s3)}
+#tnotes,#tcor{margin:0;padding-left:var(--s5)}
+.rg7{font-weight:650}
+#tmhint{margin:0 0 var(--s2)}
+table.lists{border-collapse:collapse;margin:var(--s1) 0 var(--s2) var(--s5);font-variant-numeric:tabular-nums}
+table.lists th,table.lists td{padding:3px var(--s3);text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+table.lists th{color:var(--mut);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+table.lists th:nth-child(2),table.lists td:nth-child(2){text-align:left;font-weight:600;white-space:normal;min-width:16em}
+table.lists td.no{color:var(--mut)}
+table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
+/* hero: results-graphic look */
+#hero{border:1px solid var(--line);border-radius:10px;padding:var(--s4) var(--s5) var(--s5);margin-bottom:var(--s4);background:var(--panel);box-shadow:var(--shadow)}
+#herobar{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;margin-bottom:var(--s3)}
+#herobtn{margin-left:auto}
+#herohead{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2) var(--s3);padding-bottom:var(--s3);border-bottom:3px solid var(--fg)}
+.kicker{display:inline-block;background:var(--warn);color:#fff;font-weight:800;letter-spacing:.1em;text-transform:uppercase;font-size:clamp(.75rem,1vw,1.15rem);padding:.2em .6em;border-radius:3px}
+@media (prefers-color-scheme:dark){.kicker{color:#1d1300}}
+#herotitle{font-size:clamp(1.3rem,2.4vw,2.8rem);font-weight:800;letter-spacing:-.015em;line-height:1.15;overflow-wrap:anywhere}
+#heronums{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0;margin:var(--s4) 0 var(--s3)}
+.tile{padding:var(--s2) var(--s4);border-left:1px solid var(--line2);min-width:0}
+.tile:first-child{border-left:0;padding-left:0}
+.tile .k{color:var(--mut);font-size:clamp(.72rem,.9vw,1.1rem);font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.tile .s{color:var(--mut);font-size:clamp(.8rem,1vw,1.25rem);font-variant-numeric:tabular-nums}
+.tile .v{font-size:clamp(2.1rem,4.4vw,5.6rem);font-weight:800;line-height:1.05;letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin:2px 0 var(--s1);white-space:nowrap}
+.prog{height:6px;background:var(--track);border-radius:3px;overflow:hidden;margin:var(--s1) 0 var(--s1)}
+.prog>div{height:100%;width:0;background:var(--accent);transition:width .8s ease}
+#herochart{margin:var(--s3) 0 var(--s2)}
+.hrow{display:grid;grid-template-columns:1fr minmax(8.5em,20%);grid-template-areas:"hd hd" "tr val";gap:.12em var(--s4);align-items:center;padding:.3em 0;border-top:1px solid var(--line);font-size:clamp(1rem,1.8vw,2.1rem)}
+.hrow:first-child{border-top:0}
+.hrow[hidden]{display:none}
+.hrow .hd{grid-area:hd;display:flex;align-items:baseline;gap:.45em;font-size:.8em;font-weight:700;line-height:1.15;min-width:0}
+.hrow .nm{overflow-wrap:anywhere}
+.hrow .no{flex:none;min-width:1.65em;padding:.05em .3em;border-radius:4px;background:var(--fg);color:var(--panel);font-size:.85em;line-height:1.2;text-align:center;font-variant-numeric:tabular-nums}
+.hrow .no[hidden]{display:none}
+.hrow .track{grid-area:tr}.hrow .val{grid-area:val}
+.hrow .track{background:var(--track);border-radius:3px;height:1.05em;overflow:hidden}
+.hrow .fill{height:100%;width:0;min-width:3px;border-radius:0 3px 3px 0;transition:width .8s ease,background-color .3s}
+.hrow .val{text-align:right;font-variant-numeric:tabular-nums;white-space:pre;font-weight:700;letter-spacing:-.01em}
+#heronote{font-size:clamp(1rem,1.5vw,1.7rem);font-weight:700;color:var(--md);margin:var(--s2) 0}
+#heronote:empty{display:none}
+#heronames{margin-top:var(--s3);font-size:clamp(.9rem,1.2vw,1.45rem)}
+#herofoot{margin-top:var(--s3);padding-top:var(--s2);border-top:1px solid var(--line2);font-size:clamp(.8rem,1.05vw,1.3rem);color:var(--fg);font-weight:500}
+#herofoot .stale{display:inline-block;margin-left:var(--s1);padding:0 .45em;border-radius:4px;background:var(--hi);color:#fff;font-weight:700}
+@keyframes flash{from{background:rgba(230,159,0,.45)}to{background:transparent}}
+.flash{animation:flash 1.2s}
+body.hero>*:not(#resview){display:none!important}
+body.hero #resview>*:not(#hero){display:none}
+body.hero{padding:2.2vh 3vw;min-height:100vh}
+body.hero #hero{border:0;background:transparent;box-shadow:none;padding:0;margin:0}
+body.hero #herobar{opacity:.55}
+body.hero #herobar:hover,body.hero #herobar:focus-within{opacity:1}
+body.hero .tile .v{font-size:clamp(2.4rem,4.2vw,5.4rem)}
+body.hero #heronums{margin:var(--s3) 0 var(--s2)}
+body.hero .hrow{font-size:clamp(1.1rem,1.55vw,1.95rem);padding:.14em 0}
+body.hero .hrow .track{height:.9em}
+.hrow .val{line-height:1.1}
+body.hero .hrow{padding:.1em 0}
+body.hero #herohead{padding-bottom:var(--s2)}
+body.hero #herobar{margin-bottom:var(--s2)}
+body.hero #herochart{margin:var(--s2) 0 0}
+@media (min-width:1200px){#wrap{overflow:visible}#forms>thead>tr>th{position:sticky;top:0;z-index:2}}
+@media (max-width:700px){
+  body{padding:var(--s3) var(--s3) var(--s5)}
+  #status{grid-template-columns:1fr;gap:var(--s2)}
+  .card.wide table{display:block}
+  .card.wide tr{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px var(--s2);padding:6px 0;border-top:1px solid var(--line)}
+  .card.wide td{border:0;padding:0}
+  .card.wide td:nth-child(5){flex-basis:100%}
+  .card.wide td:empty{display:none}
+  #ctl{padding:var(--s2)}
+  input[type=search]{width:100%;flex:1 1 100%}
+  table.dataTable td.fcol{min-width:16em}
+  #rules,#cols{grid-template-columns:repeat(2,auto)}
+  .review{position:sticky;left:0;max-width:calc(100vw - 64px)}
+  .rvctl input{flex-basis:100%}
+  #hero{padding:var(--s3)}
+  .tile{border-left:0;padding:var(--s2) 0;border-top:1px solid var(--line)}
+  .tile:first-child{border-top:0}
+  .hrow{grid-template-columns:1fr auto;gap:var(--s1) var(--s3)}
+  .hrow .hd{font-size:.9em}
+}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+</style></head><body>
+<h1>rg2-watch <span class="mut" id="ele"></span> <span class="mut" id="built"></span></h1>
+<div id="banner"></div>
+<div id="status"></div>
+<div id="tabs"><button id="tabforms" class="on">Forms</button><button id="tabres">Results (unofficial)</button></div>
+<div id="formsview">
+<div id="ctl">
+<input id="q" type="search" placeholder="search">
+<select id="m"></select><select id="e"></select><select id="mod"></select>
+<label>min severity <select id="sev"><option value="0">any</option><option value="1">LOW</option><option value="2">MEDIUM</option><option value="3">HIGH</option></select></label>
+<details id="rulesbox"><summary id="rulessum">rules: any</summary><div id="rules"></div></details>
+<label>review <select id="rv"><option value="">any</option><option value="todo">to review</option><option value="escalate">escalated</option><option value="unsure">unsure</option><option value="ok">ok</option></select></label>
+<label><input type="checkbox" id="fl"> with findings</label>
+<label><input type="checkbox" id="rp"> replaced</label>
+<label><input type="checkbox" id="rm"> removed</label>
+<label><input type="checkbox" id="fa"> analysis failed</label>
+<label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by RG-7</label>
+<label><input type="checkbox" id="loc"> has local copy</label>
+<label><input type="checkbox" id="dis"> models disagree</label>
+<details id="colbox"><summary>columns</summary><div id="cols"></div></details>
+<details id="legendbox"><summary>rule codes</summary><dl id="legend"></dl></details>
+<label><input type="checkbox" id="auto" checked> auto-refresh</label>
+<button id="esccsv" type="button">Escalated CSV</button>
+</div>
+<div id="onlyid" class="warnbox" hidden><span id="onlytxt"></span> <button id="onlyclear">show all forms</button></div>
+<div id="wrap"><table id="forms" class="display" style="width:100%"></table></div>
+</div>
+<div id="resview" hidden>
+<section id="hero">
+<div id="herobar"><select id="hmuni" aria-label="municipality"></select>
+<select id="hmode" aria-label="forms counted"><option value="cl">clean forms only (leave out flagged)</option><option value="all" selected>all counted forms</option></select>
+<select id="hview" aria-label="numbers"><option value="corrected" selected>with RG-7 corrections</option><option value="filed">as filed on RG-2 forms</option><option value="diff">difference (corrected − as filed)</option></select>
+<button id="herobtn">Presentation mode</button></div>
+<div id="herohead"><span class="kicker">Unofficial</span><div id="herotitle"></div></div>
+<div id="heronums">
+<div class="tile"><div class="k">Turnout</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
+<div class="tile"><div class="k">Stations counted</div><div class="v" id="hv-st">-</div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
+<div class="tile"><div class="k">Forms</div><div class="v" id="hv-forms">-</div><div class="s">clean / flagged</div></div>
+<div class="tile"><div class="k">Valid votes</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"></div></div>
+</div>
+<div id="heronames" class="warnbox" hidden></div>
+<div id="heronote"></div>
+<div id="herochart"></div>
+<div id="herofoot"></div>
+</section>
+<p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
+<p id="tscope" class="warnbox" hidden></p>
+<div id="tctl"><label>totals over <select id="tmode"><option value="cl">clean forms only (leave out flagged)</option><option value="all" selected>all counted forms</option></select></label>
+<label>numbers: <select id="tview"><option value="corrected" selected>with RG-7 corrections</option><option value="filed">as filed on RG-2 forms</option><option value="diff">difference (corrected − as filed)</option></select></label>
+<button id="csv">Download CSV</button></div>
+<h3>Overall</h3><div id="toverall"></div>
+<h3>Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
+<h3>Flagged forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
+<h3 id="tcorhead" hidden>Corrected by RG-7 (corrected numbers are counted)</h3><ul id="tcor"></ul>
+<h3 id="tnoteshead" hidden>Notes (not flagged)</h3><ul id="tnotes"></ul>
+</div>
+<script src="jquery.min.js"></script>
+<script src="dataTables.min.js"></script>
+<script>
+"use strict";
+// All data reaches the DOM through DataTable.render.text() / escapeHtml, textContent or DOM
+// construction: never innerHTML with data.
+const $ = id => document.getElementById(id);
+const HTTP = /^https?:$/.test(location.protocol);
+const esc = DataTable.util.escapeHtml;
+const TZ = "Europe/Belgrade";
+const SEV = ["", "LOW", "MEDIUM", "HIGH"];
+const STATUS_EVERY_MS = 10000, STALE_S = 60;
+const pad = n => String(n).padStart(2, "0");
+// Serbian local time, DD/MM/YYYY HH:MM, from "YYYY-MM-DDTHH:MM..." (already Serbian local)
+function when(s) {
+  const m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)/.exec(s || "");
+  return m ? m[3] + "/" + m[2] + "/" + m[1] + " " + m[4] + ":" + m[5] : s || "";
+}
+const fmtEpoch = new Intl.DateTimeFormat("en-GB", {timeZone: TZ, day: "2-digit", month: "2-digit",
+  year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+function epoch(t) {
+  if (t == null) return "-";
+  const p = Object.fromEntries(fmtEpoch.formatToParts(new Date(t * 1000)).map(x => [x.type, x.value]));
+  return p.day + "/" + p.month + "/" + p.year + " " + p.hour + ":" + p.minute;
+}
+function dur(s) {
+  if (s == null) return "-";
+  s = Math.round(s);
+  return s < 90 ? s + " s" : s < 5400 ? Math.round(s / 60) + " min" : Math.floor(s / 3600) + " h " + pad(Math.round(s % 3600 / 60)) + " min";
+}
+const ago = t => t == null ? "-" : dur(Date.now() / 1000 - t) + " ago";
+function mk(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text != null) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+function link(text, href) {
+  const a = mk("a", text);
+  a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer";
+  return a;
+}
+const HEX = /^[0-9a-f]{64}$/;
+const localHref = h => HEX.test(h || "") ? "pdfs/" + h + ".pdf" : null;
+const rikHref = u => /^https?:\/\//i.test(u || "") ? u : null;
+
+// ---- status panel -------------------------------------------------------------------------
+let S = null;
+function card(title, pairs, cls) {
+  const c = mk("div", null, "card" + (cls ? " " + cls : ""));
+  c.append(mk("h3", title));
+  const dl = mk("dl");
+  for (const [k, v, c2] of pairs) dl.append(mk("dt", k), mk("dd", v, c2));
+  c.append(dl);
+  return c;
+}
+// tab title "[N] <election> - <id> | rg2-watch"; N = forms to review; pause-sign prefix when the watcher is down
+// one shared shortener: drops the " - Записници" / " - Zapisnici" segment wherever it sits
+const shortTitle = t => (t || "").split(" - ").filter(s => !/^(записници|zapisnici)$/i.test(s.trim())).join(" - ");
+const cutTitle = s => {  // tab title only: at most ~50 chars, cut at a word boundary
+  if (s.length <= 50) return s;
+  const cut = s.slice(0, 50), sp = cut.lastIndexOf(" ");
+  return (sp > 0 ? cut.slice(0, sp) : cut) + "\u2026";
+};
+function setTitle() {
+  const el = (S && S.parent) || Object.keys(D.elections || {}).sort().pop() || "";
+  if (!el) { document.title = "rg2watch"; $("ele").textContent = ""; return; }
+  const title = (D.elections || {})[el] || (S && S.parent === el && S.title) || el;
+  const todo = rows.filter(r => r.el === el && isTodo(r)).length;
+  const label = cutTitle(shortTitle(title)), id = label === el ? "" : " · " + el;
+  const down = !S || !S.watching || Date.now() / 1000 - S.ts > STALE_S;
+  document.title = (down ? "⏸ " : "") + (todo ? "[" + todo + "] " : "") + label + id + " | rg2-watch";
+  $("ele").textContent = title === el ? el : shortTitle(title) + " · " + el;
+}
+function alertForm(url) {  // [row, version] of the form an alert is about (from the data), or null
+  if (!url) return null;
+  for (const r of D.rows) for (const v of [r, ...r.v]) if (v.u === url) return [r, v];
+  return null;
+}
+function renderStatus() {
+  setTitle();
+  const box = $("status"), ban = $("banner");
+  if (!S) { box.replaceChildren(); ban.style.display = "block"; ban.textContent = "no status yet"; return; }
+  const age = Date.now() / 1000 - S.ts;
+  const down = !S.watching || age > STALE_S;
+  const mix = !!(D.db && S.db && D.db !== S.db);
+  ban.style.display = down || mix ? "block" : "none";
+  ban.textContent = mix ? "status and data are from different databases (" + S.db + " / " + D.db + "): wrong folder or two processes writing here"
+    : !S.watching ? "watcher not running (status written " + epoch(S.ts) + ")"
+    : "watcher not running / stalled since " + epoch(S.ts).slice(-5);
+  const w = S.watcher, d = S.docs, a = S.analysis, cards = [];
+  if (w) {
+    const h = w.health === "blind" ? "blind since " + epoch(w.last_ok) : w.health === "blocked" ? "blocked, paused until " + epoch(w.paused_until) : w.health;
+    cards.push(card("Watcher", [
+      ["running since", epoch(w.started)], ["last tick", ago(w.last_tick)], ["last RIK request ok", ago(w.last_ok)],
+      ["RIK health", h, w.health === "ok" ? "good" : w.health === "slow" ? "warn" : "bad"],
+      ["rate", w.rps + " / " + w.max_rps + " req/s"], ["requests this tick", w.tick_used + " / " + w.tick_budget],
+      ["lanes", Object.entries(w.lanes).map(([k, v]) => k + " " + ago(v)).join(", ")],
+      ["municipalities", w.only ? w.only.join(", ") : "all"]]));
+  }
+  cards.push(card("Documents", [
+    ["RG-2 seen", d.rg2_seen + " of " + (d.stations || "?") + " stations" + (d.rg2_rik != null ? " (RIK lists " + d.rg2_rik + ")" : "")],
+    ["new, last 10 / 60 min", d.new10 + " / " + d.new60], ["replaced", d.replaced], ["removed", d.removed],
+    ["RG-7 decisions", d.rg7 ? "read " + d.rg7.read + " / pending " + d.rg7.pending : "-"],
+    ["rare types", Object.entries(d.rare).map(([k, v]) => k + ": " + v).join(", ") || "none"]]));
+  const p = a.paused;
+  cards.push(card("Analysis", a.on ? [
+    ["model", a.model], ["queued / running", a.queued + " / " + a.running],
+    ["done / failed / retrying", a.done + " / " + a.failed + " / " + a.retrying],
+    ["state", p ? "paused: " + p[0] + (p[1] ? " since " + epoch(p[1]) : "") : "running", p ? "bad" : "good"],
+    ["spend", "$" + a.spend.toFixed(2) + " of $" + a.cap.toFixed(2)],
+    ["avg per form", a.avg_s == null ? "-" : a.avg_s + " s"], ["time to clear queue", dur(a.eta_s)]]
+    : [["state", "off"], ["done / failed", a.done + " / " + a.failed], ["spend", "$" + a.spend.toFixed(2)]]));
+  const n = S.ntfy;
+  if (rows.length) {
+    const c = reviewCounts();
+    cards.push(card("Review", [["to review", String(c.todo), c.todo ? "warn" : "good"],
+      ["escalated", String(c.escalate), c.escalate ? "bad" : ""], ["unsure", String(c.unsure)], ["ok", String(c.ok)]]));
+  }
+  cards.push(card("Alerts", n ? [["ntfy", !n.enabled ? "not configured (terminal only)" : n.failing ? "failing, last ok " + ago(n.last_ok) : "delivering, last ok " + ago(n.last_ok), n.failing ? "bad" : ""],
+    ["waiting to send", n.queued]] : [["ntfy", "-"]]));
+  const al = mk("div", null, "card wide");
+  al.append(mk("h3", "Last " + S.alerts.length + " alerts"));
+  const t = mk("table");
+  for (const x of S.alerts) {
+    const tr = mk("tr"), sv = mk("td"), rc = mk("td");
+    rc.append(ruleEl(x[2]));
+    sv.append(mk("span", x[1], "b " + (SEV.includes(x[1]) ? x[1] : "")));
+    tr.append(mk("td", when(x[0]), "mut"), sv, rc, mk("td", x[3] + (x[4] ? " BM " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
+    const hit = alertForm(x[7]), lk = mk("td", null, "lk");
+    if (hit) {
+      const [r, v] = hit, loc = localHref(v.pdf), rik = rikHref(v.rik);
+      if (loc) lk.append(link("PDF", loc));
+      if (rik) lk.append(link("RIK", rik));
+      const b = mk("button", "show", "chip"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); lk.append(b);
+    }
+    tr.append(lk);
+    t.append(tr);
+  }
+  al.append(t);
+  cards.push(al);
+  box.replaceChildren(...cards);
+  if (typeof renderHero === "function" && slots.length) renderHero();
+}
+
+// ---- table --------------------------------------------------------------------------------
+let onlyId = null, T = null, tmTable = null, teTable = null;
+let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
+const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "fl", "rp", "rm", "fa", "c7", "loc", "dis", "auto"];
+
+// rule codes carry their plain-language description (data.json "rules"): a hover title, a focus
+// tooltip, and aria-describedby pointing at the legend entry
+const ruleInfo = code => (D.rules || {})[code];
+function ruleEl(code, focusable = true) {
+  const e = mk("span", code), d = ruleInfo(code);
+  if (!d) return e;
+  e.className = "rc"; e.title = d; e.dataset.d = d;
+  e.setAttribute("aria-describedby", "rule-" + code);
+  if (focusable) e.tabIndex = 0;
+  return e;
+}
+function ruleText(s) {  // free text with rule codes in it ("arithmetic A2, A3")
+  const f = document.createDocumentFragment();
+  for (const part of String(s).split(/\b([VPADX]\d{1,2})\b/)) f.append(ruleInfo(part) ? ruleEl(part) : part);
+  return f;
+}
+function renderLegend() {
+  const dl = $("legend"), rules = D.rules || {};
+  dl.replaceChildren(...Object.keys(rules).flatMap(k => {
+    const dd = mk("dd", rules[k]);
+    dd.id = "rule-" + k;
+    return [mk("dt", k), dd];
+  }));
+  $("legendbox").hidden = !dl.children.length;
+}
+function badges(list, dis) {
+  const td = document.createDocumentFragment();
+  for (const f of list) {
+    const d = mk("div", null, "f"), tx = mk("span");
+    tx.append(ruleEl(f[0]), ": " + f[2]);
+    d.append(mk("span", f[1], "b " + (SEV.includes(f[1]) ? f[1] : "") + (dis && dis.includes(f[0]) && f[1] === "HIGH" ? " dis" : "")), tx);
+    td.append(d);
+  }
+  return td;
+}
+function linksOf(v) {
+  const sp = mk("span"), l = localHref(v.pdf), r = rikHref(v.rik);
+  if (l) sp.append(link("Local PDF", l), " ");
+  if (r) sp.append(link("RIK", r));
+  return sp;
+}
+// ---- operator verdicts: per document version (URL); recorded over http only ---------------
+const VERDICTS = ["ok", "escalate", "unsure"];
+const VLABEL = {ok: "ok", escalate: "escalate", unsure: "unsure"};
+let REV = null, revKey = "";  // REV: live reviews.json (url -> {v, n, at}); null = use the data's
+const LOCAL = {};  // verdicts set on this page: win until reviews.json has caught up
+const rvOf = v => v.u in LOCAL ? LOCAL[v.u] : REV ? REV[v.u] || null : v.rv || null;
+// "to review": the active current version has stored findings and no verdict (r.rf from the build,
+// the verdict live); an escalation on any version keeps the form escalated
+const isTodo = r => r.rf && !rvOf(r);
+const olderEsc = r => r.v.filter(v => (rvOf(v) || {}).v === "escalate");
+const isEsc = r => (rvOf(r) || {}).v === "escalate" || olderEsc(r).length > 0;
+function reviewCounts() {  // the chosen election, else the status panel's
+  const el = sel("e") || (S && S.parent) || "", c = {todo: 0, ok: 0, escalate: 0, unsure: 0};
+  for (const r of rows) {
+    if (el && r.el !== el) continue;
+    const x = rvOf(r);
+    if (isTodo(r)) c.todo++;
+    if (isEsc(r)) c.escalate++;
+    else if (x && (x.v === "ok" || x.v === "unsure")) c[x.v]++;
+  }
+  return c;
+}
+function verdictHtml(x) {  // fixed class names; the label goes through esc
+  if (!x) return "";
+  const k = VERDICTS.includes(x.v) ? x.v : "";
+  return '<span class="rv rv-' + k + (x.pending ? " pending" : "") + '">' + esc(VLABEL[k] || String(x.v)) + "</span>";
+}
+function verdictEl(x) {
+  const k = VERDICTS.includes(x.v) ? x.v : "";
+  return mk("span", (VLABEL[k] || String(x.v)) + (x.pending ? " (saving)" : ""), "rv rv-" + k);
+}
+function reviewBox(r) {
+  const box = mk("div", null, "review"), cur = rvOf(r), head = mk("div", null, "rvhead");
+  head.append(mk("strong", "Review "), cur ? verdictEl(cur) : mk("span", r._fl ? "to review" : "not reviewed", "mut"));
+  if (cur && cur.at) head.append(mk("span", " " + when(cur.at), "mut"));
+  if (cur && cur.n) head.append(mk("span", " - " + cur.n, "rvnote"));
+  const ctl = mk("div", null, "rvctl"), note = mk("input"), msg = mk("span", null, "rvmsg");
+  note.type = "text"; note.maxLength = 500; note.placeholder = "note (optional)"; note.value = cur && cur.n || "";
+  note.setAttribute("aria-label", "review note");
+  const btns = VERDICTS.map(v => {
+    const b = mk("button", VLABEL[v], "vb vb-" + v);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(!!cur && cur.v === v));
+    b.onclick = () => submitReview(r, v, note.value, msg);
+    return b;
+  });
+  if (!HTTP) for (const el of [...btns, note]) {
+    el.disabled = true;
+    el.title = "read-only: open the page from rg2watch serve or watch to record verdicts";
+  } else if (cur && cur.pending) for (const b of btns) { b.disabled = true; b.title = "saving..."; }
+  ctl.append(...btns, note, msg);
+  box.append(head, ctl);
+  return box;
+}
+function rowOf(id) {
+  let found = null;
+  table.rows().every(function () { if (this.data().id === id) found = this; });
+  return found;
+}
+function refreshRow(id) {
+  const row = rowOf(id);
+  if (!row) return;
+  table.cell(row.index(), "review:name").invalidate();  // only this cell: others hold DOM-built content
+  if (row.child.isShown()) row.child(child(row.data())).show();
+  table.draw(false);
+  renderStatus();
+}
+function submitReview(r, verdict, note, msg) {
+  if (!HTTP) return;
+  const url = r.u, prev = LOCAL[url];
+  LOCAL[url] = {v: verdict, n: note.trim() || null, at: null, pending: true};
+  refreshRow(r.id);
+  fetch("review", {method: "POST", cache: "no-store", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
+    body: JSON.stringify({url, verdict, note: note.trim() || null})})
+    .then(res => res.json().catch(() => ({})).then(j => res.ok && j.review ? j.review : Promise.reject(new Error(j.error || "HTTP " + res.status))))
+    .then(rec => { LOCAL[url] = {v: rec.v, n: rec.n, at: rec.at, t: Date.now()}; refreshRow(r.id); },
+      e => {
+        if (prev) LOCAL[url] = prev; else delete LOCAL[url];
+        refreshRow(r.id);
+        const row = rowOf(r.id), m = row && row.child.isShown() && row.child()[0].querySelector(".rvmsg");
+        if (m) m.textContent = "not saved: " + e.message;
+        console.error("review not saved", e);
+      });
+}
+function loadReviews() {
+  if (!HTTP) return;
+  const started = Date.now();
+  fetch("reviews.json?t=" + started, {cache: "no-store"})
+    .then(res => res.ok ? res.json() : Promise.reject(new Error("HTTP " + res.status)))
+    .then(d => {
+      REV = d;
+      for (const [u, x] of Object.entries(LOCAL)) if (!x.pending && x.t < started) delete LOCAL[u];
+      const key = JSON.stringify([REV, LOCAL]);
+      if (key === revKey || !table) return;
+      revKey = key;
+      table.cells(null, "review:name").invalidate();
+      table.rows().every(function () {  // never replace a panel the operator is typing in
+        if (this.child.isShown() && !this.child()[0].contains(document.activeElement)) this.child(child(this.data())).show();
+      });
+      table.draw(false);
+      renderStatus();
+    }, e => console.error("fetching reviews.json failed", e));
+}
+function escalatedCsv() {  // one line per escalated version, current or older
+  const head = ["Municipality", "BM", "Station", "Document", "Version", "RIK link", "Findings", "Note", "Verdict time (RS)"];
+  const out = [];
+  for (const r of rows) {
+    for (const v of [r, ...r.v]) {
+      const x = rvOf(v);
+      if (!x || x.v !== "escalate") continue;
+      out.push([r.muni, r.no, r.name, r.label, v === r ? (r.state === "removed" ? "removed" : "current")
+        : "older, " + (v.up ? "uploaded " + when(v.up) : "first seen " + when(v.seen)), v.rik || "", v.f.map(f => f[0] + " " + f[1] + ": " + f[2]).join("; "),
+        x.n || "", when(x.at)].map(csvCell).join(","));
+    }
+  }
+  return [head.map(csvCell).join(","), ...out].join("\r\n") + "\r\n";
+}
+function download(name, text) {
+  const a = mk("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + text], {type: "text/csv;charset=utf-8"}));
+  a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function rg7Text(x) {  // x.ch: read by the watch model; x.by: read by other models only
+  return "RG-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : x.by.length ? "read by " + x.by.join(", ") + " (not the watch model)" : "not read yet");
+}
+function rg7Badges(r) {
+  const td = document.createDocumentFragment();
+  for (const x of r.r7) {
+    const d = mk("div", rg7Text(x), "f rg7"), lk = linksOf(x);
+    lk.className = "lk";
+    d.append(lk);
+    td.append(d);
+  }
+  return td;
+}
+function child(r) {
+  const box = mk("div");
+  box.append(reviewBox(r));
+  for (const x of r.r7) {
+    const d = mk("div", null, "sub");
+    d.append(mk("strong", rg7Text(x)), " ", linksOf(x), x.f.length ? badges(x.f) : "");
+    box.append(d);
+  }
+  for (const o of r.ops) {
+    const d = mk("div", null, "sub");
+    d.append(mk("strong", o.m), mk("span", " (" + when(o.at) + ") ", "mut"), o.f.length ? badges(o.f, r.dis) : mk("span", "no findings", "mut"));
+    box.append(d);
+  }
+  for (const v of r.v) {
+    const d = mk("div", null, "sub mut"), x = rvOf(v);
+    d.append("older version: uploaded " + when(v.up) + ", first seen " + when(v.seen) + ", analysis " + v.ast + " ", linksOf(v));
+    if (x) d.append(" ", verdictEl(x), x.n ? " " + x.n : "");
+    d.append(badges(v.f));
+    for (const o of v.ops) {
+      const s = mk("div", o.m + ": ", "sub");
+      if (!o.f.length) s.append("no findings");
+      o.f.forEach((f, i) => s.append(i ? ", " : "", ruleEl(f[0]), " " + f[1]));
+      d.append(s);
+    }
+    box.append(d);
+  }
+  return box;
+}
+function prep(r) {
+  const all = [r, ...r.v];
+  // severity, rules and "with findings" look at the form, its older versions and every model's opinion
+  const top = fs => Math.max(0, ...fs.map(f => SEV.indexOf(f[1])));
+  const own = top(r.f), olderSev = top(r.v.flatMap(x => x.f)), opSev = top(all.flatMap(x => x.ops.flatMap(o => o.f)));
+  r._sev = Math.max(own, olderSev, opSev);
+  r.sev = r._sev;
+  r._note = r._sev > own ? SEV[r._sev] + " only in " + [olderSev > own ? "older version" : "", opSev > own ? "model analysis" : ""].filter(Boolean).join(" and ") : "";
+  const ofs = all.flatMap(x => [...x.f, ...x.ops.flatMap(o => o.f)]);
+  r._fl = ofs.length > 0;
+  r._rules = new Set(ofs.map(f => f[0]));
+  r._models = new Set(all.flatMap(x => x.ops.map(o => o.m)));
+  r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models, ...r.r7.flatMap(x => x.ch || [])].join("\n").toLowerCase();
+  r.mods = [...r._models].sort().join(", ") + (r.dis.length ? " - DISAGREE" : "");
+  r._stn = r.muni.toLowerCase() + " " + (parseInt(r.no) || 0);
+  r._st = r.state + " " + r.ast;
+  r._pdfs = all.some(x => x.pdf);
+  return r;
+}
+const txt = () => DataTable.render.text();
+const fmt = () => ({_: d => d, display: d => esc(when(d))});
+const sel = id => $(id).value;
+function keep(r) {
+  if (onlyId != null && r.id !== onlyId) return false;
+  const q = $("q").value.trim().toLowerCase();
+  const rs = chosenRules();
+  const rf = sel("rv"), x = rvOf(r);
+  if (rf && !(rf === "todo" ? isTodo(r) : rf === "escalate" ? isEsc(r) : x && x.v === rf)) return false;
+  return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
+    && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
+    && (!rs.length || rs.some(x => r._rules.has(x))) && (!$("fl").checked || r._fl)
+    && (!$("rp").checked || r.state === "replaced") && (!$("rm").checked || r.state === "removed")
+    && (!$("fa").checked || r.ast === "failed") && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
+}
+function initTable() {
+  DataTable.ext.search.push((s, _d, _i, row) => s.nTable.id !== "forms" || keep(row));
+  table = new DataTable("#forms", {
+    data: rows, deferRender: true, pageLength: 100, lengthMenu: [50, 100, 250, 500],
+    order: [[6, "desc"], [4, "desc"]], stateSave: true, stateDuration: 0,
+    layout: {topStart: "pageLength", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
+    stateSaveParams: (s, d) => { d.rg = readCtl(); },
+    stateLoadParams: (s, d) => { if (!location.hash.slice(1) && d.rg) setCtl(d.rg); },
+    columns: [
+      {data: null, orderable: false, className: "dt-control", defaultContent: "",
+       createdCell: td => td.setAttribute("aria-label", "details and review")},
+      {data: "el", title: "Election", visible: false, render: {_: d => d, display: d => esc(shortTitle(D.elections[d] || d))}},
+      {data: "_stn", title: "Station", className: "scol", render: {_: d => d, display: (d, t, r) => esc(r.muni) + "<br>" +
+        esc((r.no ? "BM " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""))}},
+      {data: "label", title: "Document", render: txt(), defaultContent: ""},
+      {data: "up", title: "Times (RS)", className: "nw", render: {_: d => d || "", display: (d, t, r) =>
+        esc((d ? "up " + when(d) : "") ) + (d ? "<br>" : "") + esc("seen " + when(r.seen))}},
+      {data: "_st", title: "Status", className: "nw", render: {_: d => d, display: (d, t, r) =>
+        esc(r.state) + "<br>" + esc("analysis " + r.ast)}},
+      {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
+       createdCell: (td, d, r) => { td.append(badges(r.f), rg7Badges(r)); if (r._note) td.append(mk("span", r._note, "note")); }},
+      {data: "u", name: "review", title: "Review", className: "nw", render: {
+        _: (d, t, r) => ((rvOf(r) || {}).v || "") + (olderEsc(r).length ? " older escalate" : ""),
+        display: (d, t, r) => verdictHtml(rvOf(r)) + (olderEsc(r).length && (rvOf(r) || {}).v !== "escalate"
+          ? '<span class="rv rv-escalate rv-older">older escalated</span>' : "")}},
+      {data: "mods", title: "Models", className: "nw", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
+      {data: "pdf", title: "Local PDF", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},
+       createdCell: (td, d, r) => { const h = localHref(r.pdf); if (h) td.append(link("Local PDF", h)); }},
+      {data: "rik", title: "RIK", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},
+       createdCell: (td, d, r) => { const h = rikHref(r.rik); if (h) td.append(link("RIK", h)); }}]
+  });
+  const box = $("cols");  // column visibility toggles (saved with the table state)
+  table.columns().every(function (i) {
+    if (!i) return;
+    const l = mk("label"), c = document.createElement("input");
+    c.type = "checkbox"; c.checked = this.visible();
+    c.addEventListener("input", () => table.column(i).visible(c.checked));
+    l.append(c, " " + this.header().textContent);
+    box.append(l);
+  });
+  $("forms").addEventListener("click", ev => {
+    const td = ev.target.closest("td.dt-control");
+    if (!td) return;
+    const row = table.row(td.parentElement);
+    row.child.isShown() ? row.child.hide() : row.child(child(row.data())).show();
+  });
+}
+function optsOf(sel2, first, items) {
+  const keepv = sel2.value;
+  sel2.replaceChildren(new Option(first, ""));
+  for (const [v, t] of items) sel2.append(new Option(t, v));
+  sel2.value = [...sel2.options].some(o => o.value === keepv) ? keepv : "";
+}
+function applyData(data) {
+  D = data;
+  renderLegend();
+  if (S) renderStatus();  // alert rule codes get their descriptions
+  rows = D.rows.map(prep);
+  setTitle();
+  optsOf($("m"), "all municipalities", [...new Set(rows.map(r => r.muni))].sort().map(m => [m, m]));
+  const parents = [...new Set(rows.map(r => r.el))].sort();
+  optsOf($("e"), "all elections", parents.map(p => [p, shortTitle(D.elections[p] || p)]));
+  $("e").hidden = parents.length < 2;
+  optsOf($("mod"), "all models", [...new Set(rows.flatMap(r => [...r._models]))].sort().map(m => [m, m]));
+  $("mod").hidden = $("mod").options.length < 2;
+  $("dis").parentElement.hidden = $("mod").hidden;
+  const chosen = new Set(chosenRules());
+  $("rules").replaceChildren(...[...new Set(rows.flatMap(r => [...r._rules]))].sort().map(r => {
+    const l = mk("label"), c = document.createElement("input");
+    c.type = "checkbox"; c.value = r; c.checked = chosen.has(r);
+    l.append(c, " ", ruleEl(r, false));
+    if (ruleInfo(r)) l.title = r + ": " + ruleInfo(r);
+    return l; }));
+  $("rulesbox").hidden = !$("rules").children.length;
+  rulesSummary();
+  T = D.tally;
+  renderTally();
+  $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
+  if (!table) { readHash(); initTable(); if ($("tview").value !== "corrected") renderTally(); return; }
+  const shown = new Set();
+  table.rows().every(function () { if (this.child.isShown()) shown.add(this.data().id); });
+  table.clear().rows.add(rows).draw(false);
+  table.rows().every(function () { if (shown.has(this.data().id)) this.child(child(this.data())).show(); });
+}
+
+// ---- results (unofficial tally) -----------------------------------------------------------
+const nf = new Intl.NumberFormat("en-GB");
+const num = v => v == null ? "-" : nf.format(v);
+const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
+const ratio = (a, b) => b ? a / b : null;
+const NV = () => $("tview").value;  // numbers: corrected | filed | diff
+const NV_LABEL = {corrected: "With RG-7 corrections.", filed: "As filed on the RG-2 forms (RG-7 corrections not applied).",
+  diff: "Difference: with RG-7 corrections minus as filed, over the stations counted in both (stations that join or leave a total are shown separately)."};
+const dnum = v => v == null ? "-" : v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + nf.format(Math.abs(v));
+const dpp = x => { if (x == null) return "-"; const v = Math.round(x * 1000) / 10; return v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + Math.abs(v).toFixed(1); };
+function deltaOf(a, b) {  // totals block: corrected minus as filed (turnout and shares in fractions)
+  const o = {};
+  for (const k of Object.keys(a)) if (typeof a[k] === "number") o[k] = a[k] - b[k];
+  o.turnout = a.turnout == null || b.turnout == null ? null : a.turnout - b.turnout;
+  if (a.lists) {
+    o.lists = a.lists.map((v, i) => v - b.lists[i]);
+    o.sh = a.lists.map((v, i) => { const x = ratio(v, a.lists_valid), y = ratio(b.lists[i], b.lists_valid); return x == null || y == null ? null : x - y; });
+  }
+  return o;
+}
+function vrow(r) {  // the row as the chosen numbers view shows it
+  const v = NV();
+  if (v === "filed") return {...r, all: r.fall, cl: r.fcl, clean: r.fclean, excluded: r.fexcluded};
+  // like-for-like: numbers over the stations counted in both views; stations joining/leaving a total are separate
+  if (v === "diff") return {...r, all: deltaOf(r.pair.all.c, r.pair.all.f), cl: deltaOf(r.pair.cl.c, r.pair.cl.f),
+    clean: r.clean - r.fclean, excluded: r.excluded - r.fexcluded, nin: r.pair[$("tmode").value].in, nout: -r.pair[$("tmode").value].out};
+  return r;
+}
+function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come through vrow()
+  const dg = NV() === "diff", n = dg ? dnum : num, p = dg ? dpp : pc, t = r => r[mode], c = [
+    ["Municipality", r => r.m, s => s, r => r.m],
+    ["Stations", r => r.stations, num], ["Counted", r => r.counted, num], ["Clean", r => r.clean, n],
+    ["Flagged", r => r.excluded, n],
+    ["Coverage", r => ratio(r.counted, r.stations), pc, r => ratio(r.counted, r.stations) == null ? "" : (100 * r.counted / r.stations).toFixed(1)],
+    ["Registered", r => t(r).registered, n], ["Voted", r => t(r).voted, n],
+    ["Turnout" + (dg ? " (pp)" : ""), r => t(r).turnout, p, r => t(r).turnout == null ? "" : (100 * t(r).turnout).toFixed(1)],
+    ["In box", r => t(r).ballots_in_box, n], ["Invalid", r => t(r).invalid, n],
+    ["Valid", r => t(r).valid, n], ["Outside", r => t(r).outside_voted, n]];
+  if (dg) c.push(["Stations newly counted", r => r.nin, dnum], ["Stations removed", r => r.nout, dnum]);
+  const share = (r, i) => dg ? t(r).sh[i] : ratio(t(r).lists[i], t(r).lists_valid);
+  T.names.forEach((nm, i) => {
+    c.push([(i + 1) + " \u00b7 " + nm + " votes", r => t(r).lists[i], n]);
+    c.push([(i + 1) + " \u00b7 " + nm + (dg ? " % (pp)" : " %"), r => share(r, i), p, r => share(r, i) == null ? "" : (100 * share(r, i)).toFixed(1)]);
+  });
+  return c.map(x => ({t: x[0], v: x[1], f: x[2], c: x[3] || x[1]}));
+}
+function csvCell(x) {  // text starting with = + - @ would run as a spreadsheet formula
+  if (x == null) return "";
+  if (typeof x === "number") return String(x);
+  x = String(x);
+  if (/^[=+\-@\t\r]/.test(x)) x = "'" + x;
+  return /[",\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x;
+}
+function tallyCsv() {
+  const mode = $("tmode").value, cols = resultCols(mode), rows = [...T.munis, T.overall].map(vrow);
+  // header is row 1 (pandas/Excel read it cleanly); the unofficial note is a last column, first data row
+  const note = "Unofficial - numbers read by " + T.model + " from the scanned forms; " +
+    (mode === "cl" ? "clean forms only (leave out flagged)" : "all counted forms") + "; numbers: " + NV_LABEL[NV()] +
+    (NV() === "diff" ? " Turnout and shares in percentage points." : "");
+  if (T.scope === "municipal") {  // long format: one row per (municipality, list), shared totals repeated
+    const shared = cols.slice(1), out = [];
+    for (const r of rows) {
+      const t = r[mode], tot = shared.map(c => csvCell(c.c(r)));
+      const sh = i => NV() === "diff" ? t.sh[i] : ratio(t.lists[i], t.lists_valid);
+      const ls = r.names && r.names.length ? r.names.map((n, i) => [i + 1, n, t.lists[i],
+        sh(i) == null ? "" : (100 * sh(i)).toFixed(1)]) : [["", "", "", ""]];
+      for (const l of ls) out.push([csvCell(r.m), ...l.map(csvCell), ...tot, out.length ? "" : csvCell(note)].join(","));
+    }
+    const head = ["Municipality", "No.", "List", "Votes", NV() === "diff" ? "Share (pp)" : "Share %", ...shared.map(c => c.t), "Note"].map(csvCell).join(",");
+    return [head, ...out].join("\r\n") + "\r\n";
+  }
+  const head = [...cols.map(c => csvCell(c.t)), "Note"].join(",");
+  const lines = rows.map((r, i) => [...cols.map(c => csvCell(c.c(r))), i ? "" : csvCell(note)].join(","));
+  return [head, ...lines].join("\r\n") + "\r\n";
+}
+function showForm(id, label) {
+  onlyId = id;
+  setCtl({});  // other form filters would hide it
+  writeHash();
+  $("onlytxt").textContent = "showing only: " + label + " (other filters cleared)";
+  $("onlyid").hidden = false;
+  setHero(false);
+  setTab("forms");
+  redraw();
+}
+let tkey = "", tcols = "";
+function listsOf(r) {  // municipal scope: this municipality's own lists, in ballot order
+  const dg = NV() === "diff", t = vrow(r)[$("tmode").value], tbl = mk("table", null, "lists"), hr = mk("tr"), box = mk("div");
+  hr.append(mk("th", "No."), mk("th", "List"), mk("th", "Votes"), mk("th", dg ? "Share (pp)" : "Share"));
+  tbl.append(hr);
+  r.names.forEach((n, i) => {
+    const tr = mk("tr");
+    tr.append(mk("td", String(i + 1), "no"), mk("td", n), mk("td", dg ? dnum(t.lists[i]) : num(t.lists[i])), mk("td", dg ? dpp(t.sh[i]) : pc(ratio(t.lists[i], t.lists_valid))));
+    tbl.append(tr);
+  });
+  box.append(tbl);
+  if (r.names_note) box.append(mk("p", "Warning: " + r.names_note, "warnbox"));
+  return box;
+}
+$("tmunis").addEventListener("click", ev => {
+  const td = ev.target.closest("td.dt-control");
+  if (!td || !tmTable) return;
+  const row = tmTable.row(td.parentElement);
+  row.child.isShown() ? row.child.hide() : row.child(listsOf(row.data())).show();
+});
+function renderTally() {
+  $("hmode").value = $("tmode").value;
+  $("hview").value = $("tview").value;
+  $("tabres").hidden = !T;
+  if (!T) {  // no tally any more: leave the results views
+    if (!$("resview").hidden || document.body.classList.contains("hero")) { setHero(false); setTab("forms"); }
+    renderHero();
+    return;
+  }
+  $("tmeta").textContent = "Model: " + T.model + ". " + shortTitle(T.title) + ". Repeat-vote forms are not included.";
+  const muniScope = T.scope === "municipal";
+  const sw = [T.scope_note, ...T.munis.filter(m => !m.nlists && m.names_note).map(m => m.m + ": " + m.names_note)].filter(Boolean);
+  $("tscope").hidden = !sw.length;
+  $("tscope").textContent = sw.length ? "Warning: " + sw.join(". ") : "";
+  $("tmhint").hidden = !muniScope;
+  renderHero();
+  const key = $("tmode").value + NV() + JSON.stringify(T);
+  if (key === tkey) return;  // unchanged: keep the tables (search, sort, page) as they are
+  tkey = key;
+  const none = !T.munis.length, cols = resultCols($("tmode").value), ov = $("toverall");
+  const tbl = mk("table"), hr = mk("tr"), dr = mk("tr");
+  for (const c of cols) { hr.append(mk("th", c.t)); dr.append(mk("td", c.f(c.v(vrow(T.overall))))); }
+  tbl.append(hr, dr);
+  ov.replaceChildren(none ? mk("p", "no analysed forms yet", "mut") : tbl);
+  const sig = $("tmode").value + NV() + "\n" + T.scope + "\n" + T.names.join("\n");
+  if (tmTable && sig === tcols) {
+    const open = new Set();  // keep open list rows across updates
+    tmTable.rows().every(function () { if (this.child.isShown()) open.add(this.data().m); });
+    tmTable.clear().rows.add(T.munis).draw(false);
+    tmTable.rows().every(function () { if (open.has(this.data().m) && this.data().nlists) this.child(listsOf(this.data())).show(); });
+  } else {
+    tcols = sig;
+    if (tmTable) { tmTable.destroy(); $("tmunis").replaceChildren(); }
+    tmTable = new DataTable("#tmunis", {
+      data: T.munis, paging: false, order: [[muniScope ? 1 : 0, "asc"]], layout: {topStart: "search", topEnd: null, bottomStart: "info"},
+      columns: [...(muniScope ? [{data: null, orderable: false, className: "dt-control", defaultContent: "",
+        createdCell: (td, d, r) => { if (!r.nlists) td.classList.remove("dt-control"); }}] : []),
+        ...cols.map((c, i) => ({title: esc(c.t), type: i ? "num" : "string", className: i ? "dt-right" : "",
+        render: {_: (d, t, r) => { const v = c.v(vrow(r)); return v == null ? -1 : v; }, display: (d, t, r) => esc(c.f(c.v(vrow(r))))}}))]});
+  }
+  const flagged = NV() === "filed" ? T.excluded_filed : T.excluded;  // judged on the RG-2 alone when as filed
+  if (teTable) {
+    teTable.clear().rows.add(flagged).draw(false);
+  } else {
+    teTable = new DataTable("#texcl", {
+      data: flagged, pageLength: 50, layout: {topStart: "search", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
+      columns: [{data: "m", title: "Municipality", render: DataTable.render.text()},
+        {data: "no", title: "BM", render: DataTable.render.text(), defaultContent: "", className: "dt-left"},
+        {data: "why", title: "Why flagged", render: {_: d => d.join("; "), display: () => ""},
+         createdCell: (td, d) => td.append(ruleText(d.join("; ")))},
+        {data: null, title: "", orderable: false, defaultContent: "", createdCell: (td, d, r) => {
+          const b = mk("button", "show form"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); td.append(b); }}]});
+  }
+  $("tnotes").replaceChildren(...T.notes.map(n => mk("li", n.m + " BM " + n.no + ": " + n.note)));
+  $("tnoteshead").hidden = !T.notes.length;
+  $("tcor").replaceChildren(...T.corrected.map(c => {
+    const li = mk("li", c.m + " BM " + c.no + ": "), row = D.rows.find(r => r.id === c.id);
+    c.rg7.forEach((d, i) => {
+      li.append((i ? "; " : "") + "RG-7 " + d.d + ": " + d.ch.join(", "));
+      const x = row && d.u ? row.r7.find(y => y.u === d.u) : null;
+      if (x) { const lk = linksOf(x); lk.className = "lk"; li.append(lk); }
+    });
+    const b = mk("button", "show", "chip"); b.onclick = () => showForm(c.id, c.m + " BM " + c.no);
+    const sp = mk("span", null, "lk");
+    sp.append(b);
+    li.append(sp);
+    return li;
+  }));
+  $("tcorhead").hidden = $("tcor").hidden = !T.corrected.length || NV() === "filed";
+}
+
+// ---- hero display -------------------------------------------------------------------------
+const OKABE = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"];
+const TOP_LISTS = 8;
+let heroMuni = "", heroPicked = false, slots = [];
+function put(id, text) {  // set text; flash when it changed
+  const el = $(id);
+  if (el.textContent === text) return;
+  const first = !el.textContent || el.textContent === "-";
+  el.textContent = text;
+  if (first) return;
+  el.classList.remove("flash");
+  void el.offsetWidth;
+  el.classList.add("flash");
+}
+function initHero() {
+  for (let i = 0; i <= TOP_LISTS; i++) {
+    const row = mk("div", null, "hrow"), hd = mk("div", null, "hd"), no = mk("span", null, "no"),
+      nm = mk("span", null, "nm"), tr = mk("div", null, "track"), fill = mk("div", null, "fill"),
+      val = mk("div", null, "val");
+    hd.append(no, nm);
+    tr.append(fill);
+    row.append(hd, tr, val);
+    row.hidden = true;
+    $("herochart").append(row);
+    slots.push({row, no, nm, fill, val});
+  }
+}
+function heroMunis() {
+  const sel = $("hmuni"), names = T ? T.munis.map(m => m.m) : [];
+  if ([...sel.options].slice(1).map(o => o.value).join("\n") !== names.join("\n") || !sel.options.length)
+    sel.replaceChildren(new Option("All municipalities", ""), ...names.map(n => new Option(n, n)));
+  if (!names.includes(heroMuni)) heroMuni = "";
+  if (!heroPicked && !heroMuni && T && T.scope === "municipal") {  // default: most counted forms
+    const best = T.munis.reduce((a, m) => m.counted > (a ? a.counted : 0) ? m : a, null);
+    if (best) heroMuni = best.m;
+  }
+  sel.value = heroMuni;
+}
+function renderHero() {
+  heroMunis();
+  const foot = $("herofoot");
+  const stale = S && (!S.watching || Date.now() / 1000 - S.ts > STALE_S);
+  const label = T ? "UNOFFICIAL - numbers read by " + T.model + " from the scanned forms, not RIK results. " +
+    ($("tmode").value === "cl" ? "Clean forms only. " : "All counted forms. ") + NV_LABEL[NV()] + " " +
+    "As of " + epoch(Date.parse(D.built) / 1000).slice(-5) + " (Serbian time)." : "UNOFFICIAL - no results yet.";
+  foot.replaceChildren(label, ...(stale ? [mk("span", " Watcher not running: numbers may be out of date.", "stale")] : []));
+  if (!T) { $("heronames").hidden = true; $("herotitle").textContent = ""; $("heronote").textContent = "No analysed forms yet."; for (const s of slots) s.row.hidden = true; return; }
+  const raw = (heroMuni && T.munis.find(m => m.m === heroMuni)) || T.overall, r = vrow(raw), t = r[$("tmode").value], none = !r.counted;
+  const dg = NV() === "diff", mode = $("tmode").value;
+  const cover = r.stations ? r.counted / r.stations : null;
+  const muniScope = T.scope === "municipal", allMunis = raw === T.overall, names = muniScope ? r.names || [] : T.names;
+  const warn = [T.scope_note, muniScope ? r.names_note : T.names_note].filter(Boolean);
+  $("heronames").hidden = !warn.length;
+  $("heronames").textContent = warn.length ? "Warning: " + warn.join(". ") : "";
+  put("herotitle", (allMunis ? "All municipalities" : r.m) + " - " + shortTitle(T.title) + (dg ? " - DIFFERENCE (RG-7 corrected \u2212 as filed)" : NV() === "filed" ? " - as filed" : ""));
+  put("hv-turn", none ? "-" : dg ? dpp(t.turnout) : pc(t.turnout));
+  put("hs-turn", none ? "" : dg ? "difference in turnout, percentage points" : num(t.voted) + " of " + num(t.registered) + " registered");
+  put("hv-st", num(r.counted) + (r.stations ? " / " + num(r.stations) : ""));
+  put("hs-st", cover == null ? "stations known: unknown" : pc(cover) + " of stations");
+  $("hp-st").style.width = (cover == null ? 0 : Math.min(100, cover * 100)) + "%";
+  put("hv-forms", dg ? dnum(r.clean) + " / " + dnum(r.excluded) : num(r.clean) + " / " + num(r.excluded));
+  put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));
+  put("hs-valid", none ? "" : dg ? "difference in valid votes" : !t.registered ? "" : "valid votes counted");
+  $("heronote").textContent = none ? "No forms counted yet - no results to show."
+    : [dg ? "Stations newly counted: " + dnum(r.nin) + ", removed: " + dnum(r.nout) + " (not in the differences above; a correction made a number readable or changed a form's clean/flagged status)." : "",
+      muniScope && allMunis ? "Local election - lists differ per municipality; pick a municipality for list results." : "",
+      cover != null && cover < 0.1 ? "Very early - few stations counted. Do not read these shares as a result." : ""].filter(Boolean).join(" ");
+  const rows = none || (muniScope && allMunis) || !raw[mode].lists_valid ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
+    .sort((a, b) => dg ? Math.abs(b.v) - Math.abs(a.v) || a.i - b.i : b.v - a.v || a.i - b.i);
+  const shown = rows.slice(0, TOP_LISTS), rest = rows.slice(TOP_LISTS);
+  if (rest.length) shown.push({n: "Others (" + rest.length + " lists)", i: -1, v: rest.reduce((a, x) => a + x.v, 0), s: rest.reduce((a, x) => a + (x.s || 0), 0)});
+  const maxAbs = Math.max(1, ...shown.map(x => Math.abs(x.v)));
+  slots.forEach((s, k) => {
+    const e = shown[k];
+    s.row.hidden = !e;
+    if (!e) return;
+    const share = dg ? e.s : e.v / t.lists_valid;
+    s.no.textContent = e.i < 0 ? "" : String(e.i + 1);  // ballot number = the list row on the form
+    s.no.hidden = e.i < 0;
+    s.nm.textContent = e.n; s.row.title = e.n;
+    s.val.textContent = dg ? dnum(e.v) + "  " + dpp(share) + " pp" : num(e.v) + "  " + pc(share);
+    s.fill.style.width = (dg ? Math.abs(e.v) / maxAbs * 100 : Math.min(100, share * 100)) + "%";
+    s.fill.style.backgroundColor = e.i < 0 ? "#777" : OKABE[e.i % (OKABE.length - 1)];
+  });
+}
+function setHero(on) {
+  document.body.classList.toggle("hero", on);
+  $("herobtn").textContent = on ? "Exit (Esc)" : "Presentation mode";
+  if (on) setTab("results");
+}
+$("herobtn").onclick = () => setHero(!document.body.classList.contains("hero"));
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") setHero(false); });
+$("hmuni").addEventListener("input", () => { heroMuni = $("hmuni").value; heroPicked = true; if (T) renderHero(); });
+$("hmode").addEventListener("input", () => { $("tmode").value = $("hmode").value; if (T) renderTally(); });
+$("hview").addEventListener("input", () => { $("tview").value = $("hview").value; writeHash(); if (T) renderTally(); });
+initHero();
+if (new URLSearchParams(location.search).get("hero") === "1") setHero(true);
+
+function setTab(name) {
+  const res = name === "results";
+  $("formsview").hidden = res; $("resview").hidden = !res;
+  $("tabforms").classList.toggle("on", !res); $("tabres").classList.toggle("on", res);
+  if (res && tmTable) { tmTable.columns.adjust(); teTable.columns.adjust(); }
+}
+$("tabforms").onclick = () => setTab("forms");
+$("tabres").onclick = () => setTab("results");
+$("tmode").addEventListener("input", () => { if (T) renderTally(); });
+$("tview").addEventListener("input", () => { writeHash(); if (T) renderTally(); });
+$("onlyclear").onclick = () => { onlyId = null; $("onlyid").hidden = true; redraw(); };
+$("csv").onclick = () => {
+  if (T) download("rg2-unofficial-tally-" + String(T.parent).replace(/[^\w.-]+/g, "_") + ".csv", tallyCsv());
+};
+$("esccsv").onclick = () => download("rg2-escalated-" + String(D.built).slice(0, 16).replace(/[^\w.-]+/g, "_") + ".csv", escalatedCsv());
+
+// ---- filter state: URL hash first, saved state second; absent keys reset to defaults -------
+const chosenRules = () => [...$("rules").querySelectorAll("input:checked")].map(c => c.value);
+function rulesSummary() {
+  const n = chosenRules();
+  $("rulessum").textContent = "rules: " + (n.length ? n.length > 2 ? n.length + " selected" : n.join(", ") : "any");
+}
+function readCtl() {
+  const o = {};
+  for (const k of FILTERS) o[k] = $(k).type === "checkbox" ? $(k).checked : $(k).value;
+  o.rules = chosenRules();
+  return o;
+}
+function setCtl(o) {
+  for (const k of FILTERS) {
+    const v = o[k], el = $(k);
+    if (el.type === "checkbox") el.checked = k === "auto" ? v !== false : v === true;
+    else {
+      el.value = v == null ? "" : v;
+      if (el.value !== String(v)) el.value = k === "sev" ? "0" : "";
+    }
+  }
+  for (const c of $("rules").querySelectorAll("input")) c.checked = (o.rules || []).includes(c.value);
+  rulesSummary();
+}
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  const o = {rules: (p.get("rules") || "").split(",")};
+  for (const k of FILTERS) o[k] = $(k).type === "checkbox" ? (k === "auto" ? p.get(k) !== "0" : p.get(k) === "1") : p.get(k);
+  setCtl(o);
+  const nv = p.get("nv");
+  $("tview").value = ["corrected", "filed", "diff"].includes(nv) ? nv : "corrected";
+}
+function writeHash() {
+  const c = readCtl(), p = new URLSearchParams();
+  for (const k of FILTERS) {
+    if (k === "auto") { if (!c.auto) p.set("auto", "0"); }
+    else if (typeof c[k] === "boolean") { if (c[k]) p.set(k, "1"); }
+    else if (c[k] && c[k] !== "0") p.set(k, c[k]);
+  }
+  if (c.rules.length) p.set("rules", c.rules.join(","));
+  if (NV() !== "corrected") p.set("nv", NV());
+  try { history.replaceState(null, "", "#" + p); } catch (e) {}
+}
+function redraw() { writeHash(); if (table) table.draw(); if (S) renderStatus(); }
+let timer = 0;
+$("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(redraw, 200); });
+for (const id of FILTERS) if (id !== "q") $(id).addEventListener("input", redraw);
+$("rules").addEventListener("input", () => { rulesSummary(); redraw(); });
+window.addEventListener("hashchange", () => { readHash(); if (table) table.draw(); if (T) renderTally(); });
+
+// ---- loading: fetch() over http, script re-injection from file:// ------------------------
+function inject(name, done) {
+  const s = document.createElement("script");
+  s.src = name + ".js?t=" + Date.now();
+  s.onload = () => { s.remove(); done(); };
+  s.onerror = () => { s.remove(); console.error("loading " + name + ".js failed"); };
+  document.head.append(s);
+}
+function load(name, global, apply) {
+  const run = d => { try { apply(d); } catch (e) { console.error("applying " + name + " failed", e); } };
+  if (HTTP) {
+    fetch(name + ".json?t=" + Date.now(), {cache: "no-store"})
+      .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+      .then(run, e => console.error("fetching " + name + ".json failed", e));
+  } else inject(name, () => run(window[global]));
+}
+function loadStatus() { load("status", "RG2_STATUS", s => { S = s; renderStatus(); }); loadReviews(); }
+let dataBuilt = null;
+function loadData() {
+  load("data", "RG2_DATA", d => { if (d && d.built !== dataBuilt) { applyData(d); dataBuilt = d.built; } });
+}
+loadStatus();
+setInterval(loadStatus, STATUS_EVERY_MS);
+setInterval(renderStatus, 5000);
+// first load always; later loads only while auto-refresh is on, at the period given by the data (0 = off)
+loadData();
+function loop() {
+  if (!table || ($("auto").checked && D.interval > 0)) loadData();
+  setTimeout(loop, Math.max(5, D.interval || 10) * 1000);
+}
+setTimeout(loop, 10000);
+</script></body></html>

@@ -1,0 +1,8 @@
+data/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+rg2watch.toml
+.env
+.superpowers/
