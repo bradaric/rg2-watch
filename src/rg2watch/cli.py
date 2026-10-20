@@ -312,6 +312,8 @@ def _cmd_browse(args) -> int:
 
 
 STATUS_EVERY_S = 10
+HELPER_JOIN_S = 5  # shutdown: status/browse threads, together
+DELIVERY_JOIN_S = 3  # shutdown: delivery thread, after the pipeline stopped
 DELIVER_EVERY_S = 5  # alert delivery and RIK health check run on their own clock, not per tick
 
 
@@ -781,13 +783,14 @@ def _run_watch(args, cfg: Config) -> int:
             if server is not None:
                 server.shutdown()
                 server.server_close()
-            for t in threads:  # a build in flight must finish before the store is closed
-                t.join(10)
+            helpers_by = time.monotonic() + HELPER_JOIN_S  # one shared deadline for all helpers
+            for t in threads:  # a build in flight should finish before the store is closed
+                t.join(max(0.0, helpers_by - time.monotonic()))
             if pipeline is not None:
                 pipeline.stop()
             stop_delivery.set()
             if delivery is not None:
-                delivery.join(10)
+                delivery.join(DELIVERY_JOIN_S)
             if reached:  # --until-done verdict: last alerts, last page, then the summary
                 try:
                     try:

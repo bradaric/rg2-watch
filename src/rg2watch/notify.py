@@ -50,7 +50,7 @@ DIGEST_MAX_BYTES = 3500  # ntfy.sh body limit is 4096
 DIGEST_DETAIL_LINES = 10
 DIGEST_CODES = 6
 DIGEST_SUMMARY_CHARS = 80
-_DIGEST_PRIORITY = ["A9", "A5", "V2", "V8", "R1", "D1", "D2", "D4"]
+_DIGEST_PRIORITY = ["A9", "A5", "V9", "V2", "V8", "R1", "D1", "D2", "D4"]
 
 
 def digest_body(findings: list[Finding], page_url: str | None = None, severity: str = "MEDIUM") -> str:

@@ -360,3 +360,9 @@ def test_mass_replacement_findings_go_to_the_digest_only():
     n.digest_only([f.doc.url for _, f in fs])
     assert sorted(n.send(fs)) == [1, 2, 3, 4, 5]
     assert len(reqs) == 1 and reqs[0].headers["Title"] == "[HIGH] 5 findings"
+
+
+def test_digest_lists_v9_right_after_a_rules():
+    fs = [_mf("P3", i) for i in range(12)] + [_mf("V2", 1), _mf("V9", 2), _mf("A5", 3)]
+    lines = _digest(fs).content.decode("utf-8").split("\n")
+    assert [ln.split()[0] for ln in lines[1:4]] == ["A5", "V9", "V2"]

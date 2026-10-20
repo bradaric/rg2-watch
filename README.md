@@ -255,7 +255,9 @@ After fixing a problem, put failed forms back in the queue:
 
 On Ctrl-C/SIGTERM, `watch` waits up to `stop_wait_s` (default 80 s) for in-flight analyses so
 their cost is recorded; anything still running is retried on the next start. The default fits
-under systemd's default `TimeoutStopSec` of 90 s; raise both together if you change it.
+under systemd's default `TimeoutStopSec` of 90 s: with the defaults a shutdown takes at most
+`stop_wait_s` + 5 s (status and page threads, together) + 3 s (alert delivery) = 88 s; raise
+`TimeoutStopSec` together with `stop_wait_s`.
 `--baseline` only silences D-rule alerts: already-published RG-2 forms are analysed too.
 
 Analysis needs Anthropic credentials (`ANTHROPIC_API_KEY` or an ant profile). Without them
