@@ -126,12 +126,22 @@ class Watcher:
                 self._warned.add("only-gone")
                 log.error("none of the selected municipalities is in the refreshed list; "
                           "keeping the previous selection")
-        for mid in (names if self._only is None else self._only).values():
+        failed = False
+        for name, mid in (names if self._only is None else self._only).items():
             if not self.store.station_ids(self.parent, mid):
-                options = self.client.stations(mid)  # station id -> station no
-                self.store.save_stations(self.parent, mid, {no: sid for sid, no in options.items()})
+                try:
+                    options = self.client.stations(mid)  # station id -> station no
+                    self.store.save_stations(self.parent, mid, {no: sid for sid, no in options.items()})
+                except RikUnavailable:
+                    raise  # RIK as a whole is down: the tick is abandoned, as before
+                except Exception as exc:  # one bad municipality must not stop the others
+                    failed = True
+                    if f"stations:{mid}" not in self._warned:
+                        self._warned.add(f"stations:{mid}")
+                        log.warning("stations of %r (%s) not loaded, retrying at the next refresh: %r",
+                                    name, mid, exc)
         self._bootstrapped = True
-        self._refresh_wanted = False
+        self._refresh_wanted = failed  # a failed municipality is retried by the next refresh
         self._last_bootstrap = self.clock()
 
     def run_once(self) -> None:

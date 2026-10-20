@@ -6,7 +6,7 @@ import pytest
 from rg2watch.config import Config
 from rg2watch.fake_rik import FakeRik
 from rg2watch.models import LABEL_TO_TYPE, RARE_TYPES, Election, Filters, Scope
-from rg2watch.rik_client import AdaptiveLimiter, RikClient
+from rg2watch.rik_client import AdaptiveLimiter, RikClient, RikError
 from rg2watch.store import Store
 from rg2watch.watcher import Watcher
 
@@ -1011,3 +1011,25 @@ def test_mass_replacement_alerts_once_and_marks_documents():
     assert len(marked[-1]) == 8 and len(marked) == 3  # called from the 6th event on
     w._run_lane("safety", lambda sid: w._emit(sid, [_replaced(1)]))
     assert len(statuses) == 1  # a small sweep afterwards does not alert
+
+
+def test_failing_municipality_does_not_stop_bootstrap_and_is_retried():
+    w, fake, store, t, batches, _ = env()
+    real = w.client.stations
+    calls = []
+
+    def stations(mid):
+        calls.append(mid)
+        if mid == "102" and calls.count("102") == 1:
+            raise RikError("HTTP 500 on stations")
+        return real(mid)
+
+    w.client.stations = stations
+    w.run_once()
+    assert w._bootstrapped and store.station_ids(P, "101") and store.station_ids(P, "103")
+    assert not store.station_ids(P, "102")
+    assert any(r["path"] == "/get-election" for r in fake.request_log)  # the lanes ran
+    t.now += 700  # past REFRESH_MIN_S: the next refresh retries only the failed one
+    w.run_once()
+    assert store.station_ids(P, "102")
+    assert calls == ["101", "102", "103", "102"]
