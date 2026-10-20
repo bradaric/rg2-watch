@@ -1,4 +1,7 @@
 import hashlib
+import json
+import os
+from types import SimpleNamespace
 import threading
 import time
 from pathlib import Path
@@ -8,11 +11,14 @@ import pytest
 from rg2watch.case_handoff import CaseError, CaseHandoff
 from rg2watch.config import Config
 from rg2watch.drive_publish import DriveError, DrivePublisher, GoogleDriveAdapter
+from rg2watch.drive_root import DriveRoot
 from rg2watch.store import Store
+from rg2watch import cli
 from test_browse import BASE, P, add, doc
 
 
 URL = BASE + "/extfile/drive.pdf"
+ROOT_MIME = "application/vnd.google-apps.folder"
 
 
 class SimulatedCrash(BaseException):
@@ -22,24 +28,39 @@ class SimulatedCrash(BaseException):
 class FakeDrive:
     def __init__(self, crash=None):
         self.ids = ["folder-id", "pdf-id", "text-id"]
-        self.files = {}
+        self.account = "account-1"
+        self.my_drive_root = "my-drive-root"
+        self.files = {"app-root-id": {"id": "app-root-id", "name": "RG2 Watch",
+                                      "mimeType": ROOT_MIME, "parents": [self.my_drive_root],
+                                      "owners": [{"permissionId": self.account}], "trashed": False}}
         self.public = False
+        self.root_public = False
         self.share_calls = 0
         self.crash = crash
         self.steps = []
 
     def generate_ids(self, count):
+        if count == 1:
+            return ["app-root-id"]
         assert count == 3
         return self.ids.copy()
+
+    def account_permission_id(self):
+        return self.account
+
+    def get_my_drive_root_id(self):
+        return self.my_drive_root
 
     def get_file(self, file_id):
         return self.files.get(file_id)
 
-    def create_folder(self, file_id, name):
+    def create_folder(self, file_id, name, parent):
         self.files.setdefault(file_id, {"id": file_id, "name": name,
                                        "mimeType": "application/vnd.google-apps.folder",
-                                       "parents": []})
-        self._step("folder")
+                                       "parents": [parent], "owners": [{"permissionId": self.account}],
+                                       "trashed": False})
+        if file_id != "app-root-id":
+            self._step("folder")
 
     def upload(self, file_id, name, mime, parent, data):
         self.files.setdefault(file_id, {"id": file_id, "name": name, "mimeType": mime,
@@ -48,7 +69,10 @@ class FakeDrive:
         self._step("pdf" if mime == "application/pdf" else "text")
 
     def folder_is_public(self, folder_id):
-        return self.public
+        return self.root_public if folder_id == "app-root-id" else self.public
+
+    def list_children(self, folder_id):
+        return [f for f in self.files.values() if f.get("parents") == [folder_id]]
 
     def share_folder(self, folder_id):
         self.share_calls += 1
@@ -65,6 +89,104 @@ class FakeDrive:
             raise SimulatedCrash("simulated crash after " + name)
 
 
+class RootDrive:
+    """In-memory Drive used only for root-coordinator tests (never contacts Google)."""
+    def __init__(self, account="account-1", files=None):
+        self.account = account
+        self.files = files if files is not None else {}
+        self.generated = 0
+        self.created = 0
+        self.get_calls = []
+
+    def account_permission_id(self):
+        return self.account
+
+    def generate_ids(self, count):
+        self.generated += 1
+        return ["shared-root-id"]
+
+    def get_my_drive_root_id(self):
+        return "my-drive-root"
+
+    def get_file(self, file_id):
+        self.get_calls.append(file_id)
+        return self.files.get(file_id)
+
+    def create_folder(self, file_id, name, parent):
+        self.created += 1
+        self.files.setdefault(file_id, {"id": file_id, "name": name, "mimeType": ROOT_MIME,
+                                        "parents": [parent], "owners": [{"permissionId": self.account}],
+                                        "trashed": False})
+
+    def folder_is_public(self, file_id):
+        return bool(self.files[file_id].get("public"))
+
+
+def test_drive_root_is_shared_by_token_path_and_durable(tmp_path):
+    token = tmp_path / "drive-token.json"
+    drive = RootDrive()
+    first = DriveRoot(token, drive).setup()
+    second = DriveRoot(token.resolve(), drive).setup()
+    assert first == second == "shared-root-id"
+    assert drive.generated == drive.created == 1
+    state_path = Path(str(token.resolve()) + ".root.json")
+    state = json.loads(state_path.read_text())
+    assert state == {"format_version": 1, "root_id": first,
+                     "account_permission_id": "account-1", "phase": "created"}
+    assert os.stat(state_path).st_mode & 0o777 == 0o600
+
+
+def test_reserved_root_recovers_same_id_after_create_crash(tmp_path):
+    token = tmp_path / "drive-token.json"
+    state_path = Path(str(token.resolve()) + ".root.json")
+    state_path.write_text(json.dumps({"format_version": 1, "root_id": "shared-root-id",
+                                      "account_permission_id": "account-1", "phase": "reserved"}))
+    drive = RootDrive()
+    assert DriveRoot(token, drive).setup() == "shared-root-id"
+    assert drive.generated == 0 and drive.created == 1
+
+
+def test_account_switch_is_refused_before_drive_file_operations(tmp_path):
+    token = tmp_path / "drive-token.json"
+    first = RootDrive()
+    DriveRoot(token, first).setup()
+    switched = RootDrive(account="different-account", files=first.files)
+    with pytest.raises(DriveError, match="authorized Google account"):
+        DriveRoot(token, switched).setup()
+    assert switched.generated == switched.created == 0
+    assert switched.get_calls == []
+
+
+@pytest.mark.parametrize("change", ["name", "parent", "owner", "trashed", "public", "missing"])
+def test_modified_or_inaccessible_root_fails_closed(tmp_path, change):
+    token = tmp_path / "drive-token.json"
+    drive = RootDrive()
+    root_id = DriveRoot(token, drive).setup()
+    root = drive.files[root_id]
+    if change == "name": root["name"] = "renamed"
+    elif change == "parent": root["parents"] = ["elsewhere"]
+    elif change == "owner": root["owners"] = [{"permissionId": "somebody-else"}]
+    elif change == "trashed": root["trashed"] = True
+    elif change == "public": root["public"] = True
+    else: del drive.files[root_id]
+    with pytest.raises(DriveError):
+        DriveRoot(token, drive).require()
+    assert drive.generated == drive.created == 1
+
+
+def test_drive_root_cli_explicitly_sets_up_and_prints_link(tmp_path, monkeypatch, capsys):
+    token = tmp_path / "token.json"
+    token.write_text("not-read-by-test")
+    drive = RootDrive()
+    cfg = Config(drive_token_path=token)
+    monkeypatch.setattr(cli, "_config", lambda args: cfg)
+    import rg2watch.drive_publish as module
+    monkeypatch.setattr(module, "configured_drive", lambda path: drive)
+    assert cli._cmd_drive_root(SimpleNamespace()) == 0
+    assert capsys.readouterr().out.strip().endswith("/shared-root-id")
+    assert cli._parser().parse_args(["drive-root"]).cmd == "drive-root"
+
+
 def setup_case(tmp_path):
     db = tmp_path / "watch.sqlite"
     s = Store(db)
@@ -77,10 +199,16 @@ def setup_case(tmp_path):
     return s, CaseHandoff(s, cfg)
 
 
+def make_publisher(cases, drive, tmp_path):
+    root = DriveRoot(tmp_path / "drive-token.json", drive)
+    root.setup()
+    return DrivePublisher(cases, drive, root)
+
+
 def test_folder_is_shared_only_after_both_verified_uploads(tmp_path):
     s, cases = setup_case(tmp_path)
     drive = FakeDrive()
-    result = DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert drive.steps == ["folder", "pdf", "text", "share"]
     assert result["url"] == "https://drive.google.com/drive/folders/folder-id"
     assert result["viber_text"].startswith("Могућа неправилност")
@@ -92,10 +220,10 @@ def test_retry_after_each_remote_crash_reuses_ids_and_one_folder(tmp_path, crash
     s, cases = setup_case(tmp_path)
     drive = FakeDrive(crash)
     with pytest.raises(SimulatedCrash, match="simulated crash"):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
-    result = DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert result["url"].endswith("folder-id")
-    assert set(drive.files) == set(drive.ids)
+    assert set(drive.files) == set(drive.ids) | {"app-root-id"}
     assert s.get_publication(URL)["folder_id"] == "folder-id"
     assert drive.share_calls == 1
 
@@ -104,12 +232,12 @@ def test_changed_retry_and_mutated_stage_fail_without_sharing(tmp_path):
     s, cases = setup_case(tmp_path)
     drive = FakeDrive("folder")
     with pytest.raises(SimulatedCrash):
-        DrivePublisher(cases, drive).publish(URL, "Први опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Први опис")
     with pytest.raises(CaseError, match="frozen"):
-        DrivePublisher(cases, drive).publish(URL, "Други опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Други опис")
     Path(s.get_publication(URL)["staged_pdf_path"]).write_bytes(b"%PDF-changed")
     with pytest.raises(CaseError, match="frozen"):
-        DrivePublisher(cases, drive).publish(URL, "Први опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Први опис")
     assert not drive.public
 
 
@@ -117,20 +245,20 @@ def test_ok_before_share_blocks_but_ok_after_existing_public_is_historical(tmp_p
     s, cases = setup_case(tmp_path)
     drive = FakeDrive("text")
     with pytest.raises(SimulatedCrash):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     s.set_review(URL, "ok")
     with pytest.raises(DriveError, match="escalate"):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert drive.share_calls == 0
     s.set_review(URL, "escalate")
     drive.crash = "share"
     with pytest.raises(SimulatedCrash):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert drive.public
     s.set_review(URL, "ok")
-    result = DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert result["url"].endswith("folder-id") and drive.share_calls == 1
-    repeated = DrivePublisher(cases, drive).publish(URL, "ignored changed summary")
+    repeated = make_publisher(cases, drive, tmp_path).publish(URL, "ignored changed summary")
     assert repeated == result
 
 
@@ -138,10 +266,51 @@ def test_remote_metadata_mismatch_fails_closed(tmp_path):
     _, cases = setup_case(tmp_path)
     drive = FakeDrive("folder")
     with pytest.raises(SimulatedCrash):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     drive.files["folder-id"]["name"] = "foreign"
     with pytest.raises(DriveError, match="metadata"):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+    assert not drive.public
+
+
+def test_legacy_pending_folder_requires_manual_move_then_reuses_same_id(tmp_path):
+    store, cases = setup_case(tmp_path)
+    drive = FakeDrive()
+    root = DriveRoot(tmp_path / "drive-token.json", drive)
+    root_id = root.setup()
+    cases.claim(URL, "Замрзнут јавни опис")
+    store.save_drive_ids(URL, *drive.ids)
+    case = cases._case(URL)
+    drive.files["folder-id"] = {
+        "id": "folder-id",
+        "name": f"RG2 предмет — {case['municipality']} БМ {case['station']}", "mimeType": ROOT_MIME,
+        "parents": [drive.my_drive_root], "owners": [{"permissionId": drive.account}],
+        "trashed": False,
+    }
+    pub = DrivePublisher(cases, drive, root)
+    with pytest.raises(DriveError, match="move.*manually"):
+        pub.publish(URL, "Замрзнут јавни опис")
+    assert store.get_publication(URL)["drive_account_id"] == drive.account
+    assert not drive.public and drive.share_calls == 0
+
+    # This simulates the operator moving the same empty folder in Google Drive's UI.
+    drive.files["folder-id"]["parents"] = [root_id]
+    result = pub.publish(URL, "Замрзнут јавни опис")
+    assert result["status"] == "published"
+    assert set(drive.ids) <= set(drive.files)
+    assert drive.share_calls == 1 and not drive.root_public
+
+
+def test_visible_unexpected_child_blocks_case_upload_and_share(tmp_path):
+    store, cases = setup_case(tmp_path)
+    drive = FakeDrive("folder")
+    pub = make_publisher(cases, drive, tmp_path)
+    with pytest.raises(SimulatedCrash):
+        pub.publish(URL, "Јавни опис")
+    drive.files["unexpected"] = {"id": "unexpected", "name": "unknown",
+                                  "parents": ["folder-id"]}
+    with pytest.raises(DriveError, match="unexpected"):
+        pub.publish(URL, "Јавни опис")
     assert not drive.public
 
 
@@ -160,7 +329,7 @@ class BlockingShareDrive(FakeDrive):
 def test_review_started_during_share_waits_until_publication_is_committed(tmp_path):
     first, cases = setup_case(tmp_path)
     drive = BlockingShareDrive()
-    publisher = DrivePublisher(cases, drive)
+    publisher = make_publisher(cases, drive, tmp_path)
     publish_result = []
     publish_thread = threading.Thread(
         target=lambda: publish_result.append(publisher.publish(URL, "Јавни опис")))
@@ -180,7 +349,7 @@ def test_review_started_during_share_waits_until_publication_is_committed(tmp_pa
     review_thread.join(5)
     assert publish_result[0]["status"] == "published"
     assert review_result[0]["verdict"] == "ok"
-    assert DrivePublisher(cases, drive).publish(URL, "ignored") == publish_result[0]
+    assert make_publisher(cases, drive, tmp_path).publish(URL, "ignored") == publish_result[0]
     assert drive.share_calls == 1
 
 
@@ -223,10 +392,10 @@ def test_drive_failure_before_sharing_leaves_folder_restricted(tmp_path, failure
     _, cases = setup_case(tmp_path)
 
     class FailingDrive(FakeDrive):
-        def create_folder(self, file_id, name):
+        def create_folder(self, file_id, name, parent):
             if failure == "folder":
                 raise DriveError("injected Drive failure")
-            super().create_folder(file_id, name)
+            super().create_folder(file_id, name, parent)
 
         def upload(self, file_id, name, mime, parent, data):
             kind = "pdf" if mime == "application/pdf" else "text"
@@ -236,7 +405,7 @@ def test_drive_failure_before_sharing_leaves_folder_restricted(tmp_path, failure
 
     drive = FailingDrive()
     with pytest.raises(DriveError, match="injected"):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert not drive.public and drive.share_calls == 0
 
 
@@ -251,11 +420,11 @@ def test_crash_before_uploaded_phase_update_recovers_frozen_case(tmp_path, monke
 
     monkeypatch.setattr(store, "advance_publication", crash_before_update)
     with pytest.raises(SimulatedCrash, match="phase update"):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert not drive.public
-    result = DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert result["status"] == "published"
-    assert set(drive.files) == set(drive.ids)
+    assert set(drive.files) == set(drive.ids) | {"app-root-id"}
 
 
 def test_crash_after_id_preallocation_persists_ids_before_any_create(tmp_path):
@@ -267,18 +436,18 @@ def test_crash_after_id_preallocation_persists_ids_before_any_create(tmp_path):
             self.once = True
 
         def get_file(self, file_id):
-            if self.once:
+            if self.once and file_id == "folder-id":
                 self.once = False
                 raise SimulatedCrash("after ID persistence")
             return super().get_file(file_id)
 
     drive = CrashBeforeCreate()
     with pytest.raises(SimulatedCrash, match="ID persistence"):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     row = store.get_publication(URL)
     assert [row["folder_id"], row["pdf_file_id"], row["text_file_id"]] == drive.ids
-    assert drive.files == {}
-    assert DrivePublisher(cases, drive).publish(URL, "Јавни опис")["status"] == "published"
+    assert set(drive.files) == {"app-root-id"}
+    assert make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")["status"] == "published"
 
 
 def test_crash_after_share_before_finalize_recovers_even_after_ok(tmp_path, monkeypatch):
@@ -292,9 +461,9 @@ def test_crash_after_share_before_finalize_recovers_even_after_ok(tmp_path, monk
 
     monkeypatch.setattr(store, "finalize_publication", crash_before_finalize)
     with pytest.raises(SimulatedCrash, match="publication commit"):
-        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert drive.public
     store.set_review(URL, "ok")
-    result = DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert result["status"] == "published"
     assert drive.share_calls == 1

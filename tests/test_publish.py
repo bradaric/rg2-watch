@@ -98,10 +98,20 @@ def test_claim_freezes_summary_and_pdf_and_refuses_changed_retry(tmp_path):
     store.close()
 
 
+def test_publication_account_binding_is_nullable_and_immutable(tmp_path):
+    store, service, _ = handoff(tmp_path)
+    service.claim(URL, "Опрезан јавни опис.")
+    assert store.get_publication(URL)["drive_account_id"] is None
+    store.bind_publication_account(URL, "account-1")
+    assert store.get_publication(URL)["drive_account_id"] == "account-1"
+    store.bind_publication_account(URL, "account-1")
+    with pytest.raises(ValueError, match="different Google Drive account"):
+        store.bind_publication_account(URL, "account-2")
+
+
 def test_restart_after_preclaim_crash_discards_unclaimed_orphan_and_accepts_new_summary(
         tmp_path, monkeypatch):
-    from test_drive_publish import FakeDrive
-    from rg2watch.drive_publish import DrivePublisher
+    from test_drive_publish import FakeDrive, make_publisher
 
     store, service, _ = handoff(tmp_path)
 
@@ -127,7 +137,7 @@ def test_restart_after_preclaim_crash_discards_unclaimed_orphan_and_accepts_new_
     finally:
         jobs.close()
 
-    result = DrivePublisher(restarted, FakeDrive()).publish(URL, "Нови одобрени опис")
+    result = make_publisher(restarted, FakeDrive(), tmp_path).publish(URL, "Нови одобрени опис")
     assert result["status"] == "published"
     frozen = restarted_store.get_publication(URL)
     assert frozen["summary"] == "Нови одобрени опис"
@@ -443,19 +453,29 @@ class _ProcessDrive:
         self.crash_after_folder = crash_after_folder
 
     def generate_ids(self, count):
+        if count == 1:
+            return ["process-root"]
         self.state["generate_calls"] += 1
         return ["process-folder", "process-pdf", "process-text"]
+
+    def account_permission_id(self):
+        return "process-account"
+
+    def get_my_drive_root_id(self):
+        return "my-drive-root"
 
     def get_file(self, file_id):
         return self.state["files"].get(file_id)
 
-    def create_folder(self, file_id, name):
+    def create_folder(self, file_id, name, parent):
         files = dict(self.state["files"])
         files[file_id] = {"id": file_id, "name": name,
-                          "mimeType": "application/vnd.google-apps.folder", "parents": []}
+                          "mimeType": "application/vnd.google-apps.folder", "parents": [parent],
+                          "owners": [{"permissionId": "process-account"}], "trashed": False}
         self.state["files"] = files
-        self.state["folder_creates"] += 1
-        if self.crash_after_folder:
+        if file_id != "process-root":
+            self.state["folder_creates"] += 1
+        if file_id != "process-root" and self.crash_after_folder:
             os._exit(73)
 
     def upload(self, file_id, name, mime, parent, data):
@@ -465,7 +485,10 @@ class _ProcessDrive:
         self.state["files"] = files
 
     def folder_is_public(self, folder_id):
-        return self.state["public"]
+        return False if folder_id == "process-root" else self.state["public"]
+
+    def list_children(self, folder_id):
+        return [f for f in self.state["files"].values() if f.get("parents") == [folder_id]]
 
     def share_folder(self, folder_id):
         self.state["share_calls"] += 1
@@ -477,10 +500,14 @@ class _ProcessDrive:
 
 def _publish_with_process_store(db, state, crash, out=None):
     from rg2watch.drive_publish import DrivePublisher
+    from rg2watch.drive_root import DriveRoot
     store = Store(db)
     try:
         cases = CaseHandoff(store, Config(db_path=Path(db), max_pdf_bytes=1000))
-        result = DrivePublisher(cases, _ProcessDrive(state, crash)).publish(URL, "Процесни опис")
+        drive = _ProcessDrive(state, crash)
+        root = DriveRoot(Path(db).parent / "process-token.json", drive)
+        root.setup()
+        result = DrivePublisher(cases, drive, root).publish(URL, "Процесни опис")
         if out is not None:
             out.put(result)
     finally:
@@ -488,8 +515,8 @@ def _publish_with_process_store(db, state, crash, out=None):
 
 
 def test_two_store_publish_owner_blocks_claim_and_upload_then_recovers_after_crash(tmp_path):
-    from test_drive_publish import FakeDrive
-    from rg2watch.drive_publish import DrivePublisher, DriveError
+    from test_drive_publish import FakeDrive, make_publisher
+    from rg2watch.drive_publish import DriveError
 
     first, _, _ = handoff(tmp_path)
     second = Store(first.path)
@@ -501,14 +528,14 @@ def test_two_store_publish_owner_blocks_claim_and_upload_then_recovers_after_cra
         assert ready.wait(5)
         blocked_drive = FakeDrive()
         with pytest.raises(DriveError, match="in progress"):
-            DrivePublisher(cases, blocked_drive).publish(URL, "Јавни опис")
+            make_publisher(cases, blocked_drive, tmp_path).publish(URL, "Јавни опис")
         assert blocked_drive.steps == []
         assert second.get_publication(URL) is None
     finally:
         if owner.is_alive():
             owner.kill()
         owner.join(5)
-    result = DrivePublisher(cases, blocked_drive).publish(URL, "Јавни опис")
+    result = make_publisher(cases, blocked_drive, tmp_path).publish(URL, "Јавни опис")
     assert result["status"] == "published"
 
 
@@ -541,6 +568,6 @@ def test_second_process_recovers_durable_pending_and_remote_create_without_dupli
         assert frozen_ids == ["process-folder", "process-pdf", "process-text"]
         assert state["generate_calls"] == 1
         assert state["folder_creates"] == 1
-        assert set(state["files"]) == set(frozen_ids)
+        assert set(state["files"]) == set(frozen_ids) | {"process-root"}
         assert state["files"]["process-pdf"]["md5Checksum"] == hashlib.md5(frozen_bytes).hexdigest()
         assert state["share_calls"] == 1
