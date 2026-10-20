@@ -106,10 +106,16 @@ class GoogleDriveAdapter:
 
     def list_children(self, folder_id: str) -> list[dict]:
         try:
-            value = self.service.files().list(
-                q=f"'{folder_id}' in parents and trashed = false", spaces="drive",
-                fields="files(id,name,mimeType,parents,trashed)", pageSize=1000).execute()
-            return value.get("files", [])
+            children, page_token = [], None
+            while True:
+                value = self.service.files().list(
+                    q=f"'{folder_id}' in parents and trashed = false", spaces="drive",
+                    fields="nextPageToken,files(id,name,mimeType,parents,trashed)", pageSize=1000,
+                    **({"pageToken": page_token} if page_token else {})).execute()
+                children.extend(value.get("files", []))
+                page_token = value.get("nextPageToken")
+                if not page_token:
+                    return children
         except Exception as exc:
             raise DriveError("Drive case folder contents could not be inspected") from exc
 

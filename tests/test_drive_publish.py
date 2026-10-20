@@ -447,6 +447,21 @@ def test_child_public_permission_must_be_inherited_from_expected_folder():
     assert adapter.children_inherit_public("folder", ["pdf", "text"])
 
 
+def test_adapter_inspects_every_page_of_app_visible_children():
+    class FilesService:
+        def files(self):
+            return self
+
+        def list(self, **kwargs):
+            token = kwargs.get("pageToken")
+            payload = ({"files": [{"id": "first"}], "nextPageToken": "next"}
+                       if token is None else {"files": [{"id": "unexpected"}]})
+            return PermissionRequest(payload)
+
+    assert [f["id"] for f in GoogleDriveAdapter(FilesService()).list_children("folder")] == [
+        "first", "unexpected"]
+
+
 @pytest.mark.parametrize("failure", ["folder", "pdf", "text"])
 def test_drive_failure_before_sharing_leaves_folder_restricted(tmp_path, failure):
     _, cases = setup_case(tmp_path)
