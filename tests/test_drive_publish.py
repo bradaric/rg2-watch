@@ -146,6 +146,43 @@ def test_reserved_root_recovers_same_id_after_create_crash(tmp_path):
     assert drive.generated == 0 and drive.created == 1
 
 
+def test_competing_databases_share_one_root_for_the_same_token(tmp_path):
+    token = tmp_path / "shared-token.json"
+    drive = RootDrive()
+    results = []
+    start = threading.Barrier(3)
+
+    def setup_from_separate_database():
+        # Store paths deliberately differ; root coordination depends only on the token path.
+        Store(tmp_path / f"election-{threading.get_ident()}.sqlite").close()
+        start.wait()
+        results.append(DriveRoot(token, drive).setup())
+
+    workers = [threading.Thread(target=setup_from_separate_database) for _ in range(2)]
+    for worker in workers: worker.start()
+    start.wait()
+    for worker in workers: worker.join(5)
+    assert results == ["shared-root-id", "shared-root-id"]
+    assert drive.generated == drive.created == 1
+
+
+def test_root_recovers_after_remote_create_before_created_state_write(tmp_path):
+    token = tmp_path / "drive-token.json"
+
+    class CrashAfterCreate(RootDrive):
+        def create_folder(self, file_id, name, parent):
+            super().create_folder(file_id, name, parent)
+            raise SimulatedCrash("after remote root create")
+
+    drive = CrashAfterCreate()
+    with pytest.raises(SimulatedCrash):
+        DriveRoot(token, drive).setup()
+    state = json.loads(Path(str(token.resolve()) + ".root.json").read_text())
+    assert state["phase"] == "reserved"
+    assert DriveRoot(token, drive).setup() == "shared-root-id"
+    assert drive.generated == drive.created == 1
+
+
 def test_account_switch_is_refused_before_drive_file_operations(tmp_path):
     token = tmp_path / "drive-token.json"
     first = RootDrive()
