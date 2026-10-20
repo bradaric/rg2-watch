@@ -129,3 +129,10 @@ No fetching of RIK's official results (operator decision). Tally only what the a
 - Page: a "Results" tab (DataTables) next to the forms table, labelled "unofficial - numbers read
   by a model from the scanned forms"; CSV download of the per-municipality table.
 - `rg2watch tally [--parent P] [--municipality ...]` prints the same totals in the terminal.
+
+## Follow-ups after C + D (cli.py / pipeline.py were busy)
+
+- `_cmd_analyze_batch`: show `res["unrecorded"]` in the summary; validate `--max-usd` (positive,
+  finite); warn at the gate when the estimate exceeds `--max-usd`.
+- pipeline.py: store analyses under `stored_model(cfg.model)` with `responding_model` in the
+  report (as batch.py/evaluate.py do since 706ccdf).
