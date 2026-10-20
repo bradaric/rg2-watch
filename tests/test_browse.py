@@ -573,3 +573,18 @@ def test_page_banner_on_status_data_db_mismatch():
 def test_alert_links_are_built_from_url_in_status_and_data():
     html = (STATIC / "index.html").read_text()
     assert "alertForm(x[7])" in html and 'link("PDF", loc)' in html and "showForm(r.id" in html
+
+
+def test_browse_leaves_a_live_watchers_status_alone(tmp_path):
+    db = tmp_path / "w.sqlite"
+    Store(db).close()
+    page_dir = tmp_path / "w"
+    page_dir.mkdir()
+    status = page_dir / "status.json"
+    live = json.dumps({"watching": True, "parent": P, "ts": time.time(), "marker": "live"})
+    status.write_text(live)
+    assert main(["browse", "--db", str(db)]) == 0
+    assert (page_dir / "data.json").exists() and status.read_text() == live  # data only
+    status.write_text(json.dumps({"watching": True, "parent": P, "ts": time.time() - 120}))
+    assert main(["browse", "--db", str(db)]) == 0  # stale: rewritten as "not watching"
+    assert json.loads(status.read_text())["watching"] is False

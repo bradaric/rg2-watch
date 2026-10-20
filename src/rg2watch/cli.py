@@ -33,7 +33,7 @@ from .replay import fetch_fixtures, make_replay_server
 from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, download_limiter_for
 from .rules import change_text, evaluate_report, evaluate_rg7
 from .server import start_server
-from .status import format_status, to_belgrade
+from .status import WATCHER_FRESH_S, format_status, to_belgrade
 from .store import NOTE_MAX, VERDICTS, Store
 from .tally import build_tally, format_tally
 from .watcher import Watcher, filter_request_rate
@@ -288,12 +288,23 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store):
     return None
 
 
+def _watcher_live(page_dir: Path) -> bool:
+    """A watcher is writing status.json here (watching, younger than WATCHER_FRESH_S): a one-off
+    page build must then leave the status files to it."""
+    try:
+        live = json.loads((page_dir / "status.json").read_text(encoding="utf-8"))
+        return bool(live.get("watching")) and time.time() - live["ts"] < WATCHER_FRESH_S
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def _cmd_browse(args) -> int:
     cfg = _config(args)
     store = _open_store(cfg)
     try:
         out = args.out or _browse_path(cfg)
-        n = build_page(store, out, _cache_dir(cfg), args.parent, cfg)
+        n = build_page(store, out, _cache_dir(cfg), args.parent, cfg,
+                       with_status=not _watcher_live(out.resolve().parent))
     finally:
         store.close()
     print(f"{out} ({n} form(s))")
@@ -381,7 +392,8 @@ def _cmd_serve(args) -> int:
     store = _open_store(cfg)  # stays open: POST /review writes verdicts
     try:
         if not (out.parent / "data.json").is_file():
-            build_page(store, out, _cache_dir(cfg), cfg=cfg)
+            build_page(store, out, _cache_dir(cfg), cfg=cfg,
+                       with_status=not _watcher_live(out.resolve().parent))
         server = _start_web(out.parent, _cache_dir(cfg), port, store)
         if server is None:
             print(f"no free port in {port}-{port + PORT_TRIES - 1}", file=sys.stderr)
