@@ -6,6 +6,7 @@ import threading
 import time
 
 import rg2watch.cli as cli
+from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.analyze import AnalysisResult
 from rg2watch.browse import STATIC, STATIC_FILES, build_page
 from rg2watch.cli import main
@@ -436,7 +437,7 @@ def test_current_prompt_version_preferred_per_model(tmp_path):
     s = store()
     d = doc(BASE + "/e/a.pdf", no="12")
     add(s, d)
-    s.save_analysis(d.url, AnalysisResult(_report(ballots_in_box=nf(900)), 0, 0, 0.0, "m", "stop"), "v6")
+    s.save_analysis(d.url, AnalysisResult(_report(ballots_in_box=nf(900)), 0, 0, 0.0, "m", "stop"), PROMPT_VERSION)
     s.save_analysis(d.url, AnalysisResult(clean_report(), 0, 0, 0.0, "m", "stop"), "v5")  # newer, old prompt
     out = tmp_path / "index.html"
     build_page(s, out, tmp_path / "pdfs")
