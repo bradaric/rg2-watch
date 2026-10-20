@@ -681,6 +681,13 @@ renderHero();
 assert(slots.every(x => x.row.hidden), "filed-ineligible selected view must hide the chart");
 assert(!els["hs-valid"].textContent.includes("NaN"));
 
+const many = row([10,9,8,7,6,5,4,3,2,46], [10,9,8,7,6,5,4,3,2,46]);
+setData(many);
+T.names = Array.from({length: 10}, (_, i) => "Назив " + (i + 1));
+T.fallback_name_indices = [];
+renderHero();
+assert.equal(slots[8].nm.textContent, "Остале (2 листа)");
+
 r = row(null, [55, 45]);
 setData(r);
 renderHero();
@@ -721,6 +728,30 @@ csv = tallyCsv();
 assert(csv.includes("Alpha,1,A,60,60.0"), "municipal list rows must be long format");
 assert(csv.includes("Unavailable - no comparable ballot"), "unknown ballot must be explicit");
 assert(csv.includes("Unavailable - no universal ballot"), "municipal overall list fields must be explicit");
+
+unknown.generated_unknown_muni = true;
+unknown.names = ["List 1", "Стварна листа"]; unknown.fallback_name_indices = [0]; unknown.nlists = 2;
+for (const k of ["all", "cl", "fall", "fcl"]) { unknown[k].lists = [60, 40]; unknown[k].lists_valid = 100; unknown[k].vote_forms = 1; }
+heroMuni = "(unknown)"; heroPicked = true;
+renderHero();
+assert.equal(els.hmuni.options[2].textContent, "Непозната општина");
+assert(els.herotitle.textContent.startsWith("Непозната општина"));
+assert.equal(slots[0].nm.textContent, "Листа 1");
+unknown.generated_unknown_muni = false; delete unknown.fallback_name_indices;
+renderHero();
+assert.equal(els.hmuni.options[2].textContent, "(unknown)");
+assert(els.herotitle.textContent.startsWith("(unknown)"));
+assert.equal(slots[0].nm.textContent, "List 1");
+heroMuni = ""; heroPicked = true;
+renderHero();
+assert(els.herotitle.textContent.startsWith("Све општине"));
+T.scope_note = "future <opaque> warning";
+renderHero();
+assert(els.heronames.textContent.includes("future <opaque> warning"));
+S = {watching: false, ts: 0};
+renderHero();
+assert(els.herofoot.children[1].textContent.includes("можда застарели"));
+S = null;
 
 els.tview.value = "corrected";
 const emptyNational = row(null, null);
