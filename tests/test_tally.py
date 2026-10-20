@@ -896,7 +896,16 @@ for (const k of ["all", "cl", "fall", "fcl"]) { emptyNational[k].lists = []; emp
 setData(emptyNational);
 T.names = []; T.names_note = emptyNational.names_note;
 renderHero();
-assert(els["hs-valid"].textContent.includes("Упоредиви збирови по листама нису доступни за овај обухват."));
+const listWarning = "Упоредиви збирови по листама нису доступни за овај обухват.";
+const correctedUnavailableLines = els["hs-valid"].textContent.split("\n");
+assert.equal(correctedUnavailableLines.length, 5);
+assert.equal(correctedUnavailableLines.at(-1), listWarning);
+els.tview.value = "diff";
+renderHero();
+const diffUnavailableLines = els["hs-valid"].textContent.split("\n");
+assert.equal(diffUnavailableLines.length, 6);
+assert.equal(diffUnavailableLines.at(-1), listWarning);
+els.tview.value = "corrected";
 let availability = resultCols("all").find(x => x.t === "List totals availability");
 assert(availability, "national empty ballot needs an explicit results column");
 assert(availability.f(availability.v(vrow(emptyNational))).includes("Unavailable - no expected ballot rows"));
