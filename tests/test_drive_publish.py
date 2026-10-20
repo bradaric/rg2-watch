@@ -40,6 +40,7 @@ class FakeDrive:
         self.share_targets = []
         self.crash = crash
         self.steps = []
+        self.folder_creates = []
 
     def generate_ids(self, count):
         if count == 1:
@@ -50,13 +51,19 @@ class FakeDrive:
     def account_permission_id(self):
         return self.account
 
-    def get_my_drive_root_id(self):
-        return self.my_drive_root
-
     def get_file(self, file_id):
         return self.files.get(file_id)
 
+    def create_root_folder(self, file_id, name):
+        self.files.setdefault(file_id, {"id": file_id, "name": name,
+                                       "mimeType": ROOT_MIME,
+                                       "parents": [self.my_drive_root],
+                                       "owners": [{"permissionId": self.account}],
+                                       "trashed": False})
+        return self.files[file_id]
+
     def create_folder(self, file_id, name, parent):
+        self.folder_creates.append((file_id, name, parent))
         self.files.setdefault(file_id, {"id": file_id, "name": name,
                                        "mimeType": "application/vnd.google-apps.folder",
                                        "parents": [parent], "owners": [{"permissionId": self.account}],
@@ -108,18 +115,20 @@ class RootDrive:
         self.generated += 1
         return ["shared-root-id"]
 
-    def get_my_drive_root_id(self):
-        return "my-drive-root"
-
     def get_file(self, file_id):
         self.get_calls.append(file_id)
         return self.files.get(file_id)
 
-    def create_folder(self, file_id, name, parent):
+    def create_root_folder(self, file_id, name):
         self.created += 1
         self.files.setdefault(file_id, {"id": file_id, "name": name, "mimeType": ROOT_MIME,
-                                        "parents": [parent], "owners": [{"permissionId": self.account}],
+                                        "parents": ["my-drive-root"],
+                                        "owners": [{"permissionId": self.account}],
                                         "trashed": False})
+        return self.files[file_id]
+
+    def create_folder(self, file_id, name, parent):
+        raise AssertionError("root setup must use root-only default placement")
 
     def folder_is_public(self, file_id):
         return bool(self.files[file_id].get("public"))
@@ -138,18 +147,15 @@ class ProcessRootDrive:
         self.state["generated"] += 1
         return ["process-root-id"]
 
-    def get_my_drive_root_id(self):
-        return "my-drive-root"
-
     def get_file(self, file_id):
         if self.crash_stage == "reserved" and file_id == "process-root-id":
             os._exit(71)
         return self.state["files"].get(file_id)
 
-    def create_folder(self, file_id, name, parent):
+    def create_root_folder(self, file_id, name):
         files = dict(self.state["files"])
         files[file_id] = {
-            "id": file_id, "name": name, "mimeType": ROOT_MIME, "parents": [parent],
+            "id": file_id, "name": name, "mimeType": ROOT_MIME, "parents": ["my-drive-root"],
             "owners": [{"permissionId": "process-account"}], "trashed": False,
         }
         self.state["files"] = files
@@ -184,8 +190,9 @@ def test_drive_root_is_shared_by_token_path_and_durable(tmp_path):
     assert drive.generated == drive.created == 1
     state_path = Path(str(token.resolve()) + ".root.json")
     state = json.loads(state_path.read_text())
-    assert state == {"format_version": 1, "root_id": first,
-                     "account_permission_id": "account-1", "phase": "created"}
+    assert state == {"format_version": 2, "root_id": first,
+                     "account_permission_id": "account-1", "phase": "created",
+                     "my_drive_parent_id": "my-drive-root"}
     assert os.stat(state_path).st_mode & 0o777 == 0o600
 
 
@@ -197,6 +204,45 @@ def test_reserved_root_recovers_same_id_after_create_crash(tmp_path):
     drive = RootDrive()
     assert DriveRoot(token, drive).setup() == "shared-root-id"
     assert drive.generated == 0 and drive.created == 1
+    assert json.loads(state_path.read_text()) == {
+        "format_version": 2, "root_id": "shared-root-id",
+        "account_permission_id": "account-1", "phase": "created",
+        "my_drive_parent_id": "my-drive-root",
+    }
+
+
+def test_version_one_reserved_state_recovers_when_builtin_root_is_inaccessible(tmp_path):
+    token = tmp_path / "drive-token.json"
+    state_path = Path(str(token.resolve()) + ".root.json")
+    state_path.write_text(json.dumps({"format_version": 1, "root_id": "shared-root-id",
+                                      "account_permission_id": "account-1",
+                                      "phase": "reserved"}))
+
+    class LimitedScopeDrive(RootDrive):
+        def get_my_drive_root_id(self):
+            raise DriveError("Google Drive My Drive root could not be inspected")
+
+    drive = LimitedScopeDrive()
+    assert DriveRoot(token, drive).setup() == "shared-root-id"
+    assert drive.generated == 0
+    assert "root" not in drive.get_calls
+
+
+def test_version_one_created_state_without_parent_fails_closed(tmp_path):
+    token = tmp_path / "drive-token.json"
+    Path(str(token.resolve()) + ".root.json").write_text(json.dumps({
+        "format_version": 1, "root_id": "shared-root-id",
+        "account_permission_id": "account-1", "phase": "created",
+    }))
+    drive = RootDrive(files={"shared-root-id": {
+        "id": "shared-root-id", "name": "RG2 Watch", "mimeType": ROOT_MIME,
+        "parents": ["my-drive-root"], "owners": [{"permissionId": "account-1"}],
+        "trashed": False,
+    }})
+
+    with pytest.raises(DriveError, match="manual"):
+        DriveRoot(token, drive).setup()
+    assert drive.get_calls == [] and drive.generated == drive.created == 0
 
 
 def test_competing_databases_share_one_root_for_the_same_token(tmp_path):
@@ -281,8 +327,8 @@ def test_root_recovers_after_remote_create_before_created_state_write(tmp_path):
     token = tmp_path / "drive-token.json"
 
     class CrashAfterCreate(RootDrive):
-        def create_folder(self, file_id, name, parent):
-            super().create_folder(file_id, name, parent)
+        def create_root_folder(self, file_id, name):
+            super().create_root_folder(file_id, name)
             raise SimulatedCrash("after remote root create")
 
     drive = CrashAfterCreate()
@@ -290,6 +336,39 @@ def test_root_recovers_after_remote_create_before_created_state_write(tmp_path):
         DriveRoot(token, drive).setup()
     state = json.loads(Path(str(token.resolve()) + ".root.json").read_text())
     assert state["phase"] == "reserved"
+    assert DriveRoot(token, drive).setup() == "shared-root-id"
+    assert drive.generated == drive.created == 1
+
+
+def test_root_reconciles_uncertain_create_using_same_preallocated_id(tmp_path):
+    token = tmp_path / "drive-token.json"
+
+    class UncertainCreate(RootDrive):
+        def create_root_folder(self, file_id, name):
+            super().create_root_folder(file_id, name)
+            raise DriveError("simulated 409 or uncertain response")
+
+    drive = UncertainCreate()
+    assert DriveRoot(token, drive).setup() == "shared-root-id"
+    assert drive.generated == drive.created == 1
+    assert set(drive.files) == {"shared-root-id"}
+
+
+def test_retry_after_created_state_write_does_not_create_another_root(tmp_path, monkeypatch):
+    token = tmp_path / "drive-token.json"
+    drive = RootDrive()
+    root = DriveRoot(token, drive)
+    real_write = root._write
+
+    def crash_after_write(value):
+        real_write(value)
+        if value["phase"] == "created":
+            raise SimulatedCrash("after created state write")
+
+    monkeypatch.setattr(root, "_write", crash_after_write)
+    with pytest.raises(SimulatedCrash, match="state write"):
+        root.setup()
+
     assert DriveRoot(token, drive).setup() == "shared-root-id"
     assert drive.generated == drive.created == 1
 
@@ -328,7 +407,10 @@ def test_pending_account_mismatch_is_refused_before_any_file_get(tmp_path):
     assert drive.get_calls == []
 
 
-@pytest.mark.parametrize("change", ["name", "parent", "owner", "trashed", "public", "missing"])
+@pytest.mark.parametrize("change", [
+    "name", "parent", "missing_parent", "multiple_parents", "owner", "missing_owner",
+    "trashed", "public", "missing",
+])
 def test_modified_or_inaccessible_root_fails_closed(tmp_path, change):
     token = tmp_path / "drive-token.json"
     drive = RootDrive()
@@ -336,7 +418,10 @@ def test_modified_or_inaccessible_root_fails_closed(tmp_path, change):
     root = drive.files[root_id]
     if change == "name": root["name"] = "renamed"
     elif change == "parent": root["parents"] = ["elsewhere"]
+    elif change == "missing_parent": root["parents"] = []
+    elif change == "multiple_parents": root["parents"] = ["my-drive-root", "elsewhere"]
     elif change == "owner": root["owners"] = [{"permissionId": "somebody-else"}]
+    elif change == "missing_owner": root["owners"] = []
     elif change == "trashed": root["trashed"] = True
     elif change == "public": root["public"] = True
     else: del drive.files[root_id]
@@ -381,6 +466,8 @@ def test_folder_is_shared_only_after_both_verified_uploads(tmp_path):
     drive = FakeDrive()
     result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
     assert drive.steps == ["folder", "pdf", "text", "share"]
+    assert drive.folder_creates[0][0] == "folder-id"
+    assert drive.folder_creates[0][2] == "app-root-id"
     assert result["url"] == "https://drive.google.com/drive/folders/folder-id"
     assert result["viber_text"].startswith("Могућа неправилност")
     assert s.get_publication(URL)["phase"] == "published"
@@ -556,6 +643,28 @@ class PermissionRequest:
 
     def execute(self):
         return self.payload
+
+
+def test_adapter_creates_app_root_with_default_my_drive_placement():
+    class FilesService:
+        def __init__(self):
+            self.request = None
+
+        def files(self):
+            return self
+
+        def create(self, **kwargs):
+            self.request = kwargs
+            return PermissionRequest({"id": "reserved-root", "parents": ["my-drive-root"]})
+
+    service = FilesService()
+    created = GoogleDriveAdapter(service).create_root_folder("reserved-root", "RG2 Watch")
+
+    assert service.request["body"] == {
+        "id": "reserved-root", "name": "RG2 Watch", "mimeType": ROOT_MIME,
+    }
+    assert service.request["fields"] == "id,parents"
+    assert created == {"id": "reserved-root", "parents": ["my-drive-root"]}
 
 
 def test_adapter_sanitizes_generate_ids_provider_failure():
