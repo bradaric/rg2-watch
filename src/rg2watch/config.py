@@ -7,6 +7,29 @@ from pathlib import Path
 from .names import to_cyrillic
 
 
+# USD per million tokens (input, output): Anthropic list prices as of 20/10/2026 (Haiku: prompts
+# up to 100k tokens; ours are ~20k). Local ollama models are free.
+PRICES: dict[str, tuple[float, float]] = {
+    "claude-haiku-5-5": (0.10, 0.50),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-opus-5-5": (4.0, 20.0),
+}
+
+
+class UnknownPrice(ValueError):
+    pass
+
+
+def table_prices(model: str) -> tuple[float, float] | None:
+    """Built-in price of a model (dated names like claude-haiku-5-5-2026... match), else None."""
+    if model.startswith("ollama:"):
+        return (0.0, 0.0)
+    for name, price in PRICES.items():
+        if model == name or model.startswith(name + "-"):
+            return price
+    return None
+
+
 @dataclass
 class Config:
     base_url: str = "https://www.rik.parlament.gov.rs"
@@ -44,8 +67,8 @@ class Config:
     ollama_url: str = "http://localhost:11434"  # used when model = "ollama:<name>"
     ollama_num_ctx: int = 65536
     ollama_timeout_s: float = 900.0
-    price_in_per_mtok: float = 0.10  # Haiku 5.5 list price, <=100k-token prompts, as of 20/10/2026
-    price_out_per_mtok: float = 0.50
+    price_in_per_mtok: float | None = None  # override of the built-in table (PRICES); None = table
+    price_out_per_mtok: float | None = None
     analysis_workers: int = 4
     browse_interval_s: int = 120  # rebuild the browse page this often in `watch`; 0 = off
     serve_port: int = 8770  # local web server of `watch` (127.0.0.1); 0 = off
@@ -61,6 +84,20 @@ class Config:
     outside_share_medium: float = 0.10  # initial value, tune after calibration
     large_correction_abs: int = 5
     large_correction_share: float = 0.3
+
+
+def model_prices(cfg: Config, model: str | None = None) -> tuple[float, float]:
+    """(input, output) USD per MTok for `model` (default cfg.model): the config values when set
+    explicitly, else the built-in table; a model outside the table needs explicit prices."""
+    model = model or cfg.model
+    base = table_prices(model)
+    p_in = cfg.price_in_per_mtok if cfg.price_in_per_mtok is not None else base and base[0]
+    p_out = cfg.price_out_per_mtok if cfg.price_out_per_mtok is not None else base and base[1]
+    if p_in is None or p_out is None:
+        raise UnknownPrice(
+            f"no built-in price for model {model!r}: set price_in_per_mtok and price_out_per_mtok "
+            f"in the config (known: {', '.join(PRICES)})")
+    return p_in, p_out
 
 
 def load_config(path: Path | None) -> Config:

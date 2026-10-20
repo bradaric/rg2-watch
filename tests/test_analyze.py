@@ -315,3 +315,52 @@ def test_prompt_v2_dash_paragraph_before_names():
     assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
     from rg2watch.pipeline import PROMPT_VERSION
     assert PROMPT_VERSION == "v7"
+
+
+def _priced(model, resp_model=None, **cfg):
+    r = _resp(tin=1_000_000, tout=1_000_000)
+    if resp_model:
+        r.model = resp_model
+    return analyze_document(TILES, FakeClient(r), Config(model=model, **cfg))
+
+
+def test_spend_is_priced_by_model_from_the_builtin_table():
+    assert _priced("claude-haiku-5-5").cost_usd == pytest.approx(0.60)
+    assert _priced("claude-sonnet-5-5").cost_usd == pytest.approx(12.0)
+    assert _priced("claude-opus-5-5").cost_usd == pytest.approx(24.0)
+
+
+def test_cli_model_flag_prices_by_that_model(tmp_path):
+    from rg2watch.cli import _config, _parser
+
+    args = _parser().parse_args(["analyze", "x.pdf", "--model", "claude-opus-5-5"])
+    cfg = _config(args)
+    assert cfg.model == "claude-opus-5-5"
+    assert analyze_document(TILES, FakeClient(_resp(tin=1_000_000, tout=0)), cfg).cost_usd == pytest.approx(4.0)
+
+
+def test_explicit_config_prices_override_the_table():
+    res = _priced("claude-opus-5-5", price_in_per_mtok=1.0, price_out_per_mtok=2.0)
+    assert res.cost_usd == pytest.approx(3.0)
+    assert _priced("claude-opus-5-5", price_in_per_mtok=1.0).cost_usd == pytest.approx(21.0)  # out from table
+
+
+def test_unknown_model_needs_explicit_prices(capsys):
+    from rg2watch.cli import _analysis_client, main
+
+    with pytest.raises(ValueError, match="no built-in price"):
+        _priced("claude-mystery-9")
+    ai, why = _analysis_client(Config(model="claude-mystery-9"))
+    assert ai is None and "price_in_per_mtok" in why
+    assert _priced("claude-mystery-9", price_in_per_mtok=1.0, price_out_per_mtok=1.0).cost_usd == pytest.approx(2.0)
+    assert main(["analyze", "x.pdf", "--model", "claude-mystery-9"]) == 2
+    assert "analysis unavailable" in capsys.readouterr().err
+
+
+def test_fallback_response_is_priced_by_the_responding_model(caplog):
+    caplog.set_level("INFO", logger="rg2watch.analyze")
+    assert _priced("claude-haiku-5-5", "claude-sonnet-5-5").cost_usd == pytest.approx(12.0)
+    assert "fallback model" in caplog.text
+    # a responding model outside the table: priced by the requested model
+    assert _priced("claude-opus-5-5", "claude-mystery-9").cost_usd == pytest.approx(24.0)
+    assert _priced("claude-haiku-5-5", "claude-haiku-5-5-20261001").cost_usd == pytest.approx(0.60)

@@ -259,8 +259,12 @@ under systemd's default `TimeoutStopSec` of 90 s; raise both together if you cha
 Analysis needs Anthropic credentials (`ANTHROPIC_API_KEY` or an ant profile). Without them
 `watch --analyze` logs one warning and only watches; `watch --once` never analyses. Forms published
 while analysis is off (after it was first enabled) stay queued and are analysed by the next run
-with analysis on. Spend is recorded per call (`price_in_per_mtok`/`price_out_per_mtok`, cache reads
-at 5% of the input price) and capped per election: `max_spend_usd` (default 60) is the sum of all
+with analysis on. Spend is recorded per call at the price of the model that answered (built-in table, USD per
+MTok in/out, Anthropic list prices as of 20/10/2026: Haiku 5.5 0.10/0.50, Sonnet 5.5 2/10, Opus 5.5
+4/20, `ollama:*` 0/0; also used for estimates and with `--model`; a server-side fallback answer is
+priced by the responding model; cache reads at 5% of the input price). `price_in_per_mtok`/
+`price_out_per_mtok` override the table only when set; a model outside the table is refused
+without them and capped per election: `max_spend_usd` (default 60) is the sum of all
 analyses of that election (`parent`) in this DB, so each election has its own budget; `eval` runs
 count under the election `eval` and `analyze` under `adhoc`. When the cap is reached analysis
 pauses with one "[rg2-watch] spend cap reached" alert while the watcher keeps running. With several

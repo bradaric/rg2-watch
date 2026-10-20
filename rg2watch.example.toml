@@ -68,11 +68,12 @@ fallbacks = true
 # Analysis pauses (one "[rg2-watch] spend cap reached" alert) once the recorded spend of this
 # election (parent) reaches this (USD); eval and ad-hoc `analyze` spend are counted separately
 max_spend_usd = 60.0  # a parliamentary election (~8,300 forms) is estimated at ~$40 on Haiku
-# Prices used for spend tracking (USD per million tokens); must match the model: Sonnet 5.5 2/10,
-# Opus 5.5 4/20, Haiku 5.5 0.10/0.50, local ollama 0/0. Source: Anthropic list price as of
-# 20/10/2026. Haiku's price rises above 100k-token prompts (ours are ~20k).
-price_in_per_mtok = 0.10
-price_out_per_mtok = 0.50
+# Spend is priced by model from a built-in table (USD per million tokens; also with `--model`):
+# Haiku 5.5 0.10/0.50, Sonnet 5.5 2/10, Opus 5.5 4/20, local ollama 0/0. Source: Anthropic list
+# price as of 20/10/2026. Haiku's price rises above 100k-token prompts (ours are ~20k).
+# Uncomment to override the table; REQUIRED for a model that is not in it (else analysis is refused).
+# price_in_per_mtok = 0.10
+# price_out_per_mtok = 0.50
 # Background analysis worker threads
 analysis_workers = 4
 # Seconds between rebuilds of the local browse page (index.html in <db dir>/<db stem>/) while watching; 0 = off

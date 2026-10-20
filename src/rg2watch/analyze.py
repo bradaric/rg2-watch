@@ -6,8 +6,12 @@ from dataclasses import dataclass
 
 import httpx
 
-from rg2watch.config import Config
+import logging
+
+from rg2watch.config import Config, model_prices, table_prices
 from rg2watch.render import Tile
+
+log = logging.getLogger(__name__)
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_TOKENS = 16000
@@ -255,13 +259,25 @@ def _content(tiles: list[Tile], prompt: str = PROMPT) -> list[dict]:
     return blocks
 
 
-def _usage_cost(usage, cfg: Config) -> tuple[int, int, float]:
+def _price_for(cfg: Config, responding: str | None) -> tuple[float, float]:
+    """Prices of one response: by the responding model when a server-side fallback answered with
+    another model of the table, else by the requested model (config overrides apply to that)."""
+    if responding and not responding.startswith(cfg.model) and (known := table_prices(responding)) is not None:
+        log.info("priced at %s rates: the response came from a fallback model (requested %s)",
+                 responding, cfg.model)
+        return known
+    if responding and not responding.startswith(cfg.model):
+        log.warning("fallback model %s has no built-in price: priced at the requested model %s",
+                    responding, cfg.model)
+    return model_prices(cfg)
+
+
+def _usage_cost(usage, cfg: Config, responding: str | None = None) -> tuple[int, int, float]:
     """(input_tokens, output_tokens, cost_usd) for one response.
 
     Input tokens include cache reads/creations. Cost: cache reads at 5% of the
-    input rate (Opus 5.5: $0.20 vs $4 per MTok), cache creation at 1.25x. When usage.iterations is present each
-    entry is summed and priced at cfg prices (a fallback model's real rates may
-    differ, so cost is then an estimate).
+    input rate (Opus 5.5: $0.20 vs $4 per MTok), cache creation at 1.25x. When usage.iterations is
+    present each entry is summed, priced by its own model if it names one, else by `responding`.
     """
     entries = getattr(usage, "iterations", None) or [usage]
     tin = tout = 0
@@ -271,10 +287,10 @@ def _usage_cost(usage, cfg: Config) -> tuple[int, int, float]:
         read = getattr(e, "cache_read_input_tokens", None) or 0
         create = getattr(e, "cache_creation_input_tokens", None) or 0
         out = getattr(e, "output_tokens", None) or 0
+        p_in, p_out = _price_for(cfg, getattr(e, "model", None) or responding)
         tin += plain + read + create
         tout += out
-        cost += ((plain + 0.05 * read + 1.25 * create) * cfg.price_in_per_mtok
-                 + out * cfg.price_out_per_mtok) / 1_000_000
+        cost += ((plain + 0.05 * read + 1.25 * create) * p_in + out * p_out) / 1_000_000
     return tin, tout, cost
 
 
@@ -380,7 +396,7 @@ def analyze_document(tiles: list[Tile], client, cfg: Config, kind: str = "rg2") 
             if cost:  # the truncated first call was billed: keep it visible to spend tracking
                 exc.input_tokens, exc.output_tokens, exc.cost_usd = tin, tout, cost
             raise
-        i, o, c = _usage_cost(resp.usage, cfg)
+        i, o, c = _usage_cost(resp.usage, cfg, getattr(resp, "model", None))
         tin, tout, cost = tin + i, tout + o, cost + c
         if resp.stop_reason != "max_tokens":
             break

@@ -31,8 +31,9 @@ fit: `mv data/rehearsal-677087.sqlite data/election-677087.sqlite`.
 - [ ] Config: `cp rg2watch.example.toml rg2watch.toml` and set:
 
       model = "claude-haiku-5-5"       # or claude-sonnet-5-5 / claude-opus-5-5 / ollama:<name>
-      price_in_per_mtok = 0.10         # must match the model: Haiku 0.10/0.50, Sonnet 2/10, Opus 4/20, local 0/0
-      price_out_per_mtok = 0.50
+      # prices come from a built-in table by model (Haiku 0.10/0.50, Sonnet 2/10, Opus 4/20 USD per
+      # MTok, local 0/0); set price_in_per_mtok/price_out_per_mtok only to override it, or for a
+      # model outside the table (which is refused without them)
       max_spend_usd = 60.0             # per election; a parliamentary election is ~$40 on Haiku
       watchlist = []                   # municipalities/stations to check first (priority, not a filter)
 

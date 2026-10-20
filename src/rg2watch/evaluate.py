@@ -7,7 +7,7 @@ from pathlib import Path
 import anthropic
 
 from .analyze import AnalysisError, OllamaUnavailable, analyze_document, stored_model
-from .config import Config
+from .config import Config, model_prices
 from .models import Doc, Event
 from .pipeline import GLOBAL_ERRORS, PROMPT_VERSION
 from .render import RenderError, count_tiles, render_tiles
@@ -89,8 +89,8 @@ def estimate_cost(labels: list[dict], pdf_dir: Path, cfg: Config) -> tuple[int, 
 
 
 def usd_for(forms: int, tiles: int, cfg: Config) -> float:
-    return (tiles * TOKENS_PER_TILE * cfg.price_in_per_mtok
-            + forms * OUTPUT_TOKENS * cfg.price_out_per_mtok) / 1_000_000
+    p_in, p_out = model_prices(cfg)
+    return (tiles * TOKENS_PER_TILE * p_in + forms * OUTPUT_TOKENS * p_out) / 1_000_000
 
 
 def _register(store: Store, entry: dict, path: Path) -> Doc:

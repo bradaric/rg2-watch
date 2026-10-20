@@ -18,7 +18,7 @@ from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_olla
 from .batch import ADHOC, describe_estimate, run_batch, select_forms
 from .browse import (build_page, copy_static, default_parent, record_review, review_record,
                      reviews_payload, write_status)
-from .config import Config, load_config
+from .config import Config, UnknownPrice, load_config, model_prices
 from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
 from .evaluate import PARENT as EVAL_PARENT
 from .evaluate import run_eval
@@ -234,7 +234,12 @@ def _notifier_http() -> httpx.Client:
 
 
 def _analysis_client(cfg: Config):
-    """(client, None) for cfg.model's backend: an httpx client for ollama:, else Anthropic."""
+    """(client, None) for cfg.model's backend: an httpx client for ollama:, else Anthropic.
+    (None, reason) when the model has no known price: spend could not be tracked."""
+    try:
+        model_prices(cfg)
+    except UnknownPrice as exc:
+        return None, str(exc)
     if is_ollama(cfg.model):
         return httpx.Client(), None
     return _anthropic_client()
