@@ -108,7 +108,7 @@ table.dataTable td.scol{min-width:11em}
 table.dataTable td.scol::first-line{font-weight:650}
 table.dataTable td.nw{white-space:nowrap}
 #forms td.nw{font-variant-numeric:tabular-nums}
-table.dataTable td.fcol{min-width:28em;width:42%;white-space:normal;overflow-wrap:anywhere}
+table.dataTable td.fcol{min-width:24em;width:40%;white-space:normal;overflow-wrap:anywhere}
 table.dataTable th.dt-orderable-none .dt-column-order{display:none}
 .f{display:flex;align-items:baseline;margin:0 0 var(--s1)}
 .f .b{flex:none}
@@ -123,6 +123,8 @@ td.disagree{color:var(--hi);font-weight:700}
 .rv-ok{border-color:var(--good);color:var(--good)}
 .rv-unsure{border-style:dashed;border-color:var(--mut);color:var(--mut)}
 .rv.pending{opacity:.55}
+.rv-older{display:table;margin-top:var(--s1);font-size:10px;line-height:15px}
+td .rv+.rv-older{margin-top:var(--s1)}
 .review{margin:var(--s1) 0 var(--s2);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
 .rvhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s2);margin-bottom:var(--s2)}
 .rvnote{overflow-wrap:anywhere}
@@ -399,9 +401,20 @@ const VLABEL = {ok: "ok", escalate: "escalate", unsure: "unsure"};
 let REV = null, revKey = "";  // REV: live reviews.json (url -> {v, n, at}); null = use the data's
 const LOCAL = {};  // verdicts set on this page: win until reviews.json has caught up
 const rvOf = v => v.u in LOCAL ? LOCAL[v.u] : REV ? REV[v.u] || null : v.rv || null;
-function reviewCounts() {
-  const c = {todo: 0, ok: 0, escalate: 0, unsure: 0};
-  for (const r of rows) { const x = rvOf(r); if (x && x.v in c) c[x.v]++; else if (!x && r._fl) c.todo++; }
+// "to review": the active current version has stored findings and no verdict (r.rf from the build,
+// the verdict live); an escalation on any version keeps the form escalated
+const isTodo = r => r.rf && !rvOf(r);
+const olderEsc = r => r.v.filter(v => (rvOf(v) || {}).v === "escalate");
+const isEsc = r => (rvOf(r) || {}).v === "escalate" || olderEsc(r).length > 0;
+function reviewCounts() {  // the chosen election, else the status panel's
+  const el = sel("e") || (S && S.parent) || "", c = {todo: 0, ok: 0, escalate: 0, unsure: 0};
+  for (const r of rows) {
+    if (el && r.el !== el) continue;
+    const x = rvOf(r);
+    if (isTodo(r)) c.todo++;
+    if (isEsc(r)) c.escalate++;
+    else if (x && (x.v === "ok" || x.v === "unsure")) c[x.v]++;
+  }
   return c;
 }
 function verdictHtml(x) {  // fixed class names; the label goes through esc
@@ -431,7 +444,7 @@ function reviewBox(r) {
   if (!HTTP) for (const el of [...btns, note]) {
     el.disabled = true;
     el.title = "read-only: open the page from rg2watch serve or watch to record verdicts";
-  }
+  } else if (cur && cur.pending) for (const b of btns) { b.disabled = true; b.title = "saving..."; }
   ctl.append(...btns, note, msg);
   box.append(head, ctl);
   return box;
@@ -485,13 +498,18 @@ function loadReviews() {
       renderStatus();
     }, e => console.error("fetching reviews.json failed", e));
 }
-function escalatedCsv() {
-  const head = ["Municipality", "BM", "Station", "Document", "RIK link", "Findings", "Note", "Verdict time (RS)"];
-  const out = rows.filter(r => (rvOf(r) || {}).v === "escalate").map(r => {
-    const x = rvOf(r);
-    return [r.muni, r.no, r.name, r.label, r.rik || "", r.f.map(f => f[0] + " " + f[1] + ": " + f[2]).join("; "),
-      x.n || "", when(x.at)].map(csvCell).join(",");
-  });
+function escalatedCsv() {  // one line per escalated version, current or older
+  const head = ["Municipality", "BM", "Station", "Document", "Version", "RIK link", "Findings", "Note", "Verdict time (RS)"];
+  const out = [];
+  for (const r of rows) {
+    for (const v of [r, ...r.v]) {
+      const x = rvOf(v);
+      if (!x || x.v !== "escalate") continue;
+      out.push([r.muni, r.no, r.name, r.label, v === r ? (r.state === "removed" ? "removed" : "current")
+        : "older, " + (v.up ? "uploaded " + when(v.up) : "first seen " + when(v.seen)), v.rik || "", v.f.map(f => f[0] + " " + f[1] + ": " + f[2]).join("; "),
+        x.n || "", when(x.at)].map(csvCell).join(","));
+    }
+  }
   return [head.map(csvCell).join(","), ...out].join("\r\n") + "\r\n";
 }
 function download(name, text) {
@@ -546,7 +564,7 @@ function keep(r) {
   const q = $("q").value.trim().toLowerCase();
   const rs = chosenRules();
   const rf = sel("rv"), x = rvOf(r);
-  if (rf && (rf === "todo" ? !r._fl || x : !x || x.v !== rf)) return false;
+  if (rf && !(rf === "todo" ? isTodo(r) : rf === "escalate" ? isEsc(r) : x && x.v === rf)) return false;
   return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
     && (!rs.length || rs.some(x => r._rules.has(x))) && (!$("fl").checked || r._fl)
@@ -574,7 +592,10 @@ function initTable() {
         esc(r.state) + "<br>" + esc("analysis " + r.ast)}},
       {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
        createdCell: (td, d, r) => { td.append(badges(r.f)); if (r._note) td.append(mk("span", r._note, "note")); }},
-      {data: "u", name: "review", title: "Review", className: "nw", render: {_: (d, t, r) => (rvOf(r) || {}).v || "", display: (d, t, r) => verdictHtml(rvOf(r))}},
+      {data: "u", name: "review", title: "Review", className: "nw", render: {
+        _: (d, t, r) => ((rvOf(r) || {}).v || "") + (olderEsc(r).length ? " older escalate" : ""),
+        display: (d, t, r) => verdictHtml(rvOf(r)) + (olderEsc(r).length && (rvOf(r) || {}).v !== "escalate"
+          ? '<span class="rv rv-escalate rv-older">older escalated</span>' : "")}},
       {data: "mods", title: "Models", className: "nw", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
       {data: "pdf", title: "Local PDF", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},
        createdCell: (td, d, r) => { const h = localHref(r.pdf); if (h) td.append(link("Local PDF", h)); }},
@@ -908,7 +929,7 @@ function writeHash() {
   if (c.rules.length) p.set("rules", c.rules.join(","));
   try { history.replaceState(null, "", "#" + p); } catch (e) {}
 }
-function redraw() { writeHash(); if (table) table.draw(); }
+function redraw() { writeHash(); if (table) table.draw(); if (S) renderStatus(); }
 let timer = 0;
 $("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(redraw, 200); });
 for (const id of FILTERS) if (id !== "q") $(id).addEventListener("input", redraw);

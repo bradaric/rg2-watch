@@ -2,6 +2,7 @@ import json
 import sqlite3
 import threading
 import time
+import unicodedata
 from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -64,6 +65,16 @@ CREATE TABLE IF NOT EXISTS reviews(
     id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, url TEXT NOT NULL, verdict TEXT NOT NULL,
     note TEXT, created_at TEXT NOT NULL);
 """
+
+
+def clean_note(note: str | None) -> str | None:
+    """A review note without control characters (tabs/newlines become spaces), stripped; None
+    when empty. ValueError when longer than NOTE_MAX."""
+    note = "".join(" " if c in "\t\n\r" else c for c in (note or "")
+                   if c in "\t\n\r" or unicodedata.category(c) != "Cc").strip()
+    if len(note) > NOTE_MAX:
+        raise ValueError(f"note longer than {NOTE_MAX} characters")
+    return note or None
 
 
 def _in_municipalities(names: Collection[str] | None) -> tuple[str, list[str]]:
@@ -572,9 +583,7 @@ class Store:
         review row, or None when `url` is not a stored document."""
         if verdict not in VERDICTS:
             raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}: {verdict!r}")
-        note = (note or "").strip() or None
-        if note is not None and len(note) > NOTE_MAX:
-            raise ValueError(f"note longer than {NOTE_MAX} characters")
+        note = clean_note(note)
         with self._lock, self._db:
             d = self._db.execute("SELECT id FROM documents WHERE url=?", (url,)).fetchone()
             if d is None:
@@ -586,16 +595,19 @@ class Store:
 
     def latest_reviews(self, parent: str | None = None) -> list[sqlite3.Row]:
         """The newest review of each reviewed URL, with its document's parent, municipality,
-        station and active flag; newest first."""
+        station, active flag and whether a newer version replaced it; newest first."""
         where, args = ("WHERE d.parent=?", (parent,)) if parent is not None else ("", ())
         with self._lock:
             return self._db.execute(
-                "SELECT r.*, d.parent, d.municipality, d.station_no, d.active FROM reviews r "
+                "SELECT r.*, d.parent, d.municipality, d.station_no, d.active, EXISTS (SELECT 1 FROM "
+                "documents n WHERE n.parent=d.parent AND n.station_key=d.station_key AND "
+                "n.doc_type=d.doc_type AND n.active=1 AND n.id<>d.id) AS superseded FROM reviews r "
                 "JOIN (SELECT url, MAX(id) AS id FROM reviews GROUP BY url) l ON l.id=r.id "
                 f"JOIN documents d ON d.id=r.document_id {where} ORDER BY r.id DESC", args).fetchall()
 
     def review_todo(self, parent: str | None = None) -> list[sqlite3.Row]:
-        """Active documents with findings and no verdict on their URL, oldest first."""
+        """"To review": active (current) documents with stored findings and no verdict on their
+        URL, oldest first; removed forms and replaced versions are not included."""
         where, args = ("AND d.parent=?", (parent,)) if parent is not None else ("", ())
         with self._lock:
             return self._db.execute(

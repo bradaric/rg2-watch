@@ -133,6 +133,9 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),
             v=[_version(d, found, opinions, cache_dir, base, reviews) for d in ds if d is not main])
         row["dis"] = _disagreement(row["ops"])
+        # "to review": the active current version has stored findings and no verdict on its URL
+        row["rf"] = bool(main["active"]) and bool(found.get(main["id"]))
+        row["todo"] = row["rf"] and row["rv"] is None
         rows.append(row)
     cfg = cfg or Config()
     try:

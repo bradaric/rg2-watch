@@ -1,5 +1,6 @@
 import http.client
 import json
+import socket
 import sqlite3
 
 import pytest
@@ -220,3 +221,85 @@ def test_cli_labels_from_reviews_writes_a_new_file_only(tmp_path, capsys):
     before = out.read_bytes()
     assert main(["labels", "--db", str(db), "--from-reviews", "--out", str(out)]) == 2
     assert out.read_bytes() == before
+
+
+def test_notes_lose_control_characters_and_are_checked_after_stripping():
+    s, _ = reviewed_store()
+    assert s.set_review(URL, "ok", "a\tb\nc\x00d\x1b")["note"] == "a b cd"
+    assert len(s.set_review(URL, "ok", "  " + "x" * 500 + "\n ")["note"]) == 500
+
+
+def test_todo_flag_removed_forms_and_older_escalation(tmp_path):
+    s, d = reviewed_store()
+    gone = doc(BASE + "/extfile/g.pdf", no="2")
+    add(s, gone)
+    s.add_finding(P, Finding("V1", "HIGH", gone, "x"), gone.url)
+    add(s, gone, "removed")
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs")
+    by_no = {r["no"]: r for r in rows_of(out)}
+    assert by_no["1"]["rf"] and by_no["1"]["todo"] and not by_no["2"]["rf"] and not by_no["2"]["todo"]
+    assert [r["url"] for r in s.review_todo()] == [URL]
+    s.set_review(URL, "escalate", "old one")
+    new = doc(BASE + "/extfile/b.pdf", up="2026-10-19T22:00")
+    add(s, new, "replaced", URL)
+    s.add_finding(P, Finding("V1", "HIGH", new, "again"), new.url)
+    build_page(s, out, tmp_path / "pdfs")
+    r = {r["no"]: r for r in rows_of(out)}["1"]
+    assert r["todo"] and r["rv"] is None and r["v"][0]["rv"]["v"] == "escalate"
+    assert [x["superseded"] for x in s.latest_reviews()] == [1]
+
+
+def raw_post(srv, head: bytes, body: bytes = b"", shut=True):
+    c = socket.create_connection(("127.0.0.1", srv.server_port))
+    c.sendall(head + body)
+    if shut:
+        c.shutdown(socket.SHUT_WR)
+    c.settimeout(5)
+    data = b""
+    try:
+        while chunk := c.recv(4096):
+            data += chunk
+    except OSError:
+        pass
+    c.close()
+    return data
+
+
+def head(srv, extra=b"", length=b"20"):
+    h = f"127.0.0.1:{srv.server_port}".encode()
+    return (b"POST /review HTTP/1.1\r\nHost: " + h + b"\r\nOrigin: http://" + h +
+            b"\r\nSec-Fetch-Site: same-origin\r\nX-RG2W: 1\r\nContent-Type: application/json\r\n"
+            b"Content-Length: " + length + b"\r\n" + extra + b"\r\n")
+
+
+@pytest.mark.parametrize("extra", [b"Host: evil.example\r\n", b"X-RG2W: 1\r\n",
+                                   b"Content-Type: application/json\r\n", b"Origin: http://x\r\n",
+                                   b"Content-Length: 20\r\n"])
+def test_duplicate_headers_refused(srv, extra):
+    assert raw_post(srv, head(srv, extra), b"{}").startswith(b"HTTP/1.0 400")
+    assert stored(srv) == 0
+
+
+def test_content_length_must_be_ascii_digits_and_short_body_refused(srv):
+    for bad in ("\u00b2".encode("latin-1"), b"-1", b"1e3", b" 20x"):
+        assert raw_post(srv, head(srv, length=bad), b"{}").startswith(b"HTTP/1.0 400")
+    body = json.dumps({"url": URL, "verdict": "ok"}).encode()
+    assert raw_post(srv, head(srv, length=str(len(body) + 50).encode()), body).startswith(b"HTTP/1.0 400")
+    assert stored(srv) == 0
+
+
+def test_cli_lists_superseded_and_labels_with_nothing_writes_no_file(tmp_path, capsys):
+    db = db_with_review(tmp_path)
+    out = tmp_path / "none.jsonl"
+    assert main(["labels", "--db", str(db), "--out", str(out)]) == 0
+    assert not out.exists() and "nothing written" in capsys.readouterr().out
+    main(["review", "--db", str(db), URL, "escalate"])
+    s = Store(db)
+    new = doc(BASE + "/extfile/a2.pdf", up="2026-10-19T22:00")
+    add(s, new, "replaced", URL)
+    s.close()
+    capsys.readouterr()
+    assert main(["review", "--db", str(db), "--list", "escalated"]) == 0
+    assert "escalate (superseded)" in capsys.readouterr().out
+    assert main(["review", "--db", str(db), URL, "ok", "--note", "x" * 501]) == 2

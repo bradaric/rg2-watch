@@ -6,10 +6,12 @@ import os
 import re
 import shutil
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
+from .store import VERDICTS
 
 log = logging.getLogger("rg2watch.server")
 # The only names served from the page directory. status.js/data.js are deliberately absent: a
@@ -20,9 +22,9 @@ FILES = {
     "dataTables.min.js": "text/javascript; charset=utf-8",
     "dataTables.dataTables.min.css": "text/css; charset=utf-8"}
 PDF = re.compile(r"/pdfs/([0-9a-f]{64})\.pdf")
-VERDICTS = ("ok", "escalate", "unsure")
-NOTE_MAX = 500
 REVIEW_MAX_BYTES = 4096
+REVIEW_HEADERS = ("Host", "Origin", "Content-Length", "Content-Type", "X-RG2W", "Sec-Fetch-Site")
+LENGTH = re.compile(r"[0-9]{1,6}")
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
        "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
@@ -98,6 +100,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _review_refusal(self) -> tuple[int, str] | None:
         """(status, reason) when this POST /review must be refused, before the body is read."""
+        if any(len(self.headers.get_all(h) or ()) > 1 for h in REVIEW_HEADERS):
+            return 400, "duplicate header"
         host = self._host()
         if host is None or self.server.put_review is None:
             return 403, "forbidden"
@@ -109,9 +113,9 @@ class _Handler(BaseHTTPRequestHandler):
         if self.headers.get("X-RG2W") != "1":
             return 403, "missing X-RG2W"
         if (self.headers.get("Content-Type") or "").strip().lower() != "application/json":
-            return 400, "content type must be application/json"
+            return 400, "Content-Type must be exactly application/json"
         n = self.headers.get("Content-Length")
-        if n is None or not n.isdigit() or int(n) > REVIEW_MAX_BYTES:
+        if n is None or not LENGTH.fullmatch(n) or int(n) > REVIEW_MAX_BYTES:
             return 400, f"body must have a Content-Length of at most {REVIEW_MAX_BYTES} bytes"
         return None
 
@@ -122,17 +126,27 @@ class _Handler(BaseHTTPRequestHandler):
         refusal = self._review_refusal()
         if refusal:
             return self._json(refusal[0], {"error": refusal[1]})
-        raw = self.rfile.read(int(self.headers["Content-Length"]))
+        n = int(self.headers["Content-Length"])
+        try:
+            raw = self.rfile.read(n)
+        except (OSError, TimeoutError):  # client stalled or went away: nothing to answer
+            return
+        if len(raw) != n:
+            return self._json(400, {"error": "body shorter than Content-Length"})
         try:
             req = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             return self._json(400, {"error": "body is not JSON"})
         if not (isinstance(req, dict) and set(req) <= {"url", "verdict", "note"}
-                and isinstance(req.get("url"), str) and req.get("verdict") in VERDICTS
-                and (req.get("note") is None or isinstance(req["note"], str) and len(req["note"]) <= NOTE_MAX)):
-            return self._json(400, {"error": "expected {url, verdict: ok|escalate|unsure, note <= 500 chars}"})
+                and isinstance(req.get("url"), str) and isinstance(req.get("verdict"), str)
+                and (req.get("note") is None or isinstance(req["note"], str))):
+            return self._json(400, {"error": "expected {url, verdict, note}"})
+        if req["verdict"] not in VERDICTS:
+            return self._json(400, {"error": f"verdict must be one of {', '.join(VERDICTS)}"})
         try:
             rec = self.server.put_review(req["url"], req["verdict"], req.get("note"))
+        except ValueError as exc:  # note too long after cleaning (validated once, in the store)
+            return self._json(400, {"error": str(exc)})
         except Exception:
             log.exception("review could not be stored")
             return self._json(500, {"error": "review could not be stored"})

@@ -88,18 +88,26 @@ ntfy message is sent for a verdict.
 
 - **Page** (served over http by `watch` or `serve`): open a row with the arrow, then OK / ESCALATE /
   UNSURE (the typed note goes with it). The verdict shows at once and is confirmed by the server
-  (a refusal reverts it with the reason). The "Review" column shows the verdict, the "review" filter
-  shows to review (findings, no verdict on the current version), escalated, unsure or ok, the status
-  panel counts them, and "Escalated CSV" downloads the escalated forms (station, RIK link, findings,
-  note, time; formula cells escaped). Opened as a file the page shows the verdicts of the last build,
+  (a refusal reverts it with the reason; the buttons wait while it is saving). The "Review" column
+  shows the verdict, the "review" filter shows to review, escalated, unsure or ok, and the status
+  panel counts them for the chosen (else the watched) election. "To review" is one rule everywhere
+  (page, counter, `review --list todo`): the current version is active, has stored findings and no
+  verdict; removed forms are not to review. An escalation never drops out: a form whose older
+  version was escalated shows "older version escalated", stays under "escalated" and in the count,
+  and its new version is still to review if it has findings. "Escalated CSV" downloads every
+  escalated version (station, which version, RIK link, findings, note, time; formula cells
+  escaped). Notes lose control characters. Opened as a file the page shows the verdicts of the last build,
   read-only.
 - **CLI:** `rg2watch review <url> ok|escalate|unsure [--note TEXT]`, and
-  `rg2watch review --list escalated|ok|unsure|todo [--parent P]`.
+  `rg2watch review --list escalated|ok|unsure|todo [--parent P]` (per URL; a version that was
+  since replaced or removed is marked "(superseded)" / "(removed)").
 - **Eval labels:** `rg2watch labels --from-reviews --out <new.jsonl> [--parent P]` writes label
   suggestions in the `tests/golden/labels.jsonl` format: `ok` -> the rules that fired are `false`,
   `escalate` -> `true`, `"verified": false`, the verdict and note in `note`, plus the document `url`.
-  The file must not exist yet (nothing is overwritten); check the suggestions (a legitimate
-  correction marked `ok` may still be a wanted alert) and merge them by hand.
+  The file must not exist yet (nothing is overwritten; with nothing to suggest no file is written).
+  `escalate` marks every rule that fired `true` and `ok` every one `false`: edit the suggestions
+  before merging (a legitimate correction marked `ok` may still be a wanted alert, and an escalated
+  form may have had one real and one spurious rule).
 
 ## Unofficial tally
 

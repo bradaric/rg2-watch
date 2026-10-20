@@ -153,8 +153,9 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--parent", help="only this election (with --list)")
 
     s = sub.add_parser("labels", parents=[common], help="eval label suggestions from verdicts")
-    s.add_argument("--from-reviews", action="store_true", required=True,
-                   help="ok -> fired rules false, escalate -> fired rules true")
+    s.add_argument("--from-reviews", action="store_true",
+                   help="the source (the only one, also the default): ok -> fired rules false, "
+                   "escalate -> fired rules true")
     s.add_argument("--out", type=Path, required=True, help="new JSONL file (never overwritten)")
     s.add_argument("--parent", help="only this election")
 
@@ -347,13 +348,14 @@ def _cmd_review(args) -> int:
     if args.list is not None and args.url is not None:
         print("review: give either <url> <verdict> or --list, not both", file=sys.stderr)
         return 2
-    if args.note is not None and len(args.note.strip()) > NOTE_MAX:
-        print(f"review: note longer than {NOTE_MAX} characters", file=sys.stderr)
-        return 2
     store = _open_store(_config(args))
     try:
         if args.list is None:
-            rec = record_review(store, args.url, args.verdict, args.note)
+            try:
+                rec = record_review(store, args.url, args.verdict, args.note)
+            except ValueError as exc:
+                print(f"review: {exc}", file=sys.stderr)
+                return 2
             if rec is None:
                 print(f"not a stored document: {args.url}", file=sys.stderr)
                 return 1
@@ -363,8 +365,9 @@ def _cmd_review(args) -> int:
             rows = [(to_belgrade(r["first_seen_at"]), "todo", r) for r in store.review_todo(args.parent)]
         else:
             want = {"escalated": "escalate"}.get(args.list, args.list)
-            rows = [(review_record(r)["at"], r["verdict"], r) for r in store.latest_reviews(args.parent)
-                    if r["verdict"] == want]
+            rows = [(review_record(r)["at"], r["verdict"] + (" (superseded)" if r["superseded"] else
+                     " (removed)" if not r["active"] else ""), r)
+                    for r in store.latest_reviews(args.parent) if r["verdict"] == want]
         for at, verdict, r in rows:
             note = r["note"] if "note" in r.keys() and r["note"] else ""
             print("  ".join(x for x in ((at or "-").replace("T", " "), verdict,
@@ -398,6 +401,9 @@ def _cmd_labels(args) -> int:
             "municipality": r["municipality"] or "", "station_no": r["station_no"] or "",
             "expect": {rule: r["verdict"] == "escalate" for rule in fired},
             "verified": False, "note": note, "url": r["url"]}, ensure_ascii=False))
+    if not lines:
+        print("no ok/escalate verdicts on forms with findings: nothing written")
+        return 0
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("x", encoding="utf-8") as fh:  # "x": never replaces a file
         fh.write("".join(line + "\n" for line in lines))
