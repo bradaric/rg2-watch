@@ -98,10 +98,12 @@ def test_claim_freezes_summary_and_pdf_and_refuses_changed_retry(tmp_path):
     store.close()
 
 
-def test_crash_after_durable_staging_recovers_same_freeze_and_refuses_changed_input(
+def test_restart_after_preclaim_crash_discards_unclaimed_orphan_and_accepts_new_summary(
         tmp_path, monkeypatch):
+    from test_drive_publish import FakeDrive
+    from rg2watch.drive_publish import DrivePublisher
+
     store, service, _ = handoff(tmp_path)
-    real_claim = store.claim_publication
 
     def crash_before_claim(*args, **kwargs):
         raise RuntimeError("simulated claim crash")
@@ -113,15 +115,24 @@ def test_crash_after_durable_staging_recovers_same_freeze_and_refuses_changed_in
     staged = list((tmp_path / ".rg2watch-publications").glob("*.pdf"))
     assert len(staged) == 1 and staged[0].read_bytes().startswith(b"%PDF")
 
-    monkeypatch.setattr(store, "claim_publication", real_claim)
-    with pytest.raises(CaseError, match="frozen"):
-        service.claim(URL, "Промењен опис")
-    real_fsync = os.fsync
-    fsync_calls = []
-    monkeypatch.setattr(os, "fsync", lambda fd: (fsync_calls.append(fd), real_fsync(fd))[1])
-    recovered = service.claim(URL, "Замрзнут опис")
-    assert Path(recovered["staged_pdf_path"]) == staged[0]
-    assert fsync_calls  # recovery re-establishes directory-entry durability before the DB claim
+    # Restart loses the caller's approved summary. With no committed claim and no remote side
+    # effects, the orphan must not become an undiscoverable authoritative frozen package.
+    store.close()
+    restarted_store = Store(tmp_path / "watch.sqlite")
+    restarted = CaseHandoff(restarted_store, Config(db_path=tmp_path / "watch.sqlite",
+                                                    max_pdf_bytes=1000))
+    jobs = PublicationJobs(restarted, object(), workers=1)
+    try:
+        assert jobs.publication(URL) is None
+    finally:
+        jobs.close()
+
+    result = DrivePublisher(restarted, FakeDrive()).publish(URL, "Нови одобрени опис")
+    assert result["status"] == "published"
+    frozen = restarted_store.get_publication(URL)
+    assert frozen["summary"] == "Нови одобрени опис"
+    assert Path(frozen["staged_pdf_path"]) != staged[0]
+    assert not staged[0].exists()
 
 
 def test_store_will_not_commit_publication_referencing_missing_staging(tmp_path):

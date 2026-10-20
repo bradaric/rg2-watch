@@ -90,31 +90,27 @@ class CaseHandoff:
         stage_dir = Path(self.cfg.db_path).resolve().parent / ".rg2watch-publications"
         stage_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(stage_dir, 0o700)
-        # The filename makes an unclaimed, crash-left staging file authoritative for all
-        # frozen inputs.  A later request cannot mistake it for a different summary/PDF.
         prefix = hashlib.sha256(url.encode()).hexdigest() + "."
         final = stage_dir / f"{prefix}{summary_hash}.{digest}.pdf"
-        orphans = list(stage_dir.glob(prefix + "*.pdf"))
-        if orphans and (len(orphans) != 1 or orphans[0] != final):
-            raise CaseError("inputs differ from the frozen staged package; retry with its original inputs")
-        if final.exists():
-            if not final.is_file() or hashlib.sha256(final.read_bytes()).hexdigest() != digest:
-                raise CaseError("frozen staged PDF is missing or changed")
-        else:
-            fd, tmp = tempfile.mkstemp(dir=stage_dir, suffix=".tmp")
-            try:
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(pdf)
-                    fh.flush(); os.fsync(fh.fileno())
-                os.chmod(tmp, 0o600)
-                if hashlib.sha256(Path(tmp).read_bytes()).hexdigest() != digest:
-                    raise CaseError("cached PDF changed while it was staged")
-                os.replace(tmp, final)
-            except BaseException:
-                Path(tmp).unlink(missing_ok=True)
-                raise
-        # Persist (or re-establish after orphan recovery) the directory entry before SQLite is
-        # allowed to reference it.  The file bytes themselves were fsynced before the rename.
+        # Without a committed SQLite claim no remote operation can have started. Such files are
+        # only remnants of a pre-claim crash, not frozen input: discard them before restaging the
+        # current explicit request so recovery never depends on caller/browser memory.
+        for orphan in stage_dir.glob(prefix + "*.pdf"):
+            orphan.unlink()
+        fd, tmp = tempfile.mkstemp(dir=stage_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(pdf)
+                fh.flush(); os.fsync(fh.fileno())
+            os.chmod(tmp, 0o600)
+            if hashlib.sha256(Path(tmp).read_bytes()).hexdigest() != digest:
+                raise CaseError("cached PDF changed while it was staged")
+            os.replace(tmp, final)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+        # Persist the orphan removal and new directory entry before SQLite is allowed to reference
+        # the file. The file bytes themselves were fsynced before the rename.
         dir_fd = os.open(stage_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(dir_fd)
