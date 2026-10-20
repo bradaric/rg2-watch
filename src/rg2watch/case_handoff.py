@@ -1,11 +1,12 @@
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import tempfile
 import unicodedata
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from .config import Config
 from .store import Store
@@ -16,17 +17,57 @@ VIBER_REASON_MAX = 500
 KNJAZEVAC_61_REASON = ("Потребна је провера броја гласача ван бирачког места (18 од 58) "
                        "и броја гласова за једну листу (53 од 58).")
 _URI_SCHEME = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z][A-Za-z0-9+.-]{0,31}):\S+")
-_BARE_DOMAIN = re.compile(
-    r"(?<![A-Za-z0-9-])"
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
-    r"(?:[A-Za-z](?:[A-Za-z0-9-]{0,60}[A-Za-z0-9]))"
-    r"(?::\d{1,5})?(?:[/#?]\S*)?",
-    re.IGNORECASE,
+_BARE_HOST = re.compile(
+    r"(?<![\w-])((?:[^\W_](?:[^\W_]|-){0,62}\.)+[^\W_](?:[^\W_]|-){0,62})",
+    re.UNICODE,
 )
+_IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 
 
 class CaseError(ValueError):
     pass
+
+
+def _contains_bare_host_or_ip(text: str) -> bool:
+    for match in _IPV4.finditer(text):
+        try:
+            ipaddress.IPv4Address(match.group())
+            return True
+        except ipaddress.AddressValueError:
+            pass
+    for raw in text.split():
+        candidate = raw.strip("()[]{}<>,;.!?\"'").split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+        if candidate.count(":") >= 2:
+            candidate = candidate.strip("[]")
+            try:
+                ipaddress.IPv6Address(candidate)
+                return True
+            except ipaddress.AddressValueError:
+                pass
+    for match in _BARE_HOST.finditer(text):
+        hostname = match.group(1)
+        labels = hostname.split(".")
+        if not any(char.isalpha() for char in labels[-1]):
+            continue
+        try:
+            encoded = [label.encode("idna") for label in labels]
+        except UnicodeError:
+            continue
+        if all(0 < len(label) <= 63 and not label.startswith(b"-") and not label.endswith(b"-")
+               for label in encoded):
+            return True
+    return False
+
+
+def _is_absolute_http_url(value: object) -> bool:
+    if not isinstance(value, str) or not value or any(char.isspace() for char in value):
+        return False
+    try:
+        parsed = urlsplit(value)
+        parsed.port
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc and parsed.hostname)
 
 
 def normalize_viber_reason(reason: str) -> str:
@@ -39,7 +80,7 @@ def normalize_viber_reason(reason: str) -> str:
         raise CaseError("short Viber reason must not be empty")
     if len(normalized) > VIBER_REASON_MAX:
         raise CaseError(f"short Viber reason is longer than {VIBER_REASON_MAX} characters")
-    if _URI_SCHEME.search(normalized) or _BARE_DOMAIN.search(normalized):
+    if _URI_SCHEME.search(normalized) or _contains_bare_host_or_ip(normalized):
         raise CaseError("short Viber reason must not contain a URL")
     return normalized
 
@@ -62,6 +103,8 @@ def viber_revision(row, url: str, reason: str) -> dict:
     if not isinstance(case, dict) or case.get("municipality") != "Књажевац" \
             or str(case.get("station")) != "61" or case.get("url") != url:
         raise CaseError("target is not Књажевац БМ 61")
+    if not _is_absolute_http_url(row["url"]) or not _is_absolute_http_url(case.get("rik_url")):
+        raise CaseError("stored document and RIK URLs must be absolute HTTP(S) URLs")
     frozen = (row["summary"], row["summary_sha256"], row["staged_pdf_path"],
               row["pdf_sha256"], row["folder_id"], row["pdf_file_id"],
               row["text_file_id"], row["published_at"], case.get("rik_url"))

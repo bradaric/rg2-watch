@@ -118,7 +118,9 @@ def test_short_reason_is_normalized_frozen_and_validated_before_staging(tmp_path
     other.mkdir()
     _, fresh, _ = handoff(other)
     for reason in ("", "x" * 501, "линк https://example.test", "ftp://example.test/file",
-                   "пишите mailto:test@example.test", "посетите example.rs/path", "контрола\x00"):
+                   "пишите mailto:test@example.test", "посетите example.rs/path",
+                   "адреса 192.0.2.1/path", "адреса 2001:db8::1",
+                   "посетите пример.срб/страна", "контрола\x00"):
         with pytest.raises(CaseError):
             fresh.claim(URL, "Опис", reason)
         assert fresh.store.get_publication(URL) is None
@@ -916,6 +918,30 @@ def test_revise_viber_confirmation_fails_closed_on_changed_target(tmp_path, caps
     assert cli.main(["revise-viber", "--db", str(db), "--url", URL,
                      "--reason", VIBER_REASON, "--confirm"]) == 1
     assert "not changed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("field,bad_url", [
+    ("url", "relative/document.pdf"),
+    ("rik_url", "//rik.example/extfile/publish.pdf"),
+])
+def test_revise_viber_rejects_corrupted_stored_source_urls(tmp_path, field, bad_url):
+    db = published_knjazevac_case(tmp_path)
+    con = sqlite3.connect(db)
+    row = con.execute("SELECT case_json FROM publications WHERE url=?", (URL,)).fetchone()
+    case = json.loads(row[0])
+    case[field] = bad_url
+    if field == "url":
+        con.execute("UPDATE publications SET url=?,case_json=? WHERE url=?",
+                    (bad_url, json.dumps(case), URL))
+        selected_url = bad_url
+    else:
+        con.execute("UPDATE publications SET case_json=? WHERE url=?", (json.dumps(case), URL))
+        selected_url = URL
+    con.commit()
+    con.close()
+
+    with pytest.raises(CaseError, match="absolute HTTP"):
+        Store.revise_viber_text(db, selected_url, VIBER_REASON)
 
 
 def test_revise_viber_holds_write_lock_across_guard_and_update(tmp_path, monkeypatch):
