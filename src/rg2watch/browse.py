@@ -160,7 +160,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     except Exception:
         log.exception("tally could not be built")
         tally = None
-    return {"built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
+    return {"db": store.name, "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
             "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally,
             "rules": RULE_INFO}
 

@@ -372,8 +372,10 @@ function renderStatus() {
   if (!S) { box.replaceChildren(); ban.style.display = "block"; ban.textContent = "no status yet"; return; }
   const age = Date.now() / 1000 - S.ts;
   const down = !S.watching || age > STALE_S;
-  ban.style.display = down ? "block" : "none";
-  ban.textContent = !S.watching ? "watcher not running (status written " + epoch(S.ts) + ")"
+  const mix = !!(D.db && S.db && D.db !== S.db);
+  ban.style.display = down || mix ? "block" : "none";
+  ban.textContent = mix ? "status and data are from different databases (" + S.db + " / " + D.db + "): wrong folder or two processes writing here"
+    : !S.watching ? "watcher not running (status written " + epoch(S.ts) + ")"
     : "watcher not running / stalled since " + epoch(S.ts).slice(-5);
   const w = S.watcher, d = S.docs, a = S.analysis, cards = [];
   if (w) {

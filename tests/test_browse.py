@@ -303,8 +303,9 @@ def test_cli_default_path_is_next_to_db(tmp_path, capsys):
     db.parent.mkdir()
     Store(db).close()
     assert main(["browse", "--db", str(db)]) == 0
-    assert (tmp_path / "d" / "index.html").exists()
-    assert str(tmp_path / "d" / "index.html") in capsys.readouterr().out
+    page = tmp_path / "d" / "w" / "index.html"
+    assert page.exists() and not (tmp_path / "d" / "index.html").exists()
+    assert str(page) in capsys.readouterr().out
 
 
 def _watch(tmp_path, monkeypatch, interval, ticks, extra=(), run_once=lambda self: None, build=None):
@@ -384,6 +385,7 @@ def test_watch_browse_failure_does_not_stop_loop(tmp_path, monkeypatch):
 
 def test_serve_port_config_and_cli(tmp_path, monkeypatch):
     import socket
+    monkeypatch.setattr(cli, "PORT_TRIES", 1)
 
     import pytest
 
@@ -400,7 +402,7 @@ def test_serve_port_config_and_cli(tmp_path, monkeypatch):
         db = tmp_path / "w.sqlite"
         Store(db).close()
         assert main(["serve", "--db", str(db), "--port", str(busy.getsockname()[1])]) == 1
-        assert (tmp_path / "index.html").exists()
+        assert (tmp_path / "w" / "index.html").exists()
         # watch keeps going when its port is taken
         monkeypatch.setattr(cli.Watcher, "run_once", lambda self: None)
         s = Store(db)
@@ -486,13 +488,76 @@ def test_serve_always_copies_static(tmp_path, monkeypatch):
     s = Store(db)
     add_el = s.upsert_election(Election(P, "1", "t", "T", BASE))
     s.close()
-    (tmp_path / "index.html").write_text("old")
-    (tmp_path / "data.json").write_text("{}")
+    page = tmp_path / "w"
+    page.mkdir()
+    (page / "index.html").write_text("old")
+    (page / "data.json").write_text("{}")
     monkeypatch.setattr(cli, "start_server", lambda *a: None)
     assert main(["serve", "--db", str(db), "--port", "8123"]) == 1
-    assert (tmp_path / "index.html").read_bytes() == (STATIC / "index.html").read_bytes()
+    assert (page / "index.html").read_bytes() == (STATIC / "index.html").read_bytes()
 
 
 def test_page_filters_include_versions_and_models():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "only in" in html and 'r.sev = r._sev' in html and "hashchange" in html
+
+
+def _el_db(tmp_path, stem, parent):
+    s = Store(tmp_path / f"{stem}.sqlite")
+    s.upsert_election(Election(parent, "1", "t", "T" + parent, BASE))
+    return s
+
+
+def test_two_dbs_in_one_dir_build_separate_page_dirs(tmp_path):
+    for stem, parent in (("election-1", "1"), ("election-2", "2")):
+        s = _el_db(tmp_path, stem, parent)
+        assert main(["browse", "--db", str(tmp_path / f"{stem}.sqlite")]) == 0
+        s.close()
+    for stem in ("election-1", "election-2"):
+        d = tmp_path / stem
+        assert (d / "index.html").is_file() and (d / "jquery.min.js").is_file()
+        assert json.loads((d / "data.json").read_text())["db"] == stem
+        assert json.loads((d / "status.json").read_text())["db"] == stem
+    assert not (tmp_path / "index.html").exists() and not (tmp_path / "data.json").exists()
+
+
+def test_page_dir_default_and_memory(tmp_path):
+    from rg2watch.config import Config
+    assert cli._browse_path(Config(db_path="data/rg2watch.sqlite")) == cli.Path("data/rg2watch/index.html")
+    assert cli._browse_path(Config(db_path=":memory:")) == cli.Path("data/memory/index.html")
+
+
+def test_start_web_falls_back_to_next_free_port(tmp_path):
+    import socket
+    s = Store(":memory:")
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen()
+    port = busy.getsockname()[1]
+    server = cli._start_web(tmp_path, tmp_path, port, s)
+    try:
+        assert server is not None and port < server.server_port <= port + 10
+    finally:
+        server.shutdown()
+        server.server_close()
+        busy.close()
+
+
+def test_start_web_none_when_all_busy(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "start_server", lambda *a: None)
+    assert cli._start_web(tmp_path, tmp_path, 9000, Store(":memory:")) is None
+
+
+def test_status_prints_page_url_only_while_running(tmp_path):
+    from rg2watch.status import format_status
+    s = store()
+    f = tmp_path / "status.json"
+    f.write_text(json.dumps({"watching": True, "parent": P, "ts": 1000.0, "url": "http://127.0.0.1:8771"}))
+    assert "page http://127.0.0.1:8771" in format_status(s, P, f, 20.0, now=1010.0)
+    assert "page http" not in format_status(s, P, f, 20.0, now=2000.0)
+    assert "page http" not in format_status(s, P, tmp_path / "none.json", 20.0)
+
+
+def test_page_banner_on_status_data_db_mismatch():
+    html = (STATIC / "index.html").read_text()
+    assert "status and data are from different databases" in html and "D.db !== S.db" in html

@@ -10,7 +10,7 @@ args=()
 for a in "$@"; do
     if [[ $a == --watch-only ]]; then analyze=(); else args+=("$a"); fi
 done
-echo "page: http://127.0.0.1:8770 (serve_port in the config changes it)"
+echo "the page URL is printed below once the watcher starts (page: http://127.0.0.1:PORT)"
 first=0; [[ -f $DB ]] || first=1
 if [[ ${#analyze[@]} -gt 0 ]]; then claude_env; else ENVF=(); fi
 register_if_needed

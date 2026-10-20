@@ -34,10 +34,11 @@ def test_status_prints_counts_and_watcher_state(tmp_path, capsys):
     assert "RG-2 seen 1" in out and "escalated 1" in out and "findings HIGH 1, MEDIUM 0, LOW 0" in out
     assert "spend $0.00 of $" in out and "last alert none" in out
     assert out.rstrip().endswith("watcher not running")
-    status = tmp_path / "status.json"
-    status.write_text(json.dumps({"watching": True, "parent": P, "ts": time.time()}))
+    (tmp_path / "e").mkdir()
+    status = tmp_path / "e" / "status.json"  # the page folder of e.sqlite
+    status.write_text(json.dumps({"watching": True, "parent": P, "ts": time.time(), "url": "http://127.0.0.1:8771"}))
     main(["status", "--db", str(db)])
-    assert capsys.readouterr().out.rstrip().endswith("watcher running")
+    assert capsys.readouterr().out.rstrip().endswith("watcher running\npage http://127.0.0.1:8771")
     status.write_text(json.dumps({"watching": True, "parent": P, "ts": time.time() - 120}))
     main(["status", "--db", str(db)])
     assert capsys.readouterr().out.rstrip().endswith("watcher not running")

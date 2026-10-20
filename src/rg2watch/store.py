@@ -104,6 +104,7 @@ def _doc(row) -> Doc:
 
 class Store:
     def __init__(self, path: Path | str):
+        self.name = Path(path).stem if str(path) != ":memory:" else "memory"  # which DB (page banner)
         self._db = sqlite3.connect(str(path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._lock = threading.Lock()

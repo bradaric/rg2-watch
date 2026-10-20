@@ -67,7 +67,7 @@ price_in_per_mtok = 0.10
 price_out_per_mtok = 0.50
 # Background analysis worker threads
 analysis_workers = 4
-# Seconds between rebuilds of the local browse page (index.html next to the DB) while watching; 0 = off
+# Seconds between rebuilds of the local browse page (index.html in <db dir>/<db stem>/) while watching; 0 = off
 browse_interval_s = 120
 
 # Local web server of `watch` for the browse page (127.0.0.1 only); 0 = off

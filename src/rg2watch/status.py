@@ -32,7 +32,7 @@ def build_status(store: Store, parent: str, live: dict | None = None) -> dict:
     queued = ast.get("new", 0) + retrying
     avg = a["avg_s"] if a else None
     return {
-        "ts": round(time.time(), 1), "watching": "watcher" in live, "parent": parent,
+        "ts": round(time.time(), 1), "db": store.name, "watching": "watcher" in live, "parent": parent,
         "title": e.title if e else parent, "url": live.get("url"),
         "watcher": live.get("watcher"),
         "docs": c,
@@ -67,7 +67,8 @@ def format_status(store: Store, parent: str, status_file, cfg_cap: float, now: f
         running = bool(live.get("watching") and live.get("parent") == parent
                        and (now or time.time()) - live["ts"] < WATCHER_FRESH_S)
     except (OSError, ValueError, KeyError, TypeError):
-        running = False
+        running, live = False, {}
+    page = f"page {live['url']}" if running and live.get("url") else None
     last = to_belgrade(store.last_alert_at(parent))
     expected = f" of {d['rg2_rik']} on RIK" if d.get("rg2_rik") else ""
     return "\n".join([
@@ -79,4 +80,4 @@ def format_status(store: Store, parent: str, status_file, cfg_cap: float, now: f
         f"unsure {verdicts.get('unsure', 0)}, ok {verdicts.get('ok', 0)}",
         "findings " + ", ".join(f"{k} {sev.get(k, 0)}" for k in ("HIGH", "MEDIUM", "LOW")),
         f"last alert {last.replace('T', ' ') if last else 'none'}",
-        "watcher running" if running else "watcher not running"])
+        "watcher running" if running else "watcher not running", *([page] if page else [])])

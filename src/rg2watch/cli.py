@@ -253,8 +253,26 @@ def _cache_dir(cfg: Config) -> Path:
 
 
 def _browse_path(cfg: Config) -> Path:
+    """index.html in this database's own page folder: <db dir>/<db stem>/ (elections never share one)."""
     db = str(cfg.db_path)
-    return (Path("data") if db == ":memory:" else Path(db).parent) / "index.html"
+    if db == ":memory:":
+        return Path("data") / "memory" / "index.html"
+    return Path(db).parent / Path(db).stem / "index.html"
+
+
+PORT_TRIES = 11  # the configured port and the 10 above it
+
+
+def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store):
+    """Serve the page on `port`, else the next free port up to +10; None when none is free."""
+    for p in range(port, min(port + PORT_TRIES, 65536)):
+        server = start_server(page_dir, cache_dir, p, *_review_api(store))
+        if server is not None:
+            if p != port:
+                log.warning("port %d busy, using %d", port, p)
+            return server
+    log.warning("no free web port in %d-%d", port, port + PORT_TRIES - 1)
+    return None
 
 
 def _cmd_browse(args) -> int:
@@ -350,9 +368,11 @@ def _cmd_serve(args) -> int:
     try:
         if not (out.parent / "data.json").is_file():
             build_page(store, out, _cache_dir(cfg), cfg=cfg)
-        server = start_server(out.parent, _cache_dir(cfg), port, *_review_api(store))
+        server = _start_web(out.parent, _cache_dir(cfg), port, store)
         if server is None:
+            print(f"no free port in {port}-{port + PORT_TRIES - 1}", file=sys.stderr)
             return 1
+        print(f"page: http://127.0.0.1:{server.server_port}", flush=True)
         try:
             threading.Event().wait()
         except KeyboardInterrupt:
@@ -651,9 +671,10 @@ def _cmd_watch(args) -> int:
             if not args.once:  # `--once` is a diff check: no page build, no server
                 port = cfg.serve_port if args.serve_port is None else args.serve_port
                 if port:
-                    server = start_server(_browse_path(cfg).parent, _cache_dir(cfg), port,
-                                          *_review_api(store))
+                    server = _start_web(_browse_path(cfg).parent, _cache_dir(cfg), port, store)
                 url = f"http://127.0.0.1:{server.server_port}" if server else None
+                if url:
+                    print(f"page: {url}", flush=True)
                 live = _live(watcher, pipeline, notifier, url)
                 threads.append(_background("status", stop, STATUS_EVERY_S, lambda: write_status(
                     store, _browse_path(cfg), parent, live()),

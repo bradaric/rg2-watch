@@ -72,11 +72,12 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
 
 ## Browse page, status panel and local server
 
-`watch` serves the page at `http://127.0.0.1:8770` (the URL is logged at start; `serve_port` in the
-config or `--serve-port`, `0` = off). `rg2watch serve [--port N]` serves the same files without
-watching. The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed allow-list
+Each database has its own page folder, `<db dir>/<db stem>/` (`data/election-662405.sqlite` -> `data/election-662405/`: `index.html`, `data.*`, `status.*`, the vendored libraries); the PDF cache stays shared at `<db dir>/pdfs/`. Two elections can run side by side (`serve` on one DB, `watch` on another): they never write the same files, and each server only accepts review verdicts for its own DB. `status.json` and `data.json` carry the DB name and the page shows a red banner if they disagree. Old `index.html`, `data.*`, `status.*` and library files directly in `data/` are from the earlier shared layout and are safe to delete.
+
+`watch` serves the page on `serve_port` (default 8770; `--serve-port`, `0` = off); if that port is busy it tries the next ones up to +10. The URL actually used is printed (`page: http://127.0.0.1:PORT`), recorded in `status.json` and shown by `rg2watch status`; open the URL it prints. `rg2watch serve [--port N]` serves the same files without
+watching (same port fallback, prints the URL). The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed allow-list
 (`index.html`, `status.json`, `data.json`, `reviews.json` (live verdicts), the vendored libraries, `pdfs/<sha256>.pdf`; the `.js` twins are not served, and cross-site requests are refused); the DB,
-`.env` and everything else are 404. Port taken: a warning, and the watcher carries on. The only write
+`.env` and everything else are 404. No free port: a warning, and the watcher carries on. The only write
 is `POST /review` (operator verdicts, below): accepted only from the page itself - Host
 127.0.0.1/localhost on the server's port, `Sec-Fetch-Site: same-origin` (or no such header and an
 `Origin` equal to the server's), `Content-Type: application/json`, header `X-RG2W: 1` (a cross-site
@@ -90,7 +91,7 @@ stored document URL, verdict `ok`/`escalate`/`unsure`, note at most 500 characte
   has local copy and "models disagree"; the filters survive a refresh (URL hash / saved state). The
   "+" opens older versions and the findings of every stored analysis model (second opinions from
   `analyze --parent`, current rules re-applied, no API); a HIGH that another model lacks is
-  highlighted. Station, times and status are merged columns; a "columns" menu shows or hides any column. Columns "Local PDF" (only when cached under `pdfs/` next to the page) and "RIK" open in
+  highlighted. Station, times and status are merged columns; a "columns" menu shows or hides any column. Columns "Local PDF" (only when cached under `pdfs/` next to the DB) and "RIK" open in
   a new tab. Times are Serbian local time, DD/MM/YYYY HH:MM.
 - **Status panel** (top of the page, updates in place, nothing reloads): watcher (running since, last
   tick, last RIK success, RIK health ok/slow/blocked/blind, rate, requests per tick, lanes, municipality
@@ -102,7 +103,7 @@ stored document URL, verdict `ok`/`escalate`/`unsure`, note at most 500 characte
   `browse_interval_s` (0 = off) from daemon threads, atomically; failures are logged and never touch
   the watch loop. `watch --once` builds nothing. Over http the page polls the `.json` files; opened as
   a file it re-injects the `.js` files. `rg2watch browse` writes everything once with the status
-  "watcher not running".
+  "watcher not running" (`--out` overrides the page location).
 
 ## Operator review verdicts
 

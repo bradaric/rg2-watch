@@ -61,8 +61,8 @@ fit: `mv data/rehearsal-677087.sqlite data/election-677087.sqlite`.
    - Leave out `--analyze` to only watch for new/replaced/removed documents (free).
    - Started late, with forms already published? Add `--baseline`: what is already there is
      recorded silently, only later changes alert. Already-published RG-2s are still analysed.
-3. Open http://127.0.0.1:8770 in a browser (`watch` prints the URL; `rg2watch serve` serves it when
-   not watching): a live status panel, then every RG-2 with its alerts, second opinions, filters and
+3. Open the URL `watch` prints (`page: http://127.0.0.1:PORT`, normally 8770; the next free port if
+   busy; `rg2watch serve` prints it too when not watching): a live status panel, then every RG-2 with its alerts, second opinions, filters and
    PDF links. The table refreshes every 2 minutes and the panel every 10 s, without a reload.
 4. What arrives on the phone:
    - HIGH, immediately: corrected numbers, more ballots than voters, very high outside voting (15%+),
@@ -87,10 +87,15 @@ from the database without re-alerting.
 | Forms stuck as failed (X2/D3/X1, LOW) | Analysis gave up on them | After fixing the cause: `uv run --env-file .env rg2watch requeue --parent <parent> --failed`, then keep `watch --analyze` running. |
 | Watch started without `--analyze` | Forms recorded, not analysed | Restart with `--analyze`, and `uv run rg2watch requeue --parent <parent> --skipped`. |
 
+Each election has its own page folder (`data/election-<id>/`, next to `data/election-<id>.sqlite`), so
+two elections can run side by side (e.g. `watch` on one, `scripts/view.sh` on another, on different
+ports). Files directly in `data/` (`index.html`, `data.*`, `status.*`, libraries) are from the old
+shared layout and safe to delete.
+
 ## 4. Targeted checks (during or after the night)
 
-- **Find forms by issue, municipality or station:** the page (http://127.0.0.1:8770, or
-  `rg2watch serve` when not watching) filters by municipality, model, severity, rule,
+- **Find forms by issue, municipality or station:** the page (the URL `watch` or
+  `rg2watch serve` printed) filters by municipality, model, severity, rule,
   replaced/removed, "models disagree" and free text. Rebuild it any time:
 
       uv run rg2watch browse --config rg2watch.toml
@@ -140,7 +145,7 @@ election-night data.
    prints a summary (documents by type, RG-2 analysed/failed/skipped, findings by severity, spend,
    elapsed time). If analysis is stuck for 10 minutes (spend cap, key error, downloads blocked,
    Anthropic overloaded) it exits 1 and says why and how many forms remain: fix the cause and rerun.
-2. Open http://127.0.0.1:8770: watch the status panel (queue, spend, ETA), the forms filling in,
+2. Open the URL it prints: watch the status panel (queue, spend, ETA), the forms filling in,
    the Results tab and presentation mode. List names come from `list_names` under `"662405"`.
 3. Practise the review: filter "to review", open PDFs, record OK / ESCALATE / UNSURE, export the
    escalated CSV.

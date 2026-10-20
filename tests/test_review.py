@@ -303,3 +303,24 @@ def test_cli_lists_superseded_and_labels_with_nothing_writes_no_file(tmp_path, c
     assert main(["review", "--db", str(db), "--list", "escalated"]) == 0
     assert "escalate (superseded)" in capsys.readouterr().out
     assert main(["review", "--db", str(db), URL, "ok", "--note", "x" * 501]) == 2
+
+
+def test_review_post_only_reaches_the_db_the_server_was_started_with(tmp_path):
+    a, _ = reviewed_store()
+    b = store()  # another election's DB: it does not know URL
+    servers = []
+    try:
+        for name, st in (("a", a), ("b", b)):
+            page = tmp_path / name
+            page.mkdir()
+            build_page(st, page / "index.html", tmp_path / "pdfs")
+            srv = start_server(page, tmp_path / "pdfs", 0, lambda st=st: reviews_payload(st),
+                               lambda u, v, n, st=st: record_review(st, u, v, n))
+            srv.store = st
+            servers.append(srv)
+        assert post(servers[1])[0] == 400 and stored(servers[1]) == 0
+        assert post(servers[0])[0] == 200 and stored(servers[0]) == 1
+    finally:
+        for srv in servers:
+            srv.shutdown()
+            srv.server_close()
