@@ -231,6 +231,28 @@ replaces it. Treat the report that it is empty and currently in My Drive as unve
    remain restricted. If Google policy blocks inherited child access, stop at the displayed error and
    do not send the link.
 
+### Diagnosing a pending child-access check
+
+An existing case folder and its two files may already be publicly accessible by link while the app's
+publication row remains pending (`uploaded`) because the final child-access check failed. Do not send
+the Viber text, and do not create, move, replace, or share any other file or folder while diagnosing
+that state.
+
+After integrating a diagnostics release, restart `serve` and first use the Drive UI to confirm that
+**RG2 Watch** remains restricted and that the existing case folder, `документ.pdf`, and
+`опис-предмета.txt` still match the approved frozen package. Only after those checks may the operator
+explicitly authorize **one** **Retry frozen publication** action in the UI. Do not run that retry as an
+automated or unattended test. The existing exact-ID reconciliation reuses the same public case folder
+and children; it does not add direct child permissions or create another case.
+
+Read the resulting INFO diagnostics in the terminal running `serve`. Lines sharing one
+`diagnostic_id` show the publication checkpoints and the bounded `pdf` and `text` permission
+type/role classifications. It is safe to report those sanitized lines. Do **not** paste OAuth files,
+bearer tokens, client secrets, full HTTP errors, raw Drive JSON, PDF bytes, case text, document or
+public links, or provider payloads into an issue or chat. The classifications are diagnostic evidence,
+not a repair: any behavior change requires a separate root-cause diagnosis and separately approved
+plan after the retry results are known.
+
 Preparation sends only the document context and the internal review note (not the PDF, stored analysis
 report, or personal names) to the configured Anthropic model, asking for cautious Cyrillic prose. It
 runs only after an explicit click, never publishes model output automatically, and falls back to an
