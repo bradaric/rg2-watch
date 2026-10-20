@@ -185,14 +185,14 @@ class DrivePublisher:
             case = json.loads(publication["case_json"])
             folder_name = f"RG2 предмет — {case['municipality']} БМ {case['station']}"
             bound = publication.get("drive_account_id")
-            legacy_pending = bound is None and bool(publication["folder_id"])
+            unbound_legacy = bound is None and bool(publication["folder_id"])
             if bound is not None and bound != account_id:
                 raise DriveError("the pending publication belongs to a different Google Drive account")
             if bound is None and not publication["folder_id"]:
                 self.store.bind_publication_account(url, account_id)
                 publication = dict(self.store.get_publication(url))
             self.root.verify_registration(root_id, account_id)
-            if bound is None and publication["folder_id"]:
+            if unbound_legacy:
                 legacy = self.drive.get_file(publication["folder_id"])
                 owners = (legacy or {}).get("owners") or []
                 if (not legacy or legacy.get("id") != publication["folder_id"]
@@ -201,8 +201,9 @@ class DrivePublisher:
                         or len(owners) != 1 or owners[0].get("permissionId") != account_id):
                     raise DriveError("legacy pending Drive folder ownership could not be established; "
                                      "investigate it manually")
-                self.store.bind_publication_account(url, account_id)
+                self.store.bind_legacy_publication_account(url, account_id)
                 publication = dict(self.store.get_publication(url))
+            legacy_parent_recovery = bool(publication["legacy_parent_recovery"])
             if not publication["folder_id"]:
                 ids = self.drive.generate_ids(3)
                 self.store.save_drive_ids(url, *ids)
@@ -239,7 +240,8 @@ class DrivePublisher:
                             raise
                     found = self.drive.get_file(file_id)
                 self._verify(found, file_id, name, mime, parents, data,
-                             legacy_parent_recovery=legacy_pending and mime == FOLDER_MIME)
+                             legacy_parent_recovery=(legacy_parent_recovery
+                                                     and mime == FOLDER_MIME))
                 if mime == FOLDER_MIME:
                     owners = found.get("owners") or []
                     if len(owners) != 1 or owners[0].get("permissionId") != account_id:

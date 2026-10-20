@@ -462,6 +462,13 @@ def test_legacy_pending_folder_requires_manual_move_then_reuses_same_id(tmp_path
     with pytest.raises(DriveError, match="inspect.*confirm.*empty.*same.*manually"):
         pub.publish(URL, "Замрзнут јавни опис")
     assert store.get_publication(URL)["drive_account_id"] == drive.account
+    assert store.get_publication(URL)["legacy_parent_recovery"] == 1
+    assert not drive.public and drive.share_calls == 0
+
+    # Account binding must not erase the durable fact that this is the operator's
+    # legacy recovery. Every retry before the manual move gives the same guidance.
+    with pytest.raises(DriveError, match="inspect.*confirm.*empty.*same.*manually"):
+        pub.publish(URL, "Замрзнут јавни опис")
     assert not drive.public and drive.share_calls == 0
 
     # This simulates the operator moving the same empty folder in Google Drive's UI.

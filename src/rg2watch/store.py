@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS publications(
     summary TEXT NOT NULL, summary_sha256 TEXT NOT NULL, staged_pdf_path TEXT NOT NULL,
     pdf_sha256 TEXT NOT NULL, case_json TEXT NOT NULL,
     folder_id TEXT, pdf_file_id TEXT, text_file_id TEXT, drive_account_id TEXT,
+    legacy_parent_recovery INTEGER NOT NULL DEFAULT 0,
     final_url TEXT, viber_text TEXT,
     phase TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, published_at TEXT);
 CREATE TABLE IF NOT EXISTS ai_draft_costs(
@@ -152,6 +153,13 @@ class Store:
         if "drive_account_id" not in cols:
             with self._db:
                 self._db.execute("ALTER TABLE publications ADD COLUMN drive_account_id TEXT")
+        if "legacy_parent_recovery" not in cols:
+            with self._db:
+                self._db.execute("ALTER TABLE publications ADD COLUMN legacy_parent_recovery "
+                                 "INTEGER NOT NULL DEFAULT 0")
+                self._db.execute("UPDATE publications SET legacy_parent_recovery=1 "
+                                 "WHERE drive_account_id IS NULL AND folder_id IS NOT NULL "
+                                 "AND phase<>'published'")
         self._db.executescript(INDEXES)
         self.case_locks = CaseLocks(path)
 
@@ -815,6 +823,23 @@ class Store:
             self._db.execute(
                 "UPDATE publications SET drive_account_id=?,updated_at=? "
                 "WHERE url=? AND drive_account_id IS NULL", (account_id, _now(), url))
+
+    def bind_legacy_publication_account(self, url: str, account_id: str) -> None:
+        """Bind a verified old pending folder and durably retain its manual-move recovery path."""
+        if not account_id:
+            raise ValueError("Google Drive account identity is required")
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT drive_account_id,folder_id FROM publications WHERE url=?", (url,)).fetchone()
+            if row is None:
+                raise KeyError(url)
+            if not row["folder_id"]:
+                raise ValueError("legacy publication requires an existing Drive folder ID")
+            if row["drive_account_id"] not in (None, account_id):
+                raise ValueError("publication belongs to a different Google Drive account")
+            self._db.execute(
+                "UPDATE publications SET drive_account_id=?,legacy_parent_recovery=1,updated_at=? "
+                "WHERE url=?", (account_id, _now(), url))
 
     def advance_publication(self, url: str, phase: str) -> None:
         if phase not in ("preparing", "uploaded"):
