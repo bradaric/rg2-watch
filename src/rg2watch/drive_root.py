@@ -121,8 +121,8 @@ class DriveRoot:
                 self._write(state)
             return self._verify(state, account)
 
-    def require_state(self) -> tuple[str, str]:
-        """Validate the configured root and return ``(root_id, account_id)``; never creates it."""
+    def registration(self) -> tuple[str, str]:
+        """Return the registered root/account after identity checks, without Drive file access."""
         account = self._account()
         with self._locked():
             state = self._read()
@@ -130,7 +130,23 @@ class DriveRoot:
                 raise DriveError("Google Drive root is not configured; run `rg2watch drive-root`")
             if state["phase"] != "created":
                 raise DriveError("Google Drive root setup is incomplete; run `rg2watch drive-root`")
-            return self._verify(state, account), account
+            if state["account_permission_id"] != account:
+                raise DriveError("the authorized Google account differs from the registered Drive root account")
+            return state["root_id"], account
+
+    def verify_registration(self, root_id: str, account: str) -> str:
+        """Fail closed if a previously checked registration or its Drive folder changed."""
+        with self._locked():
+            state = self._read()
+            if (state is None or state["phase"] != "created" or state["root_id"] != root_id
+                    or state["account_permission_id"] != account):
+                raise DriveError("Google Drive root registration changed during publication")
+            return self._verify(state, account)
+
+    def require_state(self) -> tuple[str, str]:
+        """Validate the configured root and return ``(root_id, account_id)``; never creates it."""
+        root_id, account = self.registration()
+        return self.verify_registration(root_id, account), account
 
     def require(self) -> str:
         return self.require_state()[0]

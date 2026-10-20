@@ -172,23 +172,26 @@ class DrivePublisher:
             completed = self.store.get_publication(url)
             if completed and completed["phase"] == "published":
                 return self._result(completed)
-            root_id, account_id = self.root.require_state()
+            root_id, account_id = self.root.registration()
             publication = self.cases.claim(url, summary)
             case = json.loads(publication["case_json"])
             folder_name = f"RG2 предмет — {case['municipality']} БМ {case['station']}"
             bound = publication.get("drive_account_id")
             if bound is not None and bound != account_id:
                 raise DriveError("the pending publication belongs to a different Google Drive account")
-            if bound is None:
-                if publication["folder_id"]:
-                    legacy = self.drive.get_file(publication["folder_id"])
-                    owners = (legacy or {}).get("owners") or []
-                    if (not legacy or legacy.get("id") != publication["folder_id"]
-                            or legacy.get("name") != folder_name
-                            or legacy.get("mimeType") != FOLDER_MIME or legacy.get("trashed")
-                            or len(owners) != 1 or owners[0].get("permissionId") != account_id):
-                        raise DriveError("legacy pending Drive folder ownership could not be established; "
-                                         "investigate it manually")
+            if bound is None and not publication["folder_id"]:
+                self.store.bind_publication_account(url, account_id)
+                publication = dict(self.store.get_publication(url))
+            self.root.verify_registration(root_id, account_id)
+            if bound is None and publication["folder_id"]:
+                legacy = self.drive.get_file(publication["folder_id"])
+                owners = (legacy or {}).get("owners") or []
+                if (not legacy or legacy.get("id") != publication["folder_id"]
+                        or legacy.get("name") != folder_name
+                        or legacy.get("mimeType") != FOLDER_MIME or legacy.get("trashed")
+                        or len(owners) != 1 or owners[0].get("permissionId") != account_id):
+                    raise DriveError("legacy pending Drive folder ownership could not be established; "
+                                     "investigate it manually")
                 self.store.bind_publication_account(url, account_id)
                 publication = dict(self.store.get_publication(url))
             if not publication["folder_id"]:

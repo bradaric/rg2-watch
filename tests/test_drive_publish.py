@@ -194,6 +194,29 @@ def test_account_switch_is_refused_before_drive_file_operations(tmp_path):
     assert switched.get_calls == []
 
 
+def test_pending_account_mismatch_is_refused_before_any_file_get(tmp_path):
+    store, cases = setup_case(tmp_path)
+
+    class TrackingDrive(FakeDrive):
+        def __init__(self):
+            super().__init__()
+            self.get_calls = []
+
+        def get_file(self, file_id):
+            self.get_calls.append(file_id)
+            return super().get_file(file_id)
+
+    drive = TrackingDrive()
+    root = DriveRoot(tmp_path / "drive-token.json", drive)
+    root.setup()
+    cases.claim(URL, "Јавни опис")
+    store.bind_publication_account(URL, "different-account")
+    drive.get_calls.clear()
+    with pytest.raises(DriveError, match="different Google Drive account"):
+        DrivePublisher(cases, drive, root).publish(URL, "Јавни опис")
+    assert drive.get_calls == []
+
+
 @pytest.mark.parametrize("change", ["name", "parent", "owner", "trashed", "public", "missing"])
 def test_modified_or_inaccessible_root_fails_closed(tmp_path, change):
     token = tmp_path / "drive-token.json"
