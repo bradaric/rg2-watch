@@ -6,6 +6,7 @@ from rg2watch.analyze import AnalysisResult
 from rg2watch.cli import main
 from rg2watch.config import Config, load_config
 from rg2watch.browse import STATIC, build_data
+from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.store import Store
 from rg2watch.tally import build_tally, disagreements, extract, format_tally
 from rg2watch.models import Event
@@ -26,7 +27,8 @@ def report(**kw):
 
 
 def put(s, d, rep, model=M):
-    s.save_analysis(d.url, AnalysisResult(rep, 0, 0, 0.0, model, "stop"), "v6", parent="adhoc")
+    rep = {**rep, "header": {**rep["header"], "station_no": d.station_no}}  # no V9 from the fixture itself
+    s.save_analysis(d.url, AnalysisResult(rep, 0, 0, 0.0, model, "stop"), PROMPT_VERSION, parent="adhoc")
 
 
 def form(s, no, rep=None, muni="Alpha", model=M, **kw):
@@ -76,6 +78,19 @@ def test_excluded_reasons(name, rep, expect):
     o = t["overall"]
     assert o["clean"] == 0 and o["excluded"] == 1 and o["cl"]["voted"] == 0
     assert o["all"]["voted"] > 0 or name in ("illegible", "empty")  # "all forms" still counts what was read
+
+
+def test_high_alert_flags_form_and_medium_does_not():
+    s = store()
+    hi = report()
+    hi["numbers"]["valid"] = nf(780, mark="crossed_out", original=790)
+    form(s, 12, hi)
+    mid = report()
+    mid["signatures"] = {**mid["signatures"], "rows_name_without_signature": 3}  # V4 is MEDIUM
+    form(s, 13, mid)
+    t = tally(s)
+    assert why(t) == {"12": ["HIGH alert: V1"]}
+    assert t["overall"]["clean"] == 1
 
 
 def test_empty_outside_voted_is_not_a_reason_but_illegible_is():

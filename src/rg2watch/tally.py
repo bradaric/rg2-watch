@@ -69,9 +69,11 @@ def extract(report: dict, doc: Doc, cfg: Config) -> dict:
         lists[r["row"]] = f["value"] if _ok(f) else None
         if not _ok(f):
             bad.append(f"list row {r['row']} {'illegible' if not f['legible'] else 'empty'}")
-    arith = sorted({f.rule for f in evaluate_report(report, doc, cfg) if f.rule in ARITHMETIC})
+    found = evaluate_report(report, doc, cfg)  # the rules re-applied to the stored report (no D-rules)
+    arith = sorted({f.rule for f in found if f.rule in ARITHMETIC})
+    high = sorted({f.rule for f in found if f.severity == "HIGH"})
     return {"n": n, "l": lists, "bad": bad, "conf": report["confidence"],
-            "pq": report["visual"]["page_quality"], "arith": arith}
+            "pq": report["visual"]["page_quality"], "arith": arith, "high": high}
 
 
 def disagreements(mine: dict, others: dict[str, dict], model: str) -> tuple[list[dict], list[str]]:
@@ -103,6 +105,8 @@ def reasons(ex: dict, dis: list[dict], rows: list[int]) -> list[str]:
         out.append(f"models disagree on {d['f']}: " + " vs ".join(f"{v} ({m})" for m, v in d["v"].items()))
     if ex["arith"]:
         out.append("arithmetic " + ", ".join(ex["arith"]))
+    if ex["high"]:
+        out.append("HIGH alert: " + ", ".join(ex["high"]))
     return out
 
 

@@ -118,8 +118,10 @@ votes and share of valid votes per list, per municipality and overall, with cove
 of stations known). RIK's official results are never fetched. Flagged forms are left out of the clean
 totals (`--clean` / the page switch "clean forms only (leave out flagged)" show only those; every counted form is shown by default) when the
 confidence is low, the page quality is poor or unreadable, a counted number is illegible, another
-stored model read a counted number differently, or an arithmetic rule (A1-A5) fires; the reasons are
-listed, with a link to the form. List names are never read from the scans: set
+stored model read a counted number differently, an arithmetic rule (A1-A5) fires, or the form has any
+HIGH-severity alert (any rule, e.g. "HIGH alert: V1, V9"; the rules are re-applied to the stored
+report, so document-level D-rule findings do not count; MEDIUM and LOW alerts such as P3 remarks or
+V4 signatures never flag); the reasons are listed, with a link to the form. List names are never read from the scans: set
 `[list_names]` in the config, default "List N". The page offers a
 CSV download of the per-municipality table (cells starting with = + - @ are escaped); in municipal
 scope it is long format, one row per municipality and list with that municipality's totals.
