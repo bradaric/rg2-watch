@@ -24,7 +24,7 @@ RULE_INFO = {
     "V6": "The results block is in a different pen or handwriting than the rest of the form",
     "V7": "Part of the form looks pasted over or patched",
     "V8": "A required number is empty or illegible (registered, 10.1-10.4, list votes, items 12/12.1)",
-    "V9": "Pages are missing or do not belong together, or the form does not match the listed station",
+    "V9": "Pages missing or mismatched, or form station number differs from listing (MEDIUM, often a misread digit)",
     "V10": "The scan is of poor quality or unreadable, so other checks are less reliable",
     "V11": "A yes/no item has both or neither answer circled (item 14 is not checked)",
     "V12": "Large correction: a number was changed by 5 or more and by 30% or more of the original",
@@ -178,7 +178,9 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
         if not hdr["pages_match_same_form"]:
             v9.append("pages do not match the same form")
     if v9:
-        add("V9", "HIGH" if station_bad else phys, v9)
+        # MEDIUM always: the report carries no signal of pages from another station/form, and the
+        # misreads seen (2A/21, 209/29, 02/62; pages "not matching") cluster by municipality
+        add("V9", "MEDIUM", v9)
 
     if vis["page_quality"] in ("poor", "unreadable"):
         add("V10", "LOW", f"page quality {vis['page_quality']}")

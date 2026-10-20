@@ -6,7 +6,7 @@ from rg2watch import analyze
 from rg2watch.analyze import SCHEMA
 from rg2watch.config import Config
 from rg2watch.models import Doc
-from rg2watch.rules import evaluate_report
+from rg2watch.rules import RULE_INFO, evaluate_report
 
 DOC = Doc("Test", "12", "School", "label", 6, "http://x/a.pdf", "2026-10-19")
 CFG = Config()
@@ -132,9 +132,9 @@ CASES = [
     ("V7", lambda r: r["visual"].update(pasted_or_patched_area=True), "HIGH"),
     ("V8", lambda r: r["numbers"]["valid"].update(value=None, legible=False, mark="empty"), "MEDIUM"),
     ("V8", lambda r: r["numbers"]["list_votes"][1]["field"].update(legible=False), "MEDIUM"),
-    ("V9", lambda r: r["header"].update(station_no="13"), "HIGH"),
-    ("V9", lambda r: r["header"].update(sections_present=["I", "II", "III", "IV"]), "HIGH"),
-    ("V9", lambda r: r["header"].update(pages_match_same_form=False), "HIGH"),
+    ("V9", lambda r: r["header"].update(station_no="13"), "MEDIUM"),
+    ("V9", lambda r: r["header"].update(sections_present=["I", "II", "III", "IV"]), "MEDIUM"),
+    ("V9", lambda r: r["header"].update(pages_match_same_form=False), "MEDIUM"),
     ("V10", lambda r: r["visual"].update(page_quality="poor"), "LOW"),
     ("V11", lambda r: r["yesno"]["interruption"].update(answer="both"), "MEDIUM"),
     ("P1", lambda r: r["yesno"]["control_sheet_found"].update(answer="NE"), "HIGH"),
@@ -258,7 +258,16 @@ def test_poor_quality_caps_physical_rules_at_medium():
     for rule in ("V3", "V5", "V6", "V7", "V9"):
         assert found[rule].severity == "MEDIUM"
     assert rules(mutated(lambda r: (r["visual"].update(page_quality="poor"),
-                                    r["header"].update(station_no="99"))))["V9"].severity == "HIGH"
+                                    r["header"].update(station_no="99"))))["V9"].severity == "MEDIUM"
+
+
+def test_v9_is_medium_for_digit_misreads_and_page_mismatch():
+    for no in ("2A", "209", "02", "62"):  # listing 21 / 29: misreads seen in the 2026 local elections
+        f = rules(mutated(lambda r: r["header"].update(station_no=no)))["V9"]
+        assert f.severity == "MEDIUM" and "differs from listing" in f.summary
+    both = rules(mutated(lambda r: (r["header"].update(station_no="99", pages_match_same_form=False))))["V9"]
+    assert both.severity == "MEDIUM" and "pages do not match the same form" in both.summary
+    assert "MEDIUM" in RULE_INFO["V9"]
 
 
 def test_v1_fires_for_corrected_unreadable_field():
