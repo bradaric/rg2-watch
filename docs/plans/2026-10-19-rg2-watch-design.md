@@ -178,7 +178,7 @@ Arithmetic (secondary; only when all involved fields legible):
 | A2 | invalid + valid != ballots_in_box | MEDIUM |
 | A3 | sum(list_votes) != valid | MEDIUM |
 | A4 | voted > registered | HIGH |
-| A5 | outside_voted != outside_confirmations | MEDIUM |
+| A5 | outside_voted > outside_confirmations (fewer votes than confirmations is normal) | MEDIUM |
 | A6 | turnout >= 95% (registered > 50) | MEDIUM |
 | A7 | one list >= 90% of valid (valid > 50) | MEDIUM |
 | A8 | assisted > 5% of voted | LOW |

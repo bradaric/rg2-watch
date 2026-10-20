@@ -186,8 +186,8 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
         add("A3", "MEDIUM", f"list votes sum {sum(list_vals)} != valid {n['valid']}")
     if "voted" in n and "registered" in n and n["voted"] > n["registered"]:
         add("A4", "HIGH", f"voted {n['voted']} > registered {n['registered']}")
-    if "outside_voted" in n and "outside_confirmations" in n and n["outside_voted"] != n["outside_confirmations"]:
-        add("A5", "MEDIUM", f"outside voted {n['outside_voted']} != confirmations {n['outside_confirmations']}")
+    if "outside_voted" in n and "outside_confirmations" in n and n["outside_voted"] > n["outside_confirmations"]:
+        add("A5", "MEDIUM", f"outside voted {n['outside_voted']} > confirmations {n['outside_confirmations']}")
     if "voted" in n and "registered" in n and n["registered"] > cfg.min_registered_for_ratio \
             and n["voted"] / n["registered"] >= cfg.turnout_high:
         add("A6", "MEDIUM", f"turnout {n['voted'] / n['registered']:.1%} (voted {n['voted']} of {n['registered']})")

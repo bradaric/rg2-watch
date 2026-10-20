@@ -450,3 +450,11 @@ def test_v12_capped_at_medium_when_unreliable():
     r = _adversarial("unreadable", "high", False)
     r["numbers"]["outside_voted"].update(value=10, original_value=44, legible=True)
     assert rules(r)["V12"].severity == "MEDIUM"
+
+
+def test_a5_only_when_outside_votes_exceed_confirmations():
+    assert "A5" not in _outside(4, None)
+    assert "A5" not in _outside(5, None)
+    a5 = _outside(6, None)["A5"]
+    assert a5.severity == "MEDIUM"
+    assert a5.summary == "outside voted 6 > confirmations 5"
