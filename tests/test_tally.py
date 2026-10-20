@@ -168,7 +168,10 @@ def test_null_municipality_and_station_key():
     form(s, 12, clean_report(), muni=None)
     s._db.execute("UPDATE documents SET station_key=NULL")
     s._db.commit()
-    assert tally(s)["munis"][0]["m"] == "(unknown)"
+    row = tally(s)["munis"][0]
+    assert row["m"] == "(unknown)" and row["generated_unknown_muni"] is True
+    assert tally(s)["overall"]["m"] == "(all)"
+    assert tally(s)["overall"]["generated_unknown_muni"] is False
 
 
 def test_list_names_mapping_and_default(tmp_path):
@@ -176,7 +179,11 @@ def test_list_names_mapping_and_default(tmp_path):
     form(s, 12, clean_report())
     t = tally(s, cfg=Config(tally_scope=NAT.tally_scope, list_names={P: ["Zeta", " "]}))
     assert t["names"] == ["Zeta", "List 2"]
+    assert t["fallback_name_indices"] == [1]
     assert tally(s)["names"] == ["List 1", "List 2"]
+    literal = tally(s, cfg=Config(tally_scope=NAT.tally_scope, list_names={P: ["List 1", " "]}))
+    assert literal["names"] == ["List 1", "List 2"]
+    assert literal["fallback_name_indices"] == [1]
     cfg = tmp_path / "c.toml"
     cfg.write_text(f'[list_names]\n"{P}" = ["A", "B"]\n')
     assert load_config(cfg).list_names == {P: ["A", "B"]}
@@ -410,6 +417,7 @@ def test_municipal_scope_per_municipality_lists_and_overall_without_lists():
     a, b = t["munis"]
     assert (a["nlists"], b["nlists"]) == (2, 3)
     assert a["names"] == ["List 1", "List 2"] and b["names"] == ["X", "Y", "Z"]
+    assert a["fallback_name_indices"] == [0, 1] and b["fallback_name_indices"] == []
     assert b["all"]["lists"] == [100, 280, 400] and b["all"]["lists_valid"]
     assert len(a["all"]["lists"]) == 2 and a["names_note"] is None
     for k in ("all", "cl"):
@@ -495,11 +503,35 @@ def test_municipal_unknown_municipality_gets_no_list_totals():
     t = tally(s, cfg=muni_cfg())
     u = next(m for m in t["munis"] if m["m"] == "(unknown)")
     assert u["nlists"] == 0 and u["names"] == [] and "different ballots" in u["names_note"]
+    assert u["fallback_name_indices"] == [] and u["generated_unknown_muni"] is True
     assert u["counted"] == 1 and u["all"]["valid"] == 0 and u["all"]["withheld_valid"] == 780
     assert "lists" not in u["all"] and "lists" not in u["cl"]
     assert "(unknown): warning: municipality unknown" in format_tally(t)
     nat = next(m for m in tally(s)["munis"] if m["m"] == "(unknown)")
     assert "lists" in nat["all"]  # national scope: one ballot, lists kept
+
+
+def test_literal_unknown_municipality_is_not_marked_as_generated_even_when_grouped_with_missing():
+    s = store()
+    form(s, 1, clean_report(), muni=None)
+    form(s, 2, clean_report(), muni="(unknown)")
+    row = tally(s)["munis"][0]
+    assert row["m"] == "(unknown)" and row["counted"] == 2
+    assert row["generated_unknown_muni"] is False
+
+
+def test_named_and_empty_municipal_rows_always_have_additive_name_metadata():
+    s = store()
+    s.save_municipalities(P, {"1": "Alpha", "2": "Beta"})
+    s.save_stations(P, "2", {"1": "beta-1"})
+    form(s, 1, clean_report(), muni="Alpha")
+    t = tally(s, cfg=muni_cfg(list_names={P: {"Alpha": ["Configured", " "]}}))
+    by = {r["m"]: r for r in t["munis"]}
+    assert by["Alpha"]["names"] == ["Configured", "List 2"]
+    assert by["Alpha"]["fallback_name_indices"] == [1]
+    assert by["Alpha"]["generated_unknown_muni"] is False
+    assert by["Beta"]["names"] == [] and by["Beta"]["fallback_name_indices"] == []
+    assert by["Beta"]["generated_unknown_muni"] is False
 
 
 def test_empty_expected_ballot_rows_are_explicitly_unavailable_in_national_and_named_municipal_scopes():

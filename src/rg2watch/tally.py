@@ -356,11 +356,12 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     live = {a["id"] for a in arows} | {key_of(a) for a in arows}
     for gone in set(cache) - live:
         del cache[gone]
-    forms, unanalysed = [], {}
+    forms, unanalysed, muni_sources = [], {}, {}
     for d in mains:
         muni = d["municipality"] or UNKNOWN_MUNI
         if municipalities is not None and muni not in municipalities:
             continue
+        muni_sources.setdefault(muni, []).append(d["municipality"])
         got = by_doc.get(d["id"], {})
         mine = ex_of(got[model]) if model in got else None
         if mine is None:
@@ -392,6 +393,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                 _warned.add((parent, key, len(conf), nrows))
                 log.warning("%s (election %s%s)", note, parent, "" if national else f", {muni}")
             info[key] = {"nlists": nrows, "names": [list_name(conf, r) for r in range(1, nrows + 1)],
+                         "fallback_name_indices": [r - 1 for r in range(1, nrows + 1)
+                                                   if not (r <= len(conf) and conf[r - 1].strip())],
                          "names_note": note}
         return info[key]
 
@@ -448,25 +451,30 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                     _put(acc[key], contribution)
                     _put(overall[key], contribution, None if national else contribution.keys() - {"lists"})
         row = {"m": name, "stations": stations.get(name, 0), "counted": len(mine),
+               "generated_unknown_muni": bool(muni_sources.get(name))
+               and all(not source for source in muni_sources[name]),
                "corrected": sum(1 for f in mine if f["ex"]["rg7"]),
                "clean": sum(1 for f in mine if not f["why"]), "unanalysed": unanalysed.get(name, 0),
                "fclean": sum(1 for f in mine if not f["why_f"]),
                **{k: _tot(acc[k]) for k in acc},
                 "pair": {k: _pair_tot(p) for k, p in pair.items()}}
         if mixed:
-            row.update({"nlists": 0, "names": [], "names_note": UNKNOWN_MUNI_NOTE})
+            row.update({"nlists": 0, "names": [], "fallback_name_indices": [],
+                        "names_note": UNKNOWN_MUNI_NOTE})
             for key in acc:
                 del row[key]["lists"], row[key]["lists_valid"]
             for p in row["pair"].values():
                 del p["c"]["lists"], p["c"]["lists_valid"], p["f"]["lists"], p["f"]["lists_valid"]
         elif not national:
-            row.update(ballot(name, len(mrows)) if mine else {"nlists": 0, "names": [], "names_note": None})
+            row.update(ballot(name, len(mrows)) if mine else
+                       {"nlists": 0, "names": [], "fallback_name_indices": [], "names_note": None})
         row["excluded"] = row["counted"] - row["clean"]
         row["fexcluded"] = row["counted"] - row["fclean"]
         for k in counts:
             counts[k] += row[k]
         munis.append(row)
-    total = {"m": "(all)", **counts, "corrected": sum(r["corrected"] for r in munis), "fclean": sum(r["fclean"] for r in munis),
+    total = {"m": "(all)", "generated_unknown_muni": False, **counts,
+             "corrected": sum(r["corrected"] for r in munis), "fclean": sum(r["fclean"] for r in munis),
              **{k: _tot(overall[k]) for k in overall},
               "pair": {k: _pair_tot(p) for k, p in opair.items()}}
     if not national:
@@ -479,7 +487,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     e = store.get_election(parent)
     # top-level nlists/names/names_note describe the national ballot; in municipal scope they are
     # empty and each municipality row carries its own
-    top = ballot("", len(rows)) if national else {"nlists": 0, "names": [], "names_note": None}
+    top = ballot("", len(rows)) if national else {
+        "nlists": 0, "names": [], "fallback_name_indices": [], "names_note": None}
     return {"model": model, "parent": parent, "title": e.title if e else parent, "scope": scope,
             "scope_note": scope_note, **top, "munis": munis, "overall": total, "notes": notes,
             "corrected": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
