@@ -157,3 +157,24 @@ meaningless; they only make sense for parliamentary and presidential elections.
   the municipality with most counted forms, "All municipalities" shows only turnout/coverage/
   forms/valid without bars. National scope unchanged.
 - CLI `tally`: municipal scope prints a list table per municipality.
+
+## Task G: operator review verdicts (operator, 20/10/2026)
+
+- Verdicts per document version (URL): `ok` (false alarm / legitimate correction), `escalate`,
+  `unsure`, optional note (<= 500 chars). New table `reviews(document_id, url, verdict, note,
+  created_at)`; history kept, latest wins. A replaced form's new version starts unreviewed.
+- Page (http mode only; file:// shows the verdicts read-only): buttons in the Forms row and child
+  row; filters "to review" (has findings, no verdict on current version), "escalated", "ok",
+  "unsure"; status panel counter "to review: N"; CSV export of escalated forms (station, RIK
+  link, findings, note, time) with formula-injection escaping.
+- Server: `POST /review` JSON `{url, verdict, note}`. Accept only when `Sec-Fetch-Site` is
+  `same-origin` (or absent with Origin equal to the server origin), Host check as for GET,
+  `Content-Type: application/json`, custom header `X-RG2W: 1` (forces a CORS preflight that is
+  never answered), body <= 4 KB, URL must be a stored document. Everything else 403/400.
+  No other write endpoints.
+- CLI: `rg2watch review <url> ok|escalate|unsure [--note ...]`, `rg2watch review --list
+  escalated|ok|unsure|todo [--parent P]`.
+- No ntfy push on escalation (operator decision).
+- `rg2watch labels --from-reviews` writes eval label suggestions from ok/escalate verdicts
+  (ok -> the fired rules false, escalate -> fired rules true) into a separate JSONL for the
+  operator to merge; never overwrites tests/golden/labels.jsonl.
