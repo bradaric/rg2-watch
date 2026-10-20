@@ -115,8 +115,8 @@ ntfy message is sent for a verdict.
 (unofficial)" tab of the browse page total what the watch model (`model`, or `--model`) read from the
 first-round RG-2 forms: registered, voted, ballots in box, invalid, valid, outside voted, turnout, and
 votes and share of valid votes per list, per municipality and overall, with coverage (forms counted
-of stations known). RIK's official results are never fetched. Forms are excluded from the "clean
-forms only" totals (`--clean` / the page switch show only those; every counted form is shown by default) when the
+of stations known). RIK's official results are never fetched. Flagged forms are left out of the clean
+totals (`--clean` / the page switch "clean forms only (leave out flagged)" show only those; every counted form is shown by default) when the
 confidence is low, the page quality is poor or unreadable, a counted number is illegible, another
 stored model read a counted number differently, or an arithmetic rule (A1-A5) fires; the reasons are
 listed, with a link to the form. List names are never read from the scans: set

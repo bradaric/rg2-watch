@@ -266,13 +266,13 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <div id="resview" hidden>
 <section id="hero">
 <div id="herobar"><select id="hmuni" aria-label="municipality"></select>
-<select id="hmode" aria-label="forms counted"><option value="cl">clean forms only</option><option value="all" selected>all counted forms</option></select>
+<select id="hmode" aria-label="forms counted"><option value="cl">clean forms only (leave out flagged)</option><option value="all" selected>all counted forms</option></select>
 <button id="herobtn">Presentation mode</button></div>
 <div id="herohead"><span class="kicker">Unofficial</span><div id="herotitle"></div></div>
 <div id="heronums">
 <div class="tile"><div class="k">Turnout</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
 <div class="tile"><div class="k">Stations counted</div><div class="v" id="hv-st">-</div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
-<div class="tile"><div class="k">Forms</div><div class="v" id="hv-forms">-</div><div class="s">clean / excluded</div></div>
+<div class="tile"><div class="k">Forms</div><div class="v" id="hv-forms">-</div><div class="s">clean / flagged</div></div>
 <div class="tile"><div class="k">Valid votes</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"></div></div>
 </div>
 <div id="heronames" class="warnbox" hidden></div>
@@ -282,12 +282,12 @@ body.hero #herochart{margin:var(--s2) 0 0}
 </section>
 <p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
 <p id="tscope" class="warnbox" hidden></p>
-<div id="tctl"><label>totals over <select id="tmode"><option value="cl">clean forms only</option><option value="all" selected>all counted forms</option></select></label>
+<div id="tctl"><label>totals over <select id="tmode"><option value="cl">clean forms only (leave out flagged)</option><option value="all" selected>all counted forms</option></select></label>
 <button id="csv">Download CSV</button></div>
 <h3>Overall</h3><div id="toverall"></div>
 <h3>Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
-<h3>Excluded forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
-<h3 id="tnoteshead" hidden>Notes (not excluded)</h3><ul id="tnotes"></ul>
+<h3>Flagged forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
+<h3 id="tnoteshead" hidden>Notes (not flagged)</h3><ul id="tnotes"></ul>
 </div>
 <script src="jquery.min.js"></script>
 <script src="dataTables.min.js"></script>
@@ -719,7 +719,7 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]
   const t = r => r[mode], c = [
     ["Municipality", r => r.m, s => s, r => r.m],
     ["Stations", r => r.stations, num], ["Counted", r => r.counted, num], ["Clean", r => r.clean, num],
-    ["Excluded", r => r.excluded, num],
+    ["Flagged", r => r.excluded, num],
     ["Coverage", r => ratio(r.counted, r.stations), pc, r => ratio(r.counted, r.stations) == null ? "" : (100 * r.counted / r.stations).toFixed(1)],
     ["Registered", r => t(r).registered, num], ["Voted", r => t(r).voted, num],
     ["Turnout", r => t(r).turnout, pc, r => t(r).turnout == null ? "" : (100 * t(r).turnout).toFixed(1)],
@@ -742,7 +742,7 @@ function tallyCsv() {
   const mode = $("tmode").value, cols = resultCols(mode), rows = [...T.munis, T.overall];
   // header is row 1 (pandas/Excel read it cleanly); the unofficial note is a last column, first data row
   const note = "Unofficial - numbers read by " + T.model + " from the scanned forms; " +
-    (mode === "cl" ? "clean forms only" : "all counted forms");
+    (mode === "cl" ? "clean forms only (leave out flagged)" : "all counted forms");
   if (T.scope === "municipal") {  // long format: one row per (municipality, list), shared totals repeated
     const shared = cols.slice(1), out = [];
     for (const r of rows) {
@@ -834,7 +834,7 @@ function renderTally() {
       data: T.excluded, pageLength: 50, layout: {topStart: "search", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
       columns: [{data: "m", title: "Municipality", render: DataTable.render.text()},
         {data: "no", title: "BM", render: DataTable.render.text(), defaultContent: "", className: "dt-left"},
-        {data: "why", title: "Why excluded", render: {_: d => d.join("; "), display: () => ""},
+        {data: "why", title: "Why flagged", render: {_: d => d.join("; "), display: () => ""},
          createdCell: (td, d) => td.append(ruleText(d.join("; ")))},
         {data: null, title: "", orderable: false, defaultContent: "", createdCell: (td, d, r) => {
           const b = mk("button", "show form"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); td.append(b); }}]});

@@ -293,12 +293,13 @@ def _list_table(names: list[str], rows: list[dict], key: str) -> list[str]:
 
 
 def format_tally(t: dict, all_forms: bool = True) -> str:
-    """Plain-text report of build_tally(): totals, list votes, excluded forms."""
+    """Plain-text report of build_tally(): totals, list votes, flagged forms."""
     key = "all" if all_forms else "cl"
     rows = [*t["munis"], t["overall"]]
     out = [f"UNOFFICIAL - numbers read by {t['model']} from the scanned forms, not RIK results",
-           f"{t['title']} ({t['parent']}): " + ("all counted forms" if all_forms else "clean forms only"), ""]
-    head = ["municipality", "stations", "counted", "clean", "excluded", "cover", "registered", "voted",
+           f"{t['title']} ({t['parent']}): "
+           + ("all counted forms" if all_forms else "clean forms only (leave out flagged)"), ""]
+    head = ["municipality", "stations", "counted", "clean", "flagged", "cover", "registered", "voted",
             "turnout", "in box", "invalid", "valid", "outside"]
     body = [[r["m"], str(r["stations"]), str(r["counted"]), str(r["clean"]), str(r["excluded"]),
              _pct(r["counted"] / r["stations"] if r["stations"] else None),
@@ -325,10 +326,10 @@ def format_tally(t: dict, all_forms: bool = True) -> str:
                 out += ["", f"{r['m']}: warning: {r['names_note']}"]
     pending = t["overall"]["unanalysed"]
     out += ["", f"{t['overall']['counted']} form(s) counted, {t['overall']['clean']} clean, "
-            f"{t['overall']['excluded']} excluded, {pending} not analysed by {t['model']}"]
+            f"{t['overall']['excluded']} flagged, {pending} not analysed by {t['model']}"]
     if t["notes"]:
-        out += ["", "notes (not excluded):"] + [f"  {n['m']} BM {n['no']}: {n['note']}" for n in t["notes"]]
+        out += ["", "notes (not flagged):"] + [f"  {n['m']} BM {n['no']}: {n['note']}" for n in t["notes"]]
     if t["excluded"]:
-        out += ["", "excluded forms (reason):"]
+        out += ["", "flagged forms (reason):"]
         out += [f"  {e['m']} BM {e['no']}: " + "; ".join(e["why"]) for e in t["excluded"]]
     return "\n".join(out)
