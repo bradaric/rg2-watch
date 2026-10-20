@@ -116,8 +116,12 @@ def test_crash_after_durable_staging_recovers_same_freeze_and_refuses_changed_in
     monkeypatch.setattr(store, "claim_publication", real_claim)
     with pytest.raises(CaseError, match="frozen"):
         service.claim(URL, "Промењен опис")
+    real_fsync = os.fsync
+    fsync_calls = []
+    monkeypatch.setattr(os, "fsync", lambda fd: (fsync_calls.append(fd), real_fsync(fd))[1])
     recovered = service.claim(URL, "Замрзнут опис")
     assert Path(recovered["staged_pdf_path"]) == staged[0]
+    assert fsync_calls  # recovery re-establishes directory-entry durability before the DB claim
 
 
 def test_store_will_not_commit_publication_referencing_missing_staging(tmp_path):

@@ -110,15 +110,16 @@ class CaseHandoff:
                 if hashlib.sha256(Path(tmp).read_bytes()).hexdigest() != digest:
                     raise CaseError("cached PDF changed while it was staged")
                 os.replace(tmp, final)
-                # Persist the directory entry before SQLite is allowed to reference it.
-                dir_fd = os.open(stage_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
             except BaseException:
                 Path(tmp).unlink(missing_ok=True)
                 raise
+        # Persist (or re-establish after orphan recovery) the directory entry before SQLite is
+        # allowed to reference it.  The file bytes themselves were fsynced before the rename.
+        dir_fd = os.open(stage_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
         row, inserted = self.store.claim_publication(
             url, summary, summary_hash, str(final), digest, case)
         if not inserted:
