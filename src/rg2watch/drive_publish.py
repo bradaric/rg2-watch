@@ -1,14 +1,21 @@
 """Crash-safe creation of one public Google Drive folder per reviewed document URL."""
+from contextvars import ContextVar
 import hashlib
 import io
 import json
+import logging
 from pathlib import Path
+import uuid
 
 from .case_handoff import CaseError, CaseHandoff
 
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+
+logger = logging.getLogger("rg2watch.drive_publish")
+_publication_diagnostic_id: ContextVar[str | None] = ContextVar(
+    "publication_diagnostic_id", default=None)
 
 
 class DriveError(RuntimeError):
@@ -146,14 +153,36 @@ class GoogleDriveAdapter:
             raise DriveError("Drive public permission did not complete; retry to reconcile it") from exc
 
     def children_have_public_reader(self, child_ids: list[str]) -> bool:
-        for child in child_ids:
-            permissions = self._permissions(child)
-            if not any(
+        outcomes = []
+        known_types = {"anyone", "user", "group", "domain"}
+        known_roles = {"reader", "commenter", "writer", "owner"}
+        for index, child in enumerate(child_ids):
+            child_kind = "pdf" if index == 0 else "text"
+            try:
+                permissions = self._permissions(child)
+            except DriveError as exc:
+                logger.info("child-check failed diagnostic_id=%s child=%s exception=%s",
+                            _publication_diagnostic_id.get(), child_kind,
+                            type(exc).__name__)
+                raise
+            anyone_reader = any(
                 p.get("type") == "anyone" and p.get("role") == "reader"
-                for p in permissions
-            ):
-                return False
-        return True
+                for p in permissions if isinstance(p, dict)
+            )
+            classifications = []
+            for permission in permissions[:10]:
+                raw_type = permission.get("type") if isinstance(permission, dict) else None
+                raw_role = permission.get("role") if isinstance(permission, dict) else None
+                permission_type = raw_type if raw_type in known_types else "other"
+                role = raw_role if raw_role in known_roles else "other"
+                classifications.append(f"type={permission_type} role={role}")
+            logger.info(
+                "child-check diagnostic_id=%s child=%s count=%d classifications=[%s] "
+                "anyone_reader=%s",
+                _publication_diagnostic_id.get(), child_kind, len(permissions),
+                ";".join(classifications), str(anyone_reader).lower())
+            outcomes.append(anyone_reader)
+        return all(outcomes)
 
 
 class LazyConfiguredDrive:
@@ -173,8 +202,21 @@ class DrivePublisher:
         self.cases, self.drive, self.root, self.store = cases, drive, root, cases.store
 
     def publish(self, url: str, summary: str) -> dict:
+        token = None
+        if _publication_diagnostic_id.get() is None:
+            token = _publication_diagnostic_id.set(uuid.uuid4().hex)
+        try:
+            return self._publish(url, summary)
+        finally:
+            if token is not None:
+                _publication_diagnostic_id.reset(token)
+
+    def _publish(self, url: str, summary: str) -> dict:
+        diagnostic_id = _publication_diagnostic_id.get()
         completed = self.store.get_publication(url)
         if completed and completed["phase"] == "published":
+            logger.info("publication checkpoint diagnostic_id=%s stage=published",
+                        diagnostic_id)
             return self._result(completed)
         lock = self.store.case_locks.publish(url, blocking=False)
         if lock is None:
@@ -206,6 +248,8 @@ class DrivePublisher:
                                      "investigate it manually")
                 self.store.bind_legacy_publication_account(url, account_id)
                 publication = dict(self.store.get_publication(url))
+            logger.info("publication checkpoint diagnostic_id=%s stage=root-validated",
+                        diagnostic_id)
             legacy_parent_recovery = bool(publication["legacy_parent_recovery"])
             if not publication["folder_id"]:
                 ids = self.drive.generate_ids(3)
@@ -221,6 +265,8 @@ class DrivePublisher:
             if hashlib.sha256(pdf).hexdigest() != publication["pdf_sha256"]:
                 raise CaseError("frozen staged PDF is missing or changed")
             case_text = self._case_text(case, publication["summary"], publication["pdf_sha256"])
+            logger.info("publication checkpoint diagnostic_id=%s stage=frozen-package-verified",
+                        diagnostic_id)
             expected = (
                 (publication["folder_id"], folder_name, FOLDER_MIME, [root_id], None),
                 (publication["pdf_file_id"], pdf_name, "application/pdf",
@@ -257,7 +303,10 @@ class DrivePublisher:
                     if not visible <= allowed:
                         raise DriveError("the Drive case folder contains an unexpected app-visible child; "
                                          "inspect it manually")
+            logger.info("publication checkpoint diagnostic_id=%s stage=files-verified",
+                        diagnostic_id)
             self.store.advance_publication(url, "uploaded")
+            logger.info("publication checkpoint diagnostic_id=%s stage=uploaded", diagnostic_id)
             with self.store.case_locks.decision(url):
                 checked_root, checked_account = self.root.require_state()
                 if checked_root != root_id or checked_account != account_id:
@@ -273,13 +322,18 @@ class DrivePublisher:
                             raise
                 if not self.drive.folder_is_public(publication["folder_id"]):
                     raise DriveError("Drive did not confirm anyone-with-link reader access")
+                logger.info("publication checkpoint diagnostic_id=%s stage=folder-public",
+                            diagnostic_id)
                 children = [publication["pdf_file_id"], publication["text_file_id"]]
                 if not self.drive.children_have_public_reader(children):
+                    logger.info("publication checkpoint diagnostic_id=%s "
+                                "stage=child-check-failed", diagnostic_id)
                     raise DriveError("Drive account policy did not expose both folder children")
                 final = "https://drive.google.com/drive/folders/" + publication["folder_id"]
                 viber = self.cases.viber_text(case, publication["summary"], final)
                 self.store.finalize_publication(url, final, viber)
             staged.unlink(missing_ok=True)
+            logger.info("publication checkpoint diagnostic_id=%s stage=published", diagnostic_id)
             return self._result(self.store.get_publication(url))
 
     @staticmethod

@@ -1,9 +1,13 @@
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+import logging
 
 from .case_handoff import CaseHandoff
-from .drive_publish import DrivePublisher
+from .drive_publish import DrivePublisher, _publication_diagnostic_id
+
+
+logger = logging.getLogger("rg2watch.publication_service")
 
 
 class PublicationJobs:
@@ -29,16 +33,27 @@ class PublicationJobs:
             self._jobs[job_id] = {"id": job_id, "state": "running", "kind": kind}
 
         def run():
+            token = None
+            if kind == "publication":
+                token = _publication_diagnostic_id.set(job_id)
+                logger.info("publication start diagnostic_id=%s", job_id)
             try:
                 result = fn()
                 with self._lock:
                     self._jobs[job_id] = {"id": job_id, "state": "done", "kind": kind,
                                           "result": result}
+                if kind == "publication":
+                    logger.info("publication done diagnostic_id=%s", job_id)
             except Exception as exc:
                 with self._lock:
                     self._jobs[job_id] = {"id": job_id, "state": "error", "kind": kind,
                                           "error": str(exc)[:500] or type(exc).__name__}
+                if kind == "publication":
+                    logger.info("publication fail diagnostic_id=%s exception=%s",
+                                job_id, type(exc).__name__)
             finally:
+                if token is not None:
+                    _publication_diagnostic_id.reset(token)
                 with self._lock:
                     self._active.discard(key)
 
