@@ -20,10 +20,18 @@ RG7_FIRST_ROUND = (19, 20, 21, 22)  # decisions correcting a first-round RG-2
 FIRST_ROUND = 6  # repeat-vote forms (10, 15, 16) are another round: never mixed into the totals
 
 
-UNKNOWN_TYPE_NOTE = "unknown election type - set tally_scope"
+TALLY_WARNING_TEMPLATES = {
+    "unknown_type": "unknown election type - set tally_scope",
+    "unknown_municipality": "municipality unknown - forms may be from different ballots, no list totals",
+    "empty_ballot": "no expected ballot rows - comparable list totals unavailable",
+    "national_names_shape": "list_names must be a plain list for a national election",
+    "municipal_names_shape": "list_names must map municipality -> names for a municipal election",
+    "names_count": "list_names has {names} names, forms have {lists} lists - check config",
+}
+UNKNOWN_TYPE_NOTE = TALLY_WARNING_TEMPLATES["unknown_type"]
 UNKNOWN_MUNI = "(unknown)"
-UNKNOWN_MUNI_NOTE = "municipality unknown - forms may be from different ballots, no list totals"
-EMPTY_BALLOT_NOTE = "no expected ballot rows - comparable list totals unavailable"
+UNKNOWN_MUNI_NOTE = TALLY_WARNING_TEMPLATES["unknown_municipality"]
+EMPTY_BALLOT_NOTE = TALLY_WARNING_TEMPLATES["empty_ballot"]
 
 
 def scope_of(store: Store, cfg: Config, parent: str) -> tuple[str, str | None]:
@@ -43,9 +51,9 @@ def configured_names(cfg: Config, parent: str, scope: str, muni: str | None) -> 
     if v is None:
         return [], None
     if scope == "national":
-        return (v, None) if isinstance(v, list) else ([], "list_names must be a plain list for a national election")
+        return (v, None) if isinstance(v, list) else ([], TALLY_WARNING_TEMPLATES["national_names_shape"])
     if isinstance(v, list):
-        return [], "list_names must map municipality -> names for a municipal election"
+        return [], TALLY_WARNING_TEMPLATES["municipal_names_shape"]
     want = to_cyrillic(muni or "")
     return next((n for k, n in v.items() if to_cyrillic(k) == want), []), None
 
@@ -388,7 +396,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             conf, shape = configured_names(cfg, parent, scope, None if national else muni)
             note = "; ".join(x for x in (shape, EMPTY_BALLOT_NOTE if not nrows else None) if x) or None
             if not note and conf and nrows and len(conf) != nrows:
-                note = f"list_names has {len(conf)} names, forms have {nrows} lists - check config"
+                note = TALLY_WARNING_TEMPLATES["names_count"].format(names=len(conf), lists=nrows)
             if note and (parent, key, len(conf), nrows) not in _warned:
                 _warned.add((parent, key, len(conf), nrows))
                 log.warning("%s (election %s%s)", note, parent, "" if national else f", {muni}")

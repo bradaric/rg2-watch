@@ -288,18 +288,18 @@ def test_hero_markup_labelled_and_safe():
 
 
 def test_hero_warning_translates_every_current_tally_warning_and_preserves_unknown_text():
+    from rg2watch.tally import TALLY_WARNING_TEMPLATES
+
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    source = (STATIC.parent / "tally.py").read_text(encoding="utf-8")
-    warnings = [
-        "unknown election type - set tally_scope",
-        "municipality unknown - forms may be from different ballots, no list totals",
-        "no expected ballot rows - comparable list totals unavailable",
-        "list_names must be a plain list for a national election",
-        "list_names must map municipality -> names for a municipal election",
-        "list_names has {len(conf)} names, forms have {nrows} lists - check config",
-    ]
-    assert all(message in source for message in warnings)
-    start = html.index("function heroWarning")
+    assert TALLY_WARNING_TEMPLATES == {
+        "unknown_type": "unknown election type - set tally_scope",
+        "unknown_municipality": "municipality unknown - forms may be from different ballots, no list totals",
+        "empty_ballot": "no expected ballot rows - comparable list totals unavailable",
+        "national_names_shape": "list_names must be a plain list for a national election",
+        "municipal_names_shape": "list_names must map municipality -> names for a municipal election",
+        "names_count": "list_names has {names} names, forms have {lists} lists - check config",
+    }
+    start = html.index("function serbianCount")
     end = html.index("function initHero", start)
     helper = html[start:end]
     script = r'''
@@ -311,7 +311,11 @@ const cases = [
   ["no expected ballot rows - comparable list totals unavailable", "Нема очекиваних редова на гласачком листићу — упоредиви збирови по листама нису доступни"],
   ["list_names must be a plain list for a national election", "list_names мора бити обична листа за републичке изборе"],
   ["list_names must map municipality -> names for a municipal election", "list_names мора да пресликава општину у називе за локалне изборе"],
-  ["list_names has 3 names, forms have 2 lists - check config", "list_names има 3 назива, записници имају 2 листе — проверите конфигурацију"],
+  ["list_names has 1 names, forms have 1 lists - check config", "list_names има 1 назив, записници имају 1 листу — проверите конфигурацију"],
+  ["list_names has 2 names, forms have 2 lists - check config", "list_names има 2 назива, записници имају 2 листе — проверите конфигурацију"],
+  ["list_names has 5 names, forms have 5 lists - check config", "list_names има 5 назива, записници имају 5 листа — проверите конфигурацију"],
+  ["list_names has 12 names, forms have 12 lists - check config", "list_names има 12 назива, записници имају 12 листа — проверите конфигурацију"],
+  ["list_names has 22 names, forms have 22 lists - check config", "list_names има 22 назива, записници имају 22 листе — проверите конфигурацију"],
 ];
 for (const [input, expected] of cases) assert.equal(heroWarning(input), expected);
 assert.equal(heroWarning(cases[0][0] + "; " + cases[2][0]), cases[0][1] + "; " + cases[2][1]);
@@ -668,6 +672,27 @@ assert(els.herofoot.children[0].includes("opaque-model-v1"));
 assert(els.herotitle.textContent.includes("Избори Ћирилица"));
 assert.equal(slots[0].nm.textContent, "Листа А");
 assert.equal(slots[1].nm.textContent, "Листа 2");
+T.names = ["List 1", "List 2"];
+T.fallback_name_indices = [1];
+renderHero();
+assert.equal(slots[0].nm.textContent, "List 1", "configured literal List N must remain unchanged");
+assert.equal(slots[1].nm.textContent, "Листа 2", "only the metadata-marked fallback is localized");
+const renderedWarnings = [
+  ["unknown election type - set tally_scope", "Непозната врста избора"],
+  ["municipality unknown - forms may be from different ballots, no list totals", "Општина није позната"],
+  ["no expected ballot rows - comparable list totals unavailable", "Нема очекиваних редова"],
+  ["list_names must be a plain list for a national election", "list_names мора бити обична листа"],
+  ["list_names must map municipality -> names for a municipal election", "list_names мора да пресликава општину"],
+  ["list_names has 22 names, forms have 12 lists - check config", "22 назива, записници имају 12 листа"],
+];
+for (const [warning, expected] of renderedWarnings) {
+  T.scope_note = warning;
+  renderHero();
+  assert(els.heronames.textContent.includes(expected));
+  assert(!els.heronames.textContent.includes(warning));
+}
+T.scope_note = null;
+setData(r);
 els.tmode.value = "cl";
 renderHero();
 assert(els["hs-forms"].textContent.includes("чистих"));
@@ -688,12 +713,15 @@ renderHero();
 assert(slots.every(x => x.row.hidden), "filed-ineligible selected view must hide the chart");
 assert(!els["hs-valid"].textContent.includes("NaN"));
 
-const many = row([10,9,8,7,6,5,4,3,2,46], [10,9,8,7,6,5,4,3,2,46]);
-setData(many);
-T.names = Array.from({length: 10}, (_, i) => "Назив " + (i + 1));
-T.fallback_name_indices = [];
-renderHero();
-assert.equal(slots[8].nm.textContent, "Остале (2 листа)");
+for (const [rest, word] of [[1,"листа"],[2,"листе"],[5,"листа"],[12,"листа"],[22,"листе"]]) {
+  const values = Array.from({length: 8 + rest}, () => 1);
+  const many = row(values, values);
+  setData(many);
+  T.names = values.map((_, i) => "Назив " + (i + 1));
+  T.fallback_name_indices = [];
+  renderHero();
+  assert.equal(slots[8].nm.textContent, "Остале (" + rest + " " + word + ")");
+}
 
 r = row(null, [55, 45]);
 setData(r);
@@ -723,7 +751,22 @@ renderHero();
 assert(slots.every(x => x.row.hidden), "zero eligible forms must hide the chart");
 assert(!els["hs-valid"].textContent.includes("NaN"));
 
+const zero = row(null, null);
+zero.counted = zero.clean = zero.excluded = zero.fclean = zero.fexcluded = 0;
+setData(zero);
+renderHero();
+assert.equal(els["hv-turn"].textContent, "-");
+assert.equal(els["hs-valid"].textContent, "");
+assert(els.heronote.textContent.includes("Још нема обрађених записника"));
+assert(slots.every(x => x.row.hidden));
+T = null;
+renderHero();
+assert(els.herofoot.children[0].includes("резултати још нису доступни"));
+assert(els.heronote.textContent.includes("Још нема анализираних записника"));
+assert(slots.every(x => x.row.hidden));
+
 const alpha = row([60, 40], [60, 40]);
+alpha.m = "Ћуприја";
 const unknown = row(null, null); unknown.m = "(unknown)"; unknown.names = []; unknown.nlists = 0;
 const overall = row(null, null); overall.m = "(all)"; overall.names = []; overall.nlists = 0;
 for (const r of [unknown, overall]) for (const k of ["all", "cl", "fall", "fcl"]) {
@@ -732,9 +775,13 @@ for (const r of [unknown, overall]) for (const k of ["all", "cl", "fall", "fcl"]
 T = {model: "test", title: "Local", scope: "municipal", scope_note: null, names: [], names_note: null,
   munis: [alpha, unknown], overall};
 csv = tallyCsv();
-assert(csv.includes("Alpha,1,A,60,60.0"), "municipal list rows must be long format");
+assert(csv.includes("Ћуприја,1,A,60,60.0"), "municipal list rows must be long format");
 assert(csv.includes("Unavailable - no comparable ballot"), "unknown ballot must be explicit");
 assert(csv.includes("Unavailable - no universal ballot"), "municipal overall list fields must be explicit");
+heroMuni = "Ћуприја"; heroPicked = true;
+renderHero();
+assert.equal(els.hmuni.options[1].textContent, "Ћуприја");
+assert(els.herotitle.textContent.startsWith("Ћуприја"));
 
 unknown.generated_unknown_muni = true;
 unknown.names = ["List 1", "Стварна листа"]; unknown.fallback_name_indices = [0]; unknown.nlists = 2;

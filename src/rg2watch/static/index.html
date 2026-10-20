@@ -1067,6 +1067,10 @@ function put(id, text) {  // set text; flash when it changed
   void el.offsetWidth;
   el.classList.add("flash");
 }
+function serbianCount(n, one, few, many) {
+  const last100 = Math.abs(n) % 100, last10 = last100 % 10;
+  return last100 >= 11 && last100 <= 14 ? many : last10 === 1 ? one : last10 >= 2 && last10 <= 4 ? few : many;
+}
 function heroWarning(note) {
   const exact = {
     "unknown election type - set tally_scope": "Непозната врста избора — подесите tally_scope",
@@ -1078,7 +1082,10 @@ function heroWarning(note) {
   return String(note).split("; ").map(part => {
     if (exact[part]) return exact[part];
     const m = /^list_names has (\d+) names, forms have (\d+) lists - check config$/.exec(part);
-    return m ? "list_names има " + m[1] + " назива, записници имају " + m[2] + " листе — проверите конфигурацију" : part;
+    if (!m) return part;
+    const names = Number(m[1]), lists = Number(m[2]);
+    return "list_names има " + m[1] + " " + serbianCount(names, "назив", "назива", "назива") +
+      ", записници имају " + m[2] + " " + serbianCount(lists, "листу", "листе", "листа") + " — проверите конфигурацију";
   }).join("; ");
 }
 function heroMuniName(row) { return row && row.generated_unknown_muni ? "Непозната општина" : row.m; }
@@ -1171,7 +1178,8 @@ function renderHero() {
   const rows = none || (muniScope && allMunis) || noChartLists ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
     .sort((a, b) => dg ? Math.abs(b.v) - Math.abs(a.v) || a.i - b.i : b.v - a.v || a.i - b.i);
   const shown = rows.slice(0, TOP_LISTS), rest = rows.slice(TOP_LISTS);
-  if (rest.length) shown.push({n: "Остале (" + rest.length + " листа)", i: -1, v: rest.reduce((a, x) => a + x.v, 0), s: rest.reduce((a, x) => a + (x.s || 0), 0)});
+  if (rest.length) shown.push({n: "Остале (" + rest.length + " " + serbianCount(rest.length, "листа", "листе", "листа") + ")",
+    i: -1, v: rest.reduce((a, x) => a + x.v, 0), s: rest.reduce((a, x) => a + (x.s || 0), 0)});
   const maxAbs = Math.max(1, ...shown.map(x => Math.abs(x.v)));
   slots.forEach((s, k) => {
     const e = shown[k];
