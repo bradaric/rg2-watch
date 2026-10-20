@@ -90,28 +90,46 @@ class CaseHandoff:
         stage_dir = Path(self.cfg.db_path).resolve().parent / ".rg2watch-publications"
         stage_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(stage_dir, 0o700)
-        final = stage_dir / (hashlib.sha256(url.encode()).hexdigest() + ".pdf")
+        # The filename makes an unclaimed, crash-left staging file authoritative for all
+        # frozen inputs.  A later request cannot mistake it for a different summary/PDF.
+        prefix = hashlib.sha256(url.encode()).hexdigest() + "."
+        final = stage_dir / f"{prefix}{summary_hash}.{digest}.pdf"
+        orphans = list(stage_dir.glob(prefix + "*.pdf"))
+        if orphans and (len(orphans) != 1 or orphans[0] != final):
+            raise CaseError("inputs differ from the frozen staged package; retry with its original inputs")
+        if final.exists():
+            if not final.is_file() or hashlib.sha256(final.read_bytes()).hexdigest() != digest:
+                raise CaseError("frozen staged PDF is missing or changed")
+        else:
+            fd, tmp = tempfile.mkstemp(dir=stage_dir, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(pdf)
+                    fh.flush(); os.fsync(fh.fileno())
+                os.chmod(tmp, 0o600)
+                if hashlib.sha256(Path(tmp).read_bytes()).hexdigest() != digest:
+                    raise CaseError("cached PDF changed while it was staged")
+                os.replace(tmp, final)
+                # Persist the directory entry before SQLite is allowed to reference it.
+                dir_fd = os.open(stage_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
         row, inserted = self.store.claim_publication(
             url, summary, summary_hash, str(final), digest, case)
         if not inserted:
             if row["summary_sha256"] != summary_hash or row["pdf_sha256"] != digest:
+                if str(final) != row["staged_pdf_path"]:
+                    final.unlink(missing_ok=True)
                 raise CaseError("inputs differ from the frozen pending package; inspect the frozen case")
             staged = Path(row["staged_pdf_path"])
             if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != row["pdf_sha256"]:
                 raise CaseError("frozen package is incomplete: staged PDF is missing or changed")
             return dict(row)
-        fd, tmp = tempfile.mkstemp(dir=stage_dir, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(pdf)
-                fh.flush(); os.fsync(fh.fileno())
-            os.chmod(tmp, 0o600)
-            if hashlib.sha256(Path(tmp).read_bytes()).hexdigest() != digest:
-                raise CaseError("cached PDF changed while it was staged")
-            os.replace(tmp, final)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
         return dict(row)
 
     @staticmethod

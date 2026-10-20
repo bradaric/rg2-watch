@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 import threading
@@ -768,6 +769,12 @@ class Store:
 
     def claim_publication(self, url: str, summary: str, summary_sha256: str, staged_pdf_path: str,
                           pdf_sha256: str, case: dict) -> tuple[sqlite3.Row, bool]:
+        staged = Path(staged_pdf_path)
+        try:
+            if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != pdf_sha256:
+                raise ValueError("publication requires a durable staged PDF with the recorded hash")
+        except OSError as exc:
+            raise ValueError("publication requires a durable staged PDF with the recorded hash") from exc
         now = _now()
         with self._lock, self._db:
             doc = self._db.execute("SELECT id, parent FROM documents WHERE url=?", (url,)).fetchone()

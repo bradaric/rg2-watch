@@ -566,12 +566,14 @@ function publishedCase(box, data) {
   const message = mk("div", data.viber_text || "", "caseout");
   box.append(p, message, copyButton(data.viber_text || ""));
 }
-function waitCaseJob(id, box, done) {
-  caseFetch("case/jobs/" + encodeURIComponent(id)).then(j => {
-    if (j.state === "running") return setTimeout(() => waitCaseJob(id, box, done), 700);
+function waitCaseJob(id) {
+  return caseFetch("case/jobs/" + encodeURIComponent(id)).then(j => {
+    if (j.state === "running") {
+      return new Promise(resolve => setTimeout(resolve, 700)).then(() => waitCaseJob(id));
+    }
     if (j.state === "error") throw new Error(j.error || "job failed");
-    done(j.result);
-  }).catch(e => { box.querySelector(".rvmsg").textContent = "Грешка: " + e.message; });
+    return j.result;
+  });
 }
 function caseBox(v) {
   const box = mk("div", null, "casebox"), msg = mk("span", null, "rvmsg");
@@ -590,11 +592,11 @@ function caseBox(v) {
     prep.onclick = () => {
       prep.disabled = true; msg.textContent = "Припрема... Интерна напомена се шаље AI провајдеру ако је доступан.";
       caseFetch("case/prepare", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"}, body: JSON.stringify({url: v.u})})
-        .then(j => waitCaseJob(j.job_id, box, result => {
+        .then(j => waitCaseJob(j.job_id)).then(result => {
           area.value = result.summary || ""; area.hidden = publish.hidden = label.hidden = false;
           msg.textContent = result.warning ? "AI нацрт није доступан: " + result.warning : "Проверите и измените нацрт пре објаве.";
           prep.disabled = false;
-        })).catch(e => { prep.disabled = false; msg.textContent = "Грешка: " + e.message; });
+        }).catch(e => { prep.disabled = false; msg.textContent = "Грешка: " + e.message; });
     };
     label.hidden = true;
     publish.onclick = () => {
@@ -602,7 +604,7 @@ function caseBox(v) {
       publish.disabled = true; msg.textContent = "Отпремање је у току; остале контроле остају доступне.";
       caseFetch("case/publish", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
         body: JSON.stringify({url: v.u, summary: area.value, confirm: true})})
-        .then(j => waitCaseJob(j.job_id, box, result => publishedCase(box, result)))
+        .then(j => waitCaseJob(j.job_id)).then(result => publishedCase(box, result))
         .catch(e => { publish.disabled = false; msg.textContent = "Грешка: " + e.message; });
     };
     if (pending) {

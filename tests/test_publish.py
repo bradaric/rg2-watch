@@ -4,6 +4,7 @@ import json
 import multiprocessing
 import os
 import signal
+import subprocess
 import time
 from pathlib import Path
 
@@ -97,26 +98,35 @@ def test_claim_freezes_summary_and_pdf_and_refuses_changed_retry(tmp_path):
     store.close()
 
 
-def test_crash_while_staging_leaves_durable_incomplete_freeze(tmp_path, monkeypatch):
+def test_crash_after_durable_staging_recovers_same_freeze_and_refuses_changed_input(
+        tmp_path, monkeypatch):
     store, service, _ = handoff(tmp_path)
-    real_replace = os.replace
+    real_claim = store.claim_publication
 
-    def crash_before_stage_publish(source, destination):
-        if str(destination).endswith(".pdf"):
-            raise RuntimeError("simulated staging crash")
-        return real_replace(source, destination)
+    def crash_before_claim(*args, **kwargs):
+        raise RuntimeError("simulated claim crash")
 
-    monkeypatch.setattr(os, "replace", crash_before_stage_publish)
-    with pytest.raises(RuntimeError, match="staging crash"):
+    monkeypatch.setattr(store, "claim_publication", crash_before_claim)
+    with pytest.raises(RuntimeError, match="claim crash"):
         service.claim(URL, "Замрзнут опис")
-    pending = store.get_publication(URL)
-    assert pending is not None
-    assert pending["summary"] == "Замрзнут опис"
-    assert not Path(pending["staged_pdf_path"]).exists()
+    assert store.get_publication(URL) is None
+    staged = list((tmp_path / ".rg2watch-publications").glob("*.pdf"))
+    assert len(staged) == 1 and staged[0].read_bytes().startswith(b"%PDF")
 
-    monkeypatch.setattr(os, "replace", real_replace)
-    with pytest.raises(CaseError, match="incomplete|missing"):
-        service.claim(URL, "Замрзнут опис")
+    monkeypatch.setattr(store, "claim_publication", real_claim)
+    with pytest.raises(CaseError, match="frozen"):
+        service.claim(URL, "Промењен опис")
+    recovered = service.claim(URL, "Замрзнут опис")
+    assert Path(recovered["staged_pdf_path"]) == staged[0]
+
+
+def test_store_will_not_commit_publication_referencing_missing_staging(tmp_path):
+    store, service, _ = handoff(tmp_path)
+    case = service._case(URL)
+    with pytest.raises(ValueError, match="durable staged PDF"):
+        store.claim_publication(URL, "Опис", hashlib.sha256("Опис".encode()).hexdigest(),
+                                str(tmp_path / "missing.pdf"), "0" * 64, case)
+    assert store.get_publication(URL) is None
 
 
 def test_completed_publication_is_historical_after_ok(tmp_path):
@@ -316,6 +326,57 @@ def test_page_has_explicit_safe_case_controls():
     assert "Понови објаву замрзнутог предмета" in html
 
 
+def test_case_ui_reenables_prepare_and_publish_after_async_job_errors():
+    html = Path("src/rg2watch/static/index.html").read_text(encoding="utf-8")
+    source = html[html.index("function copyButton"):html.index("function rowOf")]
+    script = r'''
+class El {
+  constructor(tag) { this.tag = tag; this.children = []; this.hidden = false; this.disabled = false;
+    this.textContent = ""; this.value = ""; this.checked = false; this.className = ""; }
+  append(...xs) { this.children.push(...xs); }
+  prepend(...xs) { this.children.unshift(...xs); }
+  replaceChildren(...xs) { this.children = xs; }
+  setAttribute() {}
+  querySelector(sel) { if (sel === ".rvmsg") return find(this, x => x.className === "rvmsg"); }
+}
+function find(root, pred) { if (root instanceof El && pred(root)) return root;
+  for (const child of root.children || []) { const got = child instanceof El && find(child, pred); if (got) return got; }
+  return null; }
+function findText(root, text) { return find(root, x => x.textContent === text); }
+const document = {createElement: tag => new El(tag)};
+const navigator = {clipboard: {writeText: () => Promise.resolve()}};
+const HTTP = true;
+function mk(tag, text, cls) { const e = new El(tag); if (text != null) e.textContent = text; e.className = cls || ""; return e; }
+function link(text, href) { return mk("a", text); }
+function rvOf() { return {v: "escalate"}; }
+let jobs = {};
+function caseFetch(path) {
+  if (path.startsWith("case/publication")) return Promise.resolve({status: "none"});
+  if (path === "case/prepare") return Promise.resolve({job_id: "prepare"});
+  if (path === "case/publish") return Promise.resolve({job_id: "publish"});
+  return Promise.resolve(jobs[path.split("/").pop()]);
+}
+''' + source + r'''
+async function tick() { await new Promise(resolve => setImmediate(resolve)); }
+(async () => {
+  jobs.prepare = {state: "error", error: "prepare boom"};
+  let box = caseBox({u: "https://example.test/a.pdf", pdf: "hash"}); await tick();
+  let prep = findText(box, "Припреми нацрт"); prep.onclick(); await tick(); await tick();
+  if (prep.disabled || !box.querySelector(".rvmsg").textContent.includes("prepare boom")) process.exit(2);
+
+  jobs.prepare = {state: "done", result: {summary: "Опис"}};
+  jobs.publish = {state: "error", error: "publish boom"};
+  box = caseBox({u: "https://example.test/a.pdf", pdf: "hash"}); await tick();
+  prep = findText(box, "Припреми нацрт"); prep.onclick(); await tick(); await tick();
+  const publish = findText(box, "Објави јавни предмет");
+  const confirm = find(box, x => x.tag === "input"); confirm.checked = true;
+  publish.onclick(); await tick(); await tick();
+  if (publish.disabled || !box.querySelector(".rvmsg").textContent.includes("publish boom")) process.exit(3);
+})().catch(e => { console.error(e); process.exit(4); });
+'''
+    subprocess.run(["node", "-e", script], check=True)
+
+
 def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_path):
     _, cases, _ = handoff(tmp_path)
     jobs = PublicationJobs(cases, None, workers=1)
@@ -361,6 +422,56 @@ def _hold_publish_lock(db, url, ready):
     signal.pause()
 
 
+class _ProcessDrive:
+    def __init__(self, state, crash_after_folder=False):
+        self.state = state
+        self.crash_after_folder = crash_after_folder
+
+    def generate_ids(self, count):
+        self.state["generate_calls"] += 1
+        return ["process-folder", "process-pdf", "process-text"]
+
+    def get_file(self, file_id):
+        return self.state["files"].get(file_id)
+
+    def create_folder(self, file_id, name):
+        files = dict(self.state["files"])
+        files[file_id] = {"id": file_id, "name": name,
+                          "mimeType": "application/vnd.google-apps.folder", "parents": []}
+        self.state["files"] = files
+        self.state["folder_creates"] += 1
+        if self.crash_after_folder:
+            os._exit(73)
+
+    def upload(self, file_id, name, mime, parent, data):
+        files = dict(self.state["files"])
+        files[file_id] = {"id": file_id, "name": name, "mimeType": mime, "parents": [parent],
+                          "md5Checksum": hashlib.md5(data).hexdigest()}
+        self.state["files"] = files
+
+    def folder_is_public(self, folder_id):
+        return self.state["public"]
+
+    def share_folder(self, folder_id):
+        self.state["share_calls"] += 1
+        self.state["public"] = True
+
+    def children_inherit_public(self, folder_id, child_ids):
+        return self.state["public"] and all(i in self.state["files"] for i in child_ids)
+
+
+def _publish_with_process_store(db, state, crash, out=None):
+    from rg2watch.drive_publish import DrivePublisher
+    store = Store(db)
+    try:
+        cases = CaseHandoff(store, Config(db_path=Path(db), max_pdf_bytes=1000))
+        result = DrivePublisher(cases, _ProcessDrive(state, crash)).publish(URL, "Процесни опис")
+        if out is not None:
+            out.put(result)
+    finally:
+        store.close()
+
+
 def test_two_store_publish_owner_blocks_claim_and_upload_then_recovers_after_crash(tmp_path):
     from test_drive_publish import FakeDrive
     from rg2watch.drive_publish import DrivePublisher, DriveError
@@ -384,3 +495,37 @@ def test_two_store_publish_owner_blocks_claim_and_upload_then_recovers_after_cra
         owner.join(5)
     result = DrivePublisher(cases, blocked_drive).publish(URL, "Јавни опис")
     assert result["status"] == "published"
+
+
+def test_second_process_recovers_durable_pending_and_remote_create_without_duplicates(tmp_path):
+    first, _, cache = handoff(tmp_path)
+    db = first.path
+    first.close()
+    with multiprocessing.Manager() as manager:
+        state = manager.dict(files={}, generate_calls=0, folder_creates=0,
+                             share_calls=0, public=False)
+        crashed = multiprocessing.Process(
+            target=_publish_with_process_store, args=(db, state, True))
+        crashed.start(); crashed.join(10)
+        assert crashed.exitcode == 73
+
+        pending_store = Store(db)
+        pending = pending_store.get_publication(URL)
+        frozen_path = Path(pending["staged_pdf_path"])
+        frozen_bytes = frozen_path.read_bytes()
+        frozen_ids = [pending["folder_id"], pending["pdf_file_id"], pending["text_file_id"]]
+        pending_store.close()
+        cache.write_bytes(b"%PDF-1.4\nnewer cache must not be used")
+
+        out = multiprocessing.Queue()
+        recovery = multiprocessing.Process(
+            target=_publish_with_process_store, args=(db, state, False, out))
+        recovery.start(); recovery.join(10)
+        assert recovery.exitcode == 0
+        assert out.get(timeout=1)["status"] == "published"
+        assert frozen_ids == ["process-folder", "process-pdf", "process-text"]
+        assert state["generate_calls"] == 1
+        assert state["folder_creates"] == 1
+        assert set(state["files"]) == set(frozen_ids)
+        assert state["files"]["process-pdf"]["md5Checksum"] == hashlib.md5(frozen_bytes).hexdigest()
+        assert state["share_calls"] == 1
