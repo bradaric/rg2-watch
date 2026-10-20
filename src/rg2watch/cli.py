@@ -150,6 +150,10 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--model", help="model whose readings are counted (default: config model)")
     s.add_argument("--clean", action="store_true", help="show totals over clean forms only "
                    "(default: all counted forms)")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--as-filed", action="store_true", help="totals from the RG-2 forms as filed, "
+                   "without RG-7 corrections")
+    g.add_argument("--diff", action="store_true", help="difference: with RG-7 corrections minus as filed")
 
     s = sub.add_parser("review", parents=[common], help="record or list operator verdicts on forms")
     s.add_argument("url", nargs="?", help="document URL (one version of a form)")
@@ -338,7 +342,7 @@ def _cmd_tally(args) -> int:
         t = build_tally(store, cfg, parent, stored_model(cfg.model), only)
     finally:
         store.close()
-    print(format_tally(t, not args.clean))
+    print(format_tally(t, not args.clean, "diff" if args.diff else "filed" if args.as_filed else "corrected"))
     return 0
 
 

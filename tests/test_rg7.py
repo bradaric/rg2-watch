@@ -535,3 +535,42 @@ def test_rg7_never_takes_the_rg2_path(tmp_path):
     e.drain()
     assert e.status(d.url)[0] != "done"
     assert e.store._db.execute("SELECT COUNT(*) FROM analyses WHERE prompt_version=?", (PROMPT_VERSION,)).fetchone()[0] == 0
+
+
+def test_tally_three_views_corrected_filed_and_diff():
+    from rg2watch.tally import _delta, format_tally
+
+    s = bstore()
+    station(s, clean_report(), [(rg7([("10.2", 180, 178), ("10.3", 20, 18), ("10.4", 160, 160)]), "2026-10-20T10:00:00Z")],
+            voted=nf(178), ballots_in_box=nf(180), invalid=nf(20), valid=nf(160),
+            list_votes=[{"row": 1, "field": nf(100)}, {"row": 2, "field": nf(60)}])
+    t = tally(s)
+    o = t["overall"]
+    assert o["all"]["ballots_in_box"] == 178 and o["fall"]["ballots_in_box"] == 180  # corrected vs as filed
+    assert o["all"]["invalid"] == 18 and o["fall"]["invalid"] == 20
+    assert o["clean"] == 1 and o["fclean"] == 0 and o["fexcluded"] == 1  # as filed, A1 flags it
+    assert t["excluded"] == [] and "arithmetic" in t["excluded_filed"][0]["why"][0]
+    assert o["fcl"]["valid"] == 0 and o["cl"]["valid"] == 160
+    d = _delta(o["all"], o["fall"])
+    assert d["ballots_in_box"] == -2 and d["invalid"] == -2 and d["valid"] == 0 and d["lists"] == [0, 0]
+    assert all(d[k] == o["all"][k] - o["fall"][k] for k in ("registered", "voted", "valid", "outside_voted"))
+    assert "numbers with RG-7 corrections" in format_tally(t)
+    assert "as filed on the RG-2" in format_tally(t, view="filed") and "*" not in format_tally(t, view="filed").split("\n")[4]
+    dt = format_tally(t, view="diff")
+    assert "difference" in dt and "-2" in dt
+
+
+def test_unverified_correction_changes_neither_view():
+    from rg2watch.tally import _delta
+
+    s = bstore()
+    station(s, clean_report(), [(rg7([("10.2", 999, 178)]), "2026-10-20T10:00:00Z")],  # old number contradicts the RG-2
+            voted=nf(178), ballots_in_box=nf(178), invalid=nf(18), valid=nf(160),
+            list_votes=[{"row": 1, "field": nf(100)}, {"row": 2, "field": nf(60)}])
+    t = tally(s)
+    o = t["overall"]
+    assert t["corrected"] == [] and o["all"] == o["fall"]  # the numbers are the RG-2 in both views
+    assert any("unverified RG-7" in w for w in t["excluded"][0]["why"])  # corrected view flags it
+    assert o["cl"]["valid"] == 0 and o["fcl"]["valid"] == 160  # only the flag differs
+    assert t["excluded_filed"] == [] and o["fclean"] == 1  # as filed: judged on the RG-2 alone
+    assert set(_delta(o["all"], o["fall"])["lists"]) == {0}

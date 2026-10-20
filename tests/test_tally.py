@@ -199,6 +199,7 @@ def test_page_csv_is_formula_safe_and_labelled():
     assert "/^[=+\\-@\\t\\r]/.test(x)) x = \"'\" + x" in html
     assert "Unofficial - numbers read by a model from the scanned forms" in html
     assert 'new Intl.NumberFormat("en-GB")' in html
+    assert 'id="tview"' in html and 'id="hview"' in html and 'p.set("nv", NV())' in html  # numbers view, in the hash
 
 
 def test_cli_tally_prints_all_then_clean(tmp_path, capsys):
@@ -216,6 +217,10 @@ def test_cli_tally_prints_all_then_clean(tmp_path, capsys):
     assert main(["tally", "--db", str(db), "--parent", P, "--model", M, "--clean"]) == 0
     out = capsys.readouterr().out
     assert "clean forms only (leave out flagged)" in out and "1,000" in out and "80.0%" in out
+    assert main(["tally", "--db", str(db), "--parent", P, "--model", M, "--as-filed"]) == 0
+    assert "numbers as filed on the RG-2 forms" in capsys.readouterr().out
+    assert main(["tally", "--db", str(db), "--parent", P, "--model", M, "--diff"]) == 0
+    assert "numbers difference (corrected - as filed" in capsys.readouterr().out
     assert main(["tally", "--db", str(db), "--parent", P, "--model", M, "--municipality", "Nowhere"]) == 2
     assert main(["tally", "--db", str(db), "--parent", P, "--model", M, "--municipality", "alp"]) == 0
 

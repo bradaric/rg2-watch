@@ -124,6 +124,26 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None) 
             log.warning("RG-7 corrections of %s %s could not be applied", doc.municipality,
                         doc.station_no, exc_info=True)
             report, applied, unverified = original, [], []
+    n, lists, bad = _numbers(report)
+    found = evaluate_report(report, doc, cfg)  # the rules re-applied to the stored report (no D-rules)
+    arith = sorted({f.rule for f in found if f.rule in ARITHMETIC})
+    high = {f.rule for f in found if f.severity == "HIGH"}
+    filed = None  # the RG-2 as filed, when corrections changed anything: n, l, bad, arith, high
+    if applied:  # arithmetic from the corrected numbers, everything else from the RG-2 as filed
+        orig = evaluate_report(original, doc, cfg)
+        fn, fl, fb = _numbers(original)
+        filed = {"n": fn, "l": fl, "bad": fb, "arith": sorted({f.rule for f in orig if f.rule in ARITHMETIC}),
+                 "high": sorted({f.rule for f in orig if f.severity == "HIGH"})}
+        high = {r for r in high if r in ARITHMETIC} | {
+            f.rule for f in orig if f.severity == "HIGH" and f.rule not in ARITHMETIC}
+    high = sorted(high)
+    return {"n": n, "l": lists, "bad": bad, "conf": report["confidence"],
+            "pq": report["visual"]["page_quality"], "arith": arith, "high": high,
+            "rg7": applied, "rg7_bad": unverified, "filed": filed}
+
+
+def _numbers(report: dict) -> tuple[dict, dict, list[str]]:
+    """(counted numbers, list votes by row, what is illegible or empty) of one report."""
     nums = {k: _dash_zero(f) for k, f in report["numbers"].items() if k != "list_votes"}
     n: dict[str, int | None] = {}
     bad: list[str] = []
@@ -141,17 +161,12 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None) 
         lists[r["row"]] = f["value"] if _ok(f) else None
         if not _ok(f):
             bad.append(f"list row {r['row']} {'illegible' if not f['legible'] else 'empty'}")
-    found = evaluate_report(report, doc, cfg)  # the rules re-applied to the stored report (no D-rules)
-    arith = sorted({f.rule for f in found if f.rule in ARITHMETIC})
-    high = {f.rule for f in found if f.severity == "HIGH"}
-    if applied:  # arithmetic from the corrected numbers, everything else from the RG-2 as filed
-        high = {r for r in high if r in ARITHMETIC} | {
-            f.rule for f in evaluate_report(original, doc, cfg)
-            if f.severity == "HIGH" and f.rule not in ARITHMETIC}
-    high = sorted(high)
-    return {"n": n, "l": lists, "bad": bad, "conf": report["confidence"],
-            "pq": report["visual"]["page_quality"], "arith": arith, "high": high,
-            "rg7": applied, "rg7_bad": unverified}
+    return n, lists, bad
+
+
+def as_filed(ex: dict) -> dict:
+    """The extract judged on the RG-2 alone: no corrections, so no unverified-correction flag."""
+    return {**ex, **(ex.get("filed") or {}), "rg7": [], "rg7_bad": [], "filed": None}
 
 
 def disagreements(mine: dict, others: dict[str, dict], model: str) -> tuple[list[dict], list[str]]:
@@ -329,12 +344,14 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         f["rows"] = rows_of[f["muni"]]
         dis, note = disagreements(f["ex"], f["others"], model)
         f["why"] = reasons(f["ex"], dis, f["rows"])
+        fdis, _ = disagreements(as_filed(f["ex"]), {m: as_filed(e) for m, e in f["others"].items()}, model)
+        f["why_f"] = reasons(as_filed(f["ex"]), fdis, f["rows"])
         notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
     stations = {m: n for m, n in store.station_counts(parent).items()
                 if municipalities is None or m in municipalities}
     names = sorted({*by_muni, *unanalysed, *stations})
     nl = len(rows) if national else 0
-    overall = {"all": _acc(nl), "cl": _acc(nl)}
+    overall = {k: _acc(nl) for k in ("all", "cl", "fall", "fcl")}  # f*: as filed on the RG-2s
     counts = {"stations": 0, "counted": 0, "clean": 0, "unanalysed": 0}
     munis = []
     for name in names:
@@ -342,31 +359,36 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         # "(unknown)" in municipal scope may mix ballots: shared totals only, no list totals
         mixed = not national and name == UNKNOWN_MUNI
         mrows = rows if national else [] if mixed else rows_of.get(name, [])
-        acc = {"all": _acc(len(mrows)), "cl": _acc(len(mrows))}
+        acc = {k: _acc(len(mrows)) for k in overall}
         for f in mine:
-            for key, take in (("all", True), ("cl", not f["why"])):
+            for key, take, ex in (("all", True, f["ex"]), ("cl", not f["why"], f["ex"]),
+                                  ("fall", True, as_filed(f["ex"])), ("fcl", not f["why_f"], as_filed(f["ex"]))):
                 if take:
-                    _add(acc[key], f["ex"], mrows)
-                    _add(overall[key], f["ex"], rows if national else [])
+                    _add(acc[key], ex, mrows)
+                    _add(overall[key], ex, rows if national else [])
         row = {"m": name, "stations": stations.get(name, 0), "counted": len(mine),
                "corrected": sum(1 for f in mine if f["ex"]["rg7"]),
                "clean": sum(1 for f in mine if not f["why"]), "unanalysed": unanalysed.get(name, 0),
-               "all": _tot(acc["all"]), "cl": _tot(acc["cl"])}
+               "fclean": sum(1 for f in mine if not f["why_f"]),
+               **{k: _tot(acc[k]) for k in acc}}
         if mixed:
             row.update({"nlists": 0, "names": [], "names_note": UNKNOWN_MUNI_NOTE})
-            for key in ("all", "cl"):
+            for key in acc:
                 del row[key]["lists"], row[key]["lists_valid"]
         elif not national:
             row.update(ballot(name, len(mrows)) if mine else {"nlists": 0, "names": [], "names_note": None})
         row["excluded"] = row["counted"] - row["clean"]
+        row["fexcluded"] = row["counted"] - row["fclean"]
         for k in counts:
             counts[k] += row[k]
         munis.append(row)
-    total = {"m": "(all)", **counts, "corrected": sum(r["corrected"] for r in munis), "all": _tot(overall["all"]), "cl": _tot(overall["cl"])}
+    total = {"m": "(all)", **counts, "corrected": sum(r["corrected"] for r in munis), "fclean": sum(r["fclean"] for r in munis),
+             **{k: _tot(overall[k]) for k in overall}}
     if not national:
-        for key in ("all", "cl"):
+        for key in overall:
             del total[key]["lists"], total[key]["lists_valid"]
     total["excluded"] = total["counted"] - total["clean"]
+    total["fexcluded"] = total["counted"] - total["fclean"]
     e = store.get_election(parent)
     # top-level nlists/names/names_note describe the national ballot; in municipal scope they are
     # empty and each municipality row carries its own
@@ -376,7 +398,9 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             "corrected": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                            "rg7": f["ex"]["rg7"]} for f in forms if f["ex"]["rg7"]],
             "excluded": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
-                          "why": f["why"]} for f in forms if f["why"]]}
+                          "why": f["why"]} for f in forms if f["why"]],
+            "excluded_filed": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
+                                "why": f["why_f"]} for f in forms if f["why_f"]]}
 
 
 def _pct(x: float | None) -> str:
@@ -389,31 +413,60 @@ def _table(head: list[str], rows: list[list[str]]) -> list[str]:
     return [line(head), *map(line, rows)]
 
 
-def _list_table(names: list[str], rows: list[dict], key: str) -> list[str]:
-    body = [[r["m"], *(f"{v:,} ({_pct(v / r[key]['lists_valid'] if r[key]['lists_valid'] else None)})"
-                       for v in r[key]["lists"])] for r in rows]
+def _delta(t: dict, f: dict) -> dict:
+    """corrected - as filed, for one totals block (turnout in percentage points)."""
+    out = {k: t[k] - f[k] for k in COUNTED}
+    out["turnout"] = None if t["turnout"] is None or f["turnout"] is None else t["turnout"] - f["turnout"]
+    if "lists" in t:
+        out["lists"] = [a - b for a, b in zip(t["lists"], f["lists"])]
+        out["lists_valid"] = t["lists_valid"] - f["lists_valid"]
+    return out
+
+
+def _sgn(v: int) -> str:
+    return "." if v == 0 else f"{v:+,}"
+
+
+def _list_table(names: list[str], rows: list[dict], key: str, diff: bool = False) -> list[str]:
+    if diff:
+        body = [[r["m"], *(_sgn(v) for v in r[key]["lists"])] for r in rows]
+    else:
+        body = [[r["m"], *(f"{v:,} ({_pct(v / r[key]['lists_valid'] if r[key]['lists_valid'] else None)})"
+                           for v in r[key]["lists"])] for r in rows]
     return _table(["municipality", *names], body)
 
 
-def format_tally(t: dict, all_forms: bool = True) -> str:
-    """Plain-text report of build_tally(): totals, list votes, flagged forms."""
+def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> str:
+    """Plain-text report of build_tally(): totals, list votes, flagged forms. `view`: "corrected"
+    (RG-7 corrections counted), "filed" (the RG-2s as filed) or "diff" (corrected - as filed)."""
     key = "all" if all_forms else "cl"
+    fkey = "f" + key
+    diff = view == "diff"
     rows = [*t["munis"], t["overall"]]
+    if view == "filed":
+        key = fkey
+        rows = [{**r, "clean": r["fclean"], "excluded": r["fexcluded"]} for r in rows]
+    elif diff:
+        rows = [{**r, key: _delta(r[key], r[fkey])} for r in rows]
+    label = {"corrected": "with RG-7 corrections", "filed": "as filed on the RG-2 forms",
+             "diff": "difference (corrected - as filed; . = no change; turnout in percentage points)"}[view]
     out = [f"UNOFFICIAL - numbers read by {t['model']} from the scanned forms, not RIK results",
            f"{t['title']} ({t['parent']}): "
-           + ("all counted forms" if all_forms else "clean forms only (leave out flagged)"), ""]
+           + ("all counted forms" if all_forms else "clean forms only (leave out flagged)") + "; numbers " + label, ""]
     head = ["municipality", "stations", "counted", "clean", "flagged", "cover", "registered", "voted",
             "turnout", "in box", "invalid", "valid", "outside"]
-    body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if r["corrected"] else ""), str(r["clean"]), str(r["excluded"]),
+    pp = (lambda v: "-" if v is None else f"{v * 100:+.1f}") if diff else _pct
+    num = (lambda v: _sgn(v)) if diff else (lambda v: f"{v:,}")
+    body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if r["corrected"] and view != "filed" else ""), str(r["clean"]), str(r["excluded"]),
              _pct(r["counted"] / r["stations"] if r["stations"] else None),
-             *(f"{r[key][k]:,}" for k in ("registered", "voted")), _pct(r[key]["turnout"]),
-             *(f"{r[key][k]:,}" for k in ("ballots_in_box", "invalid", "valid", "outside_voted"))]
+             *(num(r[key][k]) for k in ("registered", "voted")), pp(r[key]["turnout"]),
+             *(num(r[key][k]) for k in ("ballots_in_box", "invalid", "valid", "outside_voted"))]
             for r in rows]
     out += _table(head, body)
     if t["scope"] == "national":
         if t["nlists"]:
             out += ["", "votes per list (share of valid votes)"]
-            out += _list_table(t["names"], rows, key)
+            out += _list_table(t["names"], rows, key, diff)
         if t["names_note"]:
             out += ["", "warning: " + t["names_note"]]
     else:
@@ -422,21 +475,23 @@ def format_tally(t: dict, all_forms: bool = True) -> str:
         for r in t["munis"]:
             if r["nlists"]:
                 out += ["", f"{r['m']}: votes per list (share of valid votes)"]
-                out += _list_table(r["names"], [r], key)
+                out += _list_table(r["names"], [{**r, key: _delta(r[key], r[fkey])} if diff else r], key, diff)
                 if r["names_note"]:
                     out += ["warning: " + r["names_note"]]
             elif r["names_note"]:
                 out += ["", f"{r['m']}: warning: {r['names_note']}"]
     pending = t["overall"]["unanalysed"]
-    out += ["", f"{t['overall']['counted']} form(s) counted, {t['overall']['clean']} clean, "
-            f"{t['overall']['excluded']} flagged, {pending} not analysed by {t['model']}"]
-    if t["corrected"]:
+    o = rows[-1] if view == "filed" else t["overall"]
+    out += ["", f"{o['counted']} form(s) counted, {o['clean']} clean, "
+            f"{o['excluded']} flagged, {pending} not analysed by {t['model']}"]
+    if t["corrected"] and view != "filed":
         out += ["", "* corrected by RG-7 decisions (corrected numbers counted):"]
         out += [f"  {c['m']} BM {c['no']}: " + "; ".join(f"RG-7 {d['d']}: {', '.join(d['ch'])}" for d in c["rg7"])
                 for c in t["corrected"]]
     if t["notes"]:
         out += ["", "notes (not flagged):"] + [f"  {n['m']} BM {n['no']}: {n['note']}" for n in t["notes"]]
-    if t["excluded"]:
+    flagged = t["excluded_filed"] if view == "filed" else t["excluded"]
+    if flagged:
         out += ["", "flagged forms (reason):"]
-        out += [f"  {e['m']} BM {e['no']}: " + "; ".join(e["why"]) for e in t["excluded"]]
+        out += [f"  {e['m']} BM {e['no']}: " + "; ".join(e["why"]) for e in flagged]
     return "\n".join(out)
