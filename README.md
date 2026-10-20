@@ -179,13 +179,18 @@ Only that case folder is made public. The app-managed **RG2 Watch** parent remai
 
        uv run rg2watch drive-root --config rg2watch.toml
 
-   This creates one private **RG2 Watch** root per OAuth token and verified Google account. Every
-   election database configured with that resolved token path shares it; there are no per-election
-   parent folders. The token-adjacent `drive-token.json.root.json` contains only the preallocated root
-   ID, creation phase and account permission ID, never OAuth credentials. Do not share the root.
-   `watch` and `serve` do not create it implicitly. Reauthorizing the same token path as a different
-   Google account is refused before Drive file operations; recover the original account or investigate
-   the state manually rather than allowing an automatic replacement root.
+   This creates one private **RG2 Watch** root per OAuth token and verified Google account. Root
+   creation omits an explicit parent so Drive places the app-owned folder directly in My Drive; it
+   does not inspect Google's built-in root item and needs no scope or config change beyond the existing
+   `drive.file` grant. The app then reads that folder by its preallocated ID and records its observed
+   sole parent for later verification. Every election database configured with that resolved token
+   path shares it; there are no per-election parent folders. The token-adjacent
+   `drive-token.json.root.json` contains only the preallocated root ID, creation phase, observed parent
+   ID and account permission ID, never OAuth credentials. An interrupted setup reuses that ID and
+   reconciles the same app-created folder rather than searching by name or creating another root. Do
+   not share the root. `watch` and `serve` do not create it implicitly. Reauthorizing the same token
+   path as a different Google account is refused before Drive file operations; recover the original
+   account or investigate the state manually rather than allowing an automatic replacement root.
 
 A new publication requires the exact URL's latest verdict to be `escalate` and its PDF already cached
 under `<db dir>/pdfs/`. Manual review alone does not cache a PDF; analysis does. Publication never
@@ -207,8 +212,10 @@ never create public Drive files.
 The previously attempted folder must be recovered manually; rg2watch never moves, adopts, deletes or
 replaces it. Treat the report that it is empty and currently in My Drive as unverified until checking:
 
-1. Run `uv run rg2watch drive-root --config rg2watch.toml`, open its printed URL, and confirm **RG2
-   Watch** is restricted.
+1. Run only `uv run rg2watch drive-root --config rg2watch.toml`, open its printed URL, and confirm
+   **RG2 Watch** is directly under My Drive and restricted. If creation, identity, location or privacy
+   verification fails, stop without moving or sharing anything. This retry does not move the existing
+   pending case folder or publish/send a Viber message.
 2. In the Google Drive UI, open the existing `RG2 предмет — Књажевац БМ 61` folder and inspect it for
    **any** files. An app-visible listing is not proof of emptiness. Stop and investigate if it is not
    empty.
