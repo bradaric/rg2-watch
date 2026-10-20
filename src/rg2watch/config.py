@@ -33,16 +33,16 @@ class Config:
     medium_digest_s: int = 600
     request_timeout_s: float = 20.0
     max_pdf_bytes: int = 50_000_000
-    model: str = "claude-opus-5-5"
+    model: str = "claude-haiku-5-5"
     effort: str = "high"
     fallbacks: bool = True
     analysis_enabled: bool = False  # opt-in: `watch --analyze` also enables it
-    max_spend_usd: float = 20.0  # per election (parent)
+    max_spend_usd: float = 60.0  # per election (parent)
     ollama_url: str = "http://localhost:11434"  # used when model = "ollama:<name>"
     ollama_num_ctx: int = 65536
     ollama_timeout_s: float = 900.0
-    price_in_per_mtok: float = 4.0
-    price_out_per_mtok: float = 20.0
+    price_in_per_mtok: float = 0.10  # Haiku 5.5 list price, <=100k-token prompts, as of 20/10/2026
+    price_out_per_mtok: float = 0.50
     analysis_workers: int = 4
     browse_interval_s: int = 120  # rebuild the browse page this often in `watch`; 0 = off
     serve_port: int = 8770  # local web server of `watch` (127.0.0.1); 0 = off

@@ -9,6 +9,7 @@ from rg2watch.analyze import SCHEMA, AnalysisError, AnalysisRefused, analyze_doc
 from rg2watch.config import Config
 from rg2watch.render import Tile
 
+OLD_PRICES = dict(price_in_per_mtok=4.0, price_out_per_mtok=20.0)  # pre-calibration prices the cost asserts use
 REPORT = {k: None for k in SCHEMA["required"]} | {"numbers": [], "yesno": []}
 
 
@@ -61,7 +62,7 @@ def test_request_shape():
     c = FakeClient(_resp())
     res = analyze_document(TILES, c, Config())
     kw = c.calls[0]
-    assert kw["model"] == "claude-opus-5-5"
+    assert kw["model"] == "claude-haiku-5-5"
     assert kw["max_tokens"] == 16000
     assert kw["output_config"]["effort"] == "high"
     assert kw["output_config"]["format"] == {"type": "json_schema", "schema": SCHEMA}
@@ -75,7 +76,7 @@ def test_request_shape():
     assert src["type"] == "base64" and src["media_type"] == "image/jpeg"
     assert base64.b64decode(src["data"]) == TILES[0].jpeg
     assert content[-1]["text"] == analyze.PROMPT
-    assert res.model == "claude-opus-5-5" and res.stop_reason == "end_turn"
+    assert res.model == "claude-haiku-5-5" and res.stop_reason == "end_turn"
 
 
 def test_fallbacks_disabled_omits_params():
@@ -86,7 +87,7 @@ def test_fallbacks_disabled_omits_params():
 
 def test_cost_computed():
     c = FakeClient(_resp(tin=1_000_000, tout=100_000))
-    res = analyze_document(TILES, c, Config())
+    res = analyze_document(TILES, c, Config(**OLD_PRICES))
     assert res.cost_usd == pytest.approx(6.0)
     assert (res.input_tokens, res.output_tokens) == (1_000_000, 100_000)
 
@@ -235,7 +236,7 @@ def test_tokens_carried_on_each_exception_type():
     ]
     for exc_type, r in cases:
         with pytest.raises(exc_type) as ei:
-            analyze_document(TILES, FakeClient(r), Config())
+            analyze_document(TILES, FakeClient(r), Config(**OLD_PRICES))
         assert (ei.value.input_tokens, ei.value.output_tokens) == (10, 5)
         assert ei.value.cost_usd == pytest.approx((10 * 4 + 5 * 20) / 1e6)
 
@@ -266,7 +267,7 @@ def test_iterations_summed_and_model_recorded():
         SimpleNamespace(input_tokens=0, output_tokens=100_000, cache_read_input_tokens=1_000_000,
                         cache_creation_input_tokens=0),
     ]
-    res = analyze_document(TILES, FakeClient(r), Config())
+    res = analyze_document(TILES, FakeClient(r), Config(**OLD_PRICES))
     assert (res.input_tokens, res.output_tokens) == (2_000_000, 100_000)
     assert res.cost_usd == pytest.approx(4.0 + 0.2 + 2.0)
     assert res.model == "fallback-model"
@@ -276,7 +277,7 @@ def test_cache_pricing():
     r = _resp(tin=0, tout=0)
     r.usage.cache_read_input_tokens = 1_000_000
     r.usage.cache_creation_input_tokens = 1_000_000
-    res = analyze_document(TILES, FakeClient(r), Config())
+    res = analyze_document(TILES, FakeClient(r), Config(**OLD_PRICES))
     assert res.cost_usd == pytest.approx(0.2 + 5.0)  # cache reads at 5% of input
 
 
@@ -284,7 +285,7 @@ def test_retry_api_error_carries_first_call_cost():
     err = RuntimeError("overloaded")
     c = FakeClient(_resp(stop="max_tokens", tin=1_000_000, tout=0), err)
     with pytest.raises(RuntimeError) as info:
-        analyze_document(TILES, c, Config())
+        analyze_document(TILES, c, Config(**OLD_PRICES))
     assert info.value is err and info.value.cost_usd == pytest.approx(4.0)
     assert info.value.input_tokens == 1_000_000
 

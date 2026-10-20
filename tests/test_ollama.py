@@ -96,7 +96,7 @@ def test_model_flag_overrides_config():
     args = _parser().parse_args(["analyze", "x.pdf", "--model", "ollama:foo"])
     assert _config(args).model == "ollama:foo"
     args = _parser().parse_args(["analyze", "x.pdf"])
-    assert _config(args).model == Config().model
+    assert _config(args).model == "claude-opus-5-5"  # pinned pre-calibration default, see conftest
     for cmd in (["watch", "http://x"], ["eval", "--labels", "l", "--pdf-dir", "p"]):
         assert _parser().parse_args([*cmd, "--model", "m"]).model == "m"
 

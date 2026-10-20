@@ -10,6 +10,21 @@ def _no_real_anthropic(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pre_calibration_cli_defaults(monkeypatch):
+    """CLI runs without --config keep the pre-calibration model, prices and cap that the cost tests assert."""
+    from rg2watch import cli
+    from rg2watch.config import Config, load_config
+
+    def load(path):
+        if path is not None:
+            return load_config(path)
+        return Config(model="claude-opus-5-5", price_in_per_mtok=4.0, price_out_per_mtok=20.0,
+                      max_spend_usd=20.0)
+
+    monkeypatch.setattr(cli, "load_config", load)
+
+
+@pytest.fixture(autouse=True)
 def _restore_root_logging():
     """cli.main() reconfigures root logging onto the test's captured stderr; undo it."""
     import logging

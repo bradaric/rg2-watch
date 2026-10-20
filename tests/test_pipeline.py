@@ -72,6 +72,11 @@ class Clock:
         return self.now
 
 
+# pre-calibration model, prices and cap: the cost and cap tests below assert this arithmetic
+PRE_CALIBRATION = dict(model="claude-opus-5-5", price_in_per_mtok=4.0, price_out_per_mtok=20.0,
+                       max_spend_usd=20.0)
+
+
 class Env:
     def __init__(self, tmp_path, reply, pdf_body=None, **cfg_kw):
         pdf_dir = tmp_path / "pdfs"
@@ -87,7 +92,7 @@ class Env:
         self.store.upsert_election(ELECTION)
         self.store.enable_analysis(P)  # everything published in a test is seen after enabling
         self.out = io.StringIO()
-        self.cfg = Config(**cfg_kw)
+        self.cfg = Config(**(PRE_CALIBRATION | cfg_kw))
         self.notifier = Notifier(self.cfg, None, out=self.out)
         self.ai = FakeAnthropic(reply)
         self.clock = Clock()
@@ -483,8 +488,8 @@ def test_watch_analysis_enabled_by_config_or_backlog_flag(tmp_path, monkeypatch)
     assert [m.kw for m in made] == [{"backlog": False}, {"backlog": True}]
 
 
-def test_default_cap_is_20_and_analysis_off():
-    assert Config().max_spend_usd == 20.0 and Config().analysis_enabled is False
+def test_default_cap_is_60_and_analysis_off():
+    assert Config().max_spend_usd == 60.0 and Config().analysis_enabled is False
 
 
 def test_start_logs_cap_spend_queue_and_backlog(tmp_path, caplog):

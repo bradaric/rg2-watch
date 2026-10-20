@@ -193,7 +193,7 @@ Analysis needs Anthropic credentials (`ANTHROPIC_API_KEY` or an ant profile). Wi
 `watch --analyze` logs one warning and only watches; `watch --once` never analyses. Forms published
 while analysis is off (after it was first enabled) stay queued and are analysed by the next run
 with analysis on. Spend is recorded per call (`price_in_per_mtok`/`price_out_per_mtok`, cache reads
-at 5% of the input price) and capped per election: `max_spend_usd` (default 20) is the sum of all
+at 5% of the input price) and capped per election: `max_spend_usd` (default 60) is the sum of all
 analyses of that election (`parent`) in this DB, so each election has its own budget; `eval` runs
 count under the election `eval` and `analyze` under `adhoc`. When the cap is reached analysis
 pauses with one "[rg2-watch] spend cap reached" alert while the watcher keeps running. With several

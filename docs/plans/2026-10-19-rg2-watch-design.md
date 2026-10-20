@@ -121,6 +121,7 @@ Modules:
 ### 4.3 Vision analysis
 - One Claude request per document with the 4 crops (+ optionally downscaled full pages for context), structured output via `output_config.format` JSON schema.
 - Model: `claude-opus-5-5` (skill default), configurable. **[call]** Rough cost: ~4 crops x ~1.6k tokens + prompt => ~8k input tokens/form => ~$0.03-0.05/form; ~8,300 forms ~ $300-400 for a parliamentary election. Cheaper model is a config switch after calibration (user decision).
+- Decision 20/10/2026: `claude-haiku-5-5` is the default after calibration (same findings as Sonnet 5.5 on 72 forms at 1/12 of the cost); `max_spend_usd` default 60.0; prices 0.10/0.50 per MTok.
 - Concurrency: 8 parallel requests, retries via SDK. **[call]**
 - Second opinion: if any HIGH visual finding or any arithmetic failure, run one more independent analysis (same model, higher effort) on just the relevant crop; finding records whether both agree. Disagreement => severity stays, summary says "uncertain read".
 - Audit mode may use the Message Batches API (50% cost); watch mode uses realtime.

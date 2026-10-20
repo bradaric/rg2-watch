@@ -46,8 +46,9 @@ max_pdf_bytes = 50000000
 # --- Claude vision analysis of RG-2 forms (needs ANTHROPIC_API_KEY or an ant profile) ---
 # Off by default: it calls a paid API. `watch --analyze` turns it on for one run.
 analysis_enabled = false
-# Model and effort for the forensic check
-model = "claude-opus-5-5"
+# Model and effort for the forensic check (Haiku 5.5 default after calibration, 20/10/2026:
+# same findings as Sonnet 5.5 on 72 RG-2s at 1/12 of the cost)
+model = "claude-haiku-5-5"
 effort = "high"
 # Local model instead: model = "ollama:qwen3.8:27b-64k" (free, no API key; or `--model` on
 # eval/analyze/watch). Settings for that backend:
@@ -58,10 +59,12 @@ ollama_timeout_s = 900
 fallbacks = true
 # Analysis pauses (one "[rg2-watch] spend cap reached" alert) once the recorded spend of this
 # election (parent) reaches this (USD); eval and ad-hoc `analyze` spend are counted separately
-max_spend_usd = 20.0
-# Prices used for spend tracking (USD per million tokens)
-price_in_per_mtok = 4.0
-price_out_per_mtok = 20.0
+max_spend_usd = 60.0  # a parliamentary election (~8,300 forms) is estimated at ~$40 on Haiku
+# Prices used for spend tracking (USD per million tokens); must match the model: Sonnet 5.5 2/10,
+# Opus 5.5 4/20, Haiku 5.5 0.10/0.50, local ollama 0/0. Source: Anthropic list price as of
+# 20/10/2026. Haiku's price rises above 100k-token prompts (ours are ~20k).
+price_in_per_mtok = 0.10
+price_out_per_mtok = 0.50
 # Background analysis worker threads
 analysis_workers = 4
 # Seconds between rebuilds of the local browse page (index.html next to the DB) while watching; 0 = off

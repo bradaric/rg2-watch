@@ -15,10 +15,10 @@ if you put it there); commands that never call Claude do not need it.
       `curl -d "rg2-watch test" https://ntfy.sh/<topic>` - the phone must buzz.
 - [ ] Config: `cp rg2watch.example.toml rg2watch.toml` and set:
 
-      model = "claude-sonnet-5-5"     # or claude-opus-5-5 / ollama:<name>
-      price_in_per_mtok = 2.0          # must match the model: Sonnet 2/10, Opus 4/20, local 0/0
-      price_out_per_mtok = 10.0
-      max_spend_usd = 600.0            # per election; the default 20 stops a big election early
+      model = "claude-haiku-5-5"       # or claude-sonnet-5-5 / claude-opus-5-5 / ollama:<name>
+      price_in_per_mtok = 0.10         # must match the model: Haiku 0.10/0.50, Sonnet 2/10, Opus 4/20, local 0/0
+      price_out_per_mtok = 0.50
+      max_spend_usd = 60.0             # per election; a parliamentary election is ~$40 on Haiku
       watchlist = []                   # municipalities/stations to check first (priority, not a filter)
 
 - [ ] Rehearsal against the fake RIK (no load on the real site, no API cost without `--analyze`):
@@ -109,6 +109,10 @@ parliamentary one.
 
 | Model | Per form | Local election | Parliamentary | Keeps up? |
 |---|---|---|---|---|
+| Haiku 5.5 (default) | ~$0.005 (measured) | ~$1.50-2.50 | ~$40 | yes |
 | Sonnet 5.5 | ~$0.06 (measured) | ~$15-30 | ~$530 | yes (4 workers in parallel) |
 | Opus 5.5 | ~$0.13 (5-form pilot) | ~$30-60 | ~$1,100 | yes |
 | Local (Qwen) | $0, ~78 s | 5-10 h | ~1 week | local elections only |
+
+Calibration 20/10/2026: Haiku 5.5 matched Sonnet 5.5 on 72 RG-2s; Bonsai (local) recommended as a
+free second opinion afterwards (caught the small rotated scan both missed).

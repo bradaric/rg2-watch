@@ -88,7 +88,7 @@ def test_run_eval_cached_never_calls_api(tmp_path):
 
 def test_run_eval_stops_at_spend_cap(tmp_path):
     pdfs, _, entries, ai = env(tmp_path, resp(overwritten()))
-    out = run_eval([entries[0], entries[3]], pdfs, Store(":memory:"), ai, Config(max_spend_usd=0.001),
+    out = run_eval([entries[0], entries[3]], pdfs, Store(":memory:"), ai, Config(max_spend_usd=0.001, price_in_per_mtok=4.0, price_out_per_mtok=20.0),
                    cached=False, out=io.StringIO())
     assert ai.calls == 1 and out["errors"]["b.pdf"] == "spend cap reached"
 
@@ -166,7 +166,7 @@ def test_estimate_uses_planned_tiles_and_10k_output(tmp_path):
     a3[0].save(pdfs / "a3.pdf", "PDF", save_all=True, append_images=a3[1:], resolution=200)
     make_pdf(pdfs / "a4.pdf")  # 1 page -> 1 tile
     forms, tiles, usd = estimate_cost([{"file": "a3.pdf"}, {"file": "a4.pdf"}, {"file": "x.pdf"}],
-                                      pdfs, Config())
+                                      pdfs, Config(price_in_per_mtok=4.0, price_out_per_mtok=20.0))
     assert (forms, tiles) == (2, 5)
     assert usd == pytest.approx((5 * 5000 * 4 + 2 * 10_000 * 20) / 1e6)
 
