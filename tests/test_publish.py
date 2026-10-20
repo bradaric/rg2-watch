@@ -5,6 +5,7 @@ import logging
 import multiprocessing
 import os
 import signal
+import sqlite3
 import subprocess
 import threading
 import time
@@ -19,6 +20,7 @@ from rg2watch.config import Config
 from rg2watch.store import Store
 from rg2watch.server import start_server
 from rg2watch.publication_service import PublicationJobs
+from rg2watch import cli
 from test_browse import BASE, P, add, doc
 
 
@@ -745,6 +747,110 @@ def test_pending_publication_status_exposes_frozen_summary_for_explicit_retry(tm
         }
     finally:
         jobs.close()
+
+
+def published_knjazevac_case(tmp_path):
+    store, cases, _ = handoff(tmp_path)
+    store._write("UPDATE documents SET municipality='Књажевац',station_no='61' WHERE url=?",
+                 (URL,))
+    row = cases.claim(URL, "Дужи замрзнути јавни опис", VIBER_REASON)
+    store.save_drive_ids(URL, "existing-folder", "existing-pdf", "existing-text")
+    case = json.loads(row["case_json"])
+    final = "https://drive.google.com/drive/folders/existing-folder"
+    store.finalize_publication(URL, final, cases.legacy_viber_text(case, row["summary"], final))
+    store.close()
+    return tmp_path / "watch.sqlite"
+
+
+def test_revise_viber_cli_previews_read_only_then_updates_only_saved_copy(tmp_path, capsys):
+    db = published_knjazevac_case(tmp_path)
+    before_bytes = db.read_bytes()
+    con = sqlite3.connect(db); con.row_factory = sqlite3.Row
+    before = dict(con.execute("SELECT * FROM publications WHERE url=?", (URL,)).fetchone())
+    con.close()
+
+    args = ["revise-viber", "--db", str(db), "--url", URL, "--reason", VIBER_REASON]
+    assert cli.main(args) == 0
+    preview = capsys.readouterr().out
+    assert "Књажевац, БМ 61" in preview
+    assert before["viber_text"] in preview
+    assert "would replace only the saved Viber text" in preview
+    assert db.read_bytes() == before_bytes
+
+    assert cli.main([*args, "--confirm"]) == 0
+    confirmed = capsys.readouterr().out
+    assert "Updated only the saved Viber text" in confirmed
+    con = sqlite3.connect(db); con.row_factory = sqlite3.Row
+    after = dict(con.execute("SELECT * FROM publications WHERE url=?", (URL,)).fetchone())
+    con.close()
+    expected = CaseHandoff.viber_text(json.loads(before["case_json"]), VIBER_REASON,
+                                      before["final_url"])
+    assert after["viber_text"] == expected
+    for key, value in before.items():
+        if key not in {"viber_text", "updated_at"}:
+            assert after[key] == value
+
+    updated_at = after["updated_at"]
+    assert cli.main([*args, "--confirm"]) == 0
+    assert "already has the approved saved Viber text" in capsys.readouterr().out
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT updated_at FROM publications WHERE url=?", (URL,)).fetchone()[0] == updated_at
+    con.close()
+
+
+@pytest.mark.parametrize("mutation", [
+    "UPDATE publications SET phase='uploaded' WHERE url=?",
+    "UPDATE publications SET folder_id='wrong' WHERE url=?",
+    "UPDATE publications SET viber_text='other edited text' WHERE url=?",
+    "UPDATE publications SET case_json=replace(case_json, 'Књажевац', 'Друга') WHERE url=?",
+])
+def test_revise_viber_confirmation_fails_closed_on_changed_target(tmp_path, capsys, mutation):
+    db = published_knjazevac_case(tmp_path)
+    con = sqlite3.connect(db); con.execute(mutation, (URL,)); con.commit(); con.close()
+    assert cli.main(["revise-viber", "--db", str(db), "--url", URL,
+                     "--reason", VIBER_REASON, "--confirm"]) == 1
+    assert "not changed" in capsys.readouterr().err
+
+
+def test_revise_viber_holds_write_lock_across_guard_and_update(tmp_path, monkeypatch):
+    import rg2watch.case_handoff as handoff_module
+
+    db = published_knjazevac_case(tmp_path)
+    checked = threading.Event(); release = threading.Event()
+    original = handoff_module.viber_revision
+
+    def blocked(row, url, reason):
+        result = original(row, url, reason)
+        checked.set()
+        assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(handoff_module, "viber_revision", blocked)
+    result = []
+    worker = threading.Thread(target=lambda: result.append(
+        Store.revise_viber_text(db, URL, VIBER_REASON)))
+    worker.start(); assert checked.wait(5)
+    second = sqlite3.connect(db, timeout=.05)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        second.execute("UPDATE publications SET summary='race' WHERE url=?", (URL,))
+    second.close(); release.set(); worker.join(5)
+    assert result[0]["changed"] is True
+
+
+def test_revise_viber_rejects_missing_db_wrong_url_and_wrong_reason_without_creating_files(
+        tmp_path, capsys):
+    missing = tmp_path / "missing.sqlite"
+    base = ["revise-viber", "--db", str(missing), "--url", URL,
+            "--reason", VIBER_REASON, "--confirm"]
+    assert cli.main(base) == 1
+    assert not missing.exists()
+    capsys.readouterr()
+
+    db = published_knjazevac_case(tmp_path)
+    assert cli.main(["revise-viber", "--db", str(db), "--url", URL + "?wrong",
+                     "--reason", VIBER_REASON, "--confirm"]) == 1
+    assert cli.main(["revise-viber", "--db", str(db), "--url", URL,
+                     "--reason", "Други разлог.", "--confirm"]) == 1
 
 
 def _hold_publish_lock(db, url, ready):

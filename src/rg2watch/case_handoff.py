@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import tempfile
 import unicodedata
@@ -11,6 +12,8 @@ from .store import Store
 
 SUMMARY_MAX = 4096
 VIBER_REASON_MAX = 500
+KNJAZEVAC_61_REASON = ("Потребна је провера броја гласача ван бирачког места (18 од 58) "
+                       "и броја гласова за једну листу (53 од 58).")
 
 
 class CaseError(ValueError):
@@ -31,6 +34,44 @@ def normalize_viber_reason(reason: str) -> str:
     if "http://" in lowered or "https://" in lowered or "www." in lowered:
         raise CaseError("short Viber reason must not contain a URL")
     return normalized
+
+
+def viber_revision(row, url: str, reason: str) -> dict:
+    """Validate the one explicitly approved historical correction from a SQLite row."""
+    required = {"url", "phase", "case_json", "summary", "summary_sha256",
+                "staged_pdf_path", "pdf_sha256", "folder_id", "pdf_file_id",
+                "text_file_id", "final_url", "viber_text", "published_at"}
+    if not required <= set(row.keys()):
+        raise CaseError("unsupported publication database")
+    if reason != KNJAZEVAC_61_REASON:
+        raise CaseError("reason is not the exact approved Књажевац 61 sentence")
+    if row["url"] != url or row["phase"] != "published":
+        raise CaseError("target is not the selected published case")
+    try:
+        case = json.loads(row["case_json"])
+    except (TypeError, ValueError) as exc:
+        raise CaseError("frozen case metadata is invalid") from exc
+    if not isinstance(case, dict) or case.get("municipality") != "Књажевац" \
+            or str(case.get("station")) != "61" or case.get("url") != url:
+        raise CaseError("target is not Књажевац БМ 61")
+    frozen = (row["summary"], row["summary_sha256"], row["staged_pdf_path"],
+              row["pdf_sha256"], row["folder_id"], row["pdf_file_id"],
+              row["text_file_id"], row["published_at"], case.get("rik_url"))
+    if not all(isinstance(value, str) and value for value in frozen):
+        raise CaseError("frozen publication metadata is incomplete")
+    if hashlib.sha256(row["summary"].encode("utf-8")).hexdigest() != row["summary_sha256"]:
+        raise CaseError("frozen summary metadata does not match")
+    if len(row["pdf_sha256"]) != 64 or any(c not in "0123456789abcdef" for c in row["pdf_sha256"]):
+        raise CaseError("frozen PDF metadata is invalid")
+    final = "https://drive.google.com/drive/folders/" + row["folder_id"]
+    if row["final_url"] != final:
+        raise CaseError("saved case-folder URL does not match the frozen folder")
+    old = CaseHandoff.legacy_viber_text(case, row["summary"], final)
+    proposed = CaseHandoff.viber_text(case, reason, final)
+    if row["viber_text"] not in (old, proposed):
+        raise CaseError("saved Viber text is neither the original nor the approved correction")
+    return {"case": case, "old": row["viber_text"], "proposed": proposed,
+            "changed": row["viber_text"] != proposed}
 
 
 def manual_template(case: dict) -> str:
