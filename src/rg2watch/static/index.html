@@ -438,7 +438,7 @@ function renderStatus() {
     if (rik) lk.append(link("RIK", rik));
     if (hit) {
       const r = hit[0];
-      const b = mk("button", "show", "chip"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); lk.append(b);
+      const b = mk("button", "show", "chip"); b.onclick = () => showForm(r.id, r.muni + " BM " + r.no); lk.append(b);
     }
     tr.append(lk);
     t.append(tr);

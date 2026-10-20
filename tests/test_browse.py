@@ -580,6 +580,7 @@ def test_alert_links_are_built_from_url_in_status_and_data():
     html = (STATIC / "index.html").read_text()
     assert "alertForm(x[7])" in html and 'link("PDF", loc)' in html and "showForm(r.id" in html
     assert "v ? v.pdf : x[8]" in html and "v ? v.rik : x[9]" in html
+    assert 'showForm(r.id, r.muni + " BM " + r.no)' in html
 
 
 def test_browse_leaves_a_live_watchers_status_alone(tmp_path):
