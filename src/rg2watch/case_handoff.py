@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import tempfile
 import unicodedata
 from pathlib import Path
@@ -14,6 +15,14 @@ SUMMARY_MAX = 4096
 VIBER_REASON_MAX = 500
 KNJAZEVAC_61_REASON = ("Потребна је провера броја гласача ван бирачког места (18 од 58) "
                        "и броја гласова за једну листу (53 од 58).")
+_URI_SCHEME = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z][A-Za-z0-9+.-]{0,31}):\S+")
+_BARE_DOMAIN = re.compile(
+    r"(?<![A-Za-z0-9-])"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"(?:[A-Za-z](?:[A-Za-z0-9-]{0,60}[A-Za-z0-9]))"
+    r"(?::\d{1,5})?(?:[/#?]\S*)?",
+    re.IGNORECASE,
+)
 
 
 class CaseError(ValueError):
@@ -30,8 +39,7 @@ def normalize_viber_reason(reason: str) -> str:
         raise CaseError("short Viber reason must not be empty")
     if len(normalized) > VIBER_REASON_MAX:
         raise CaseError(f"short Viber reason is longer than {VIBER_REASON_MAX} characters")
-    lowered = normalized.casefold()
-    if "http://" in lowered or "https://" in lowered or "www." in lowered:
+    if _URI_SCHEME.search(normalized) or _BARE_DOMAIN.search(normalized):
         raise CaseError("short Viber reason must not contain a URL")
     return normalized
 

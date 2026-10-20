@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import logging
@@ -505,6 +506,20 @@ def test_changed_retry_and_mutated_stage_fail_without_sharing(tmp_path):
     with pytest.raises(CaseError, match="frozen"):
         make_publisher(cases, drive, tmp_path).publish(URL, "Први опис", VIBER_REASON)
     assert not drive.public
+
+
+def test_changed_reason_retry_fails_before_drive_mutation(tmp_path):
+    _, cases = setup_case(tmp_path)
+    drive = FakeDrive("folder")
+    publisher = make_publisher(cases, drive, tmp_path)
+    with pytest.raises(SimulatedCrash):
+        publisher.publish(URL, "Јавни опис", VIBER_REASON)
+    before = (list(drive.steps), copy.deepcopy(drive.files), drive.share_calls)
+
+    with pytest.raises(CaseError, match="frozen"):
+        publisher.publish(URL, "Јавни опис", "Промењени разлог")
+
+    assert (drive.steps, drive.files, drive.share_calls) == before
 
 
 def test_ok_before_share_blocks_but_ok_after_existing_public_is_historical(tmp_path):

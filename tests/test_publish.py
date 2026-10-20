@@ -79,6 +79,20 @@ def test_existing_publications_migrate_with_nullable_viber_reason(tmp_path):
                 "staged_pdf_path,pdf_sha256,case_json,folder_id,pdf_file_id,text_file_id,"
                 "drive_account_id,legacy_parent_recovery,final_url,viber_text,phase,created_at,"
                 "updated_at,published_at FROM publications_new_schema")
+    legacy_pending_url = URL + "?legacy-pending"
+    con.execute("INSERT INTO documents(parent,municipality,station_no,station_name,station_key,"
+                "doc_type,label,url,active) SELECT parent,municipality,station_no,station_name,"
+                "station_key,doc_type,label,?,active FROM documents WHERE url=?",
+                (legacy_pending_url, URL))
+    pending_case = json.loads(publication["case_json"])
+    pending_case["url"] = legacy_pending_url
+    con.execute("INSERT INTO publications(url,document_id,parent,summary,summary_sha256,"
+                "staged_pdf_path,pdf_sha256,case_json,folder_id,pdf_file_id,text_file_id,"
+                "drive_account_id,legacy_parent_recovery,final_url,viber_text,phase,created_at,"
+                "updated_at,published_at) SELECT ?, (SELECT id FROM documents WHERE url=?),parent,"
+                "summary,summary_sha256,staged_pdf_path,pdf_sha256,?,NULL,NULL,NULL,NULL,0,NULL,NULL,"
+                "'allocated',created_at,updated_at,NULL FROM publications WHERE url=?",
+                (legacy_pending_url, legacy_pending_url, json.dumps(pending_case), URL))
     con.execute("DROP TABLE publications_new_schema")
     con.commit(); con.close()
 
@@ -87,6 +101,9 @@ def test_existing_publications_migrate_with_nullable_viber_reason(tmp_path):
     assert "viber_reason" in row.keys()
     assert row["viber_reason"] is None
     assert row["phase"] == "published" and row["viber_text"] == "Стара порука"
+    pending = migrated.get_publication(legacy_pending_url)
+    assert pending["viber_reason"] is None
+    assert pending["phase"] == "allocated" and pending["final_url"] is None
 
 
 def test_short_reason_is_normalized_frozen_and_validated_before_staging(tmp_path):
@@ -100,11 +117,15 @@ def test_short_reason_is_normalized_frozen_and_validated_before_staging(tmp_path
     other = tmp_path / "other"
     other.mkdir()
     _, fresh, _ = handoff(other)
-    for reason in ("", "x" * 501, "линк https://example.test", "контрола\x00"):
+    for reason in ("", "x" * 501, "линк https://example.test", "ftp://example.test/file",
+                   "пишите mailto:test@example.test", "посетите example.rs/path", "контрола\x00"):
         with pytest.raises(CaseError):
             fresh.claim(URL, "Опис", reason)
         assert fresh.store.get_publication(URL) is None
         assert not (other / ".rg2watch-publications").exists()
+
+    accepted = fresh.claim(URL, "Опис", "Однос 18.58 захтева проверу.")
+    assert accepted["viber_reason"] == "Однос 18.58 захтева проверу."
 
 
 def test_concise_and_legacy_viber_layouts_are_distinct(tmp_path):
@@ -393,6 +414,38 @@ def test_case_http_routes_are_explicit_strict_and_same_origin(tmp_path):
         srv.shutdown(); srv.server_close()
 
 
+def test_case_http_transports_legacy_and_new_frozen_pending_retries(tmp_path):
+    class PendingAPI:
+        def __init__(self):
+            self.calls = []
+        def publication(self, url):
+            out = {"status": "uploaded", "summary": "Замрзнути опис", "retryable": True}
+            if url.endswith("new"):
+                out["viber_reason"] = VIBER_REASON
+            return out
+        def submit_publish(self, url, summary, viber_reason, confirm):
+            self.calls.append((url, summary, viber_reason, confirm))
+            return "retry-job"
+
+    api = PendingAPI()
+    (tmp_path / "index.html").write_text("ok")
+    srv = start_server(tmp_path, tmp_path, 0, case_api=api)
+    try:
+        legacy = URL + "/legacy"
+        new = URL + "/new"
+        assert case_request(srv, "POST", "/case/publish",
+                            {"url": legacy, "summary": "Замрзнути опис", "confirm": True}) == (
+                                202, {"job_id": "retry-job"})
+        assert case_request(srv, "POST", "/case/publish",
+                            {"url": new, "summary": "Замрзнути опис",
+                             "viber_reason": VIBER_REASON, "confirm": True}) == (
+                                202, {"job_id": "retry-job"})
+        assert api.calls == [(legacy, "Замрзнути опис", None, True),
+                             (new, "Замрзнути опис", VIBER_REASON, True)]
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
 @pytest.mark.parametrize("method,path,body,headers,status", [
     ("POST", "/case/prepare", {"url": URL, "extra": 1}, None, 400),
     ("POST", "/case/prepare", {"url": 7}, None, 400),
@@ -522,15 +575,18 @@ let HTTP = true;
 function mk(tag, text, cls) { const e = new El(tag); if (text != null) e.textContent = text; e.className = cls || ""; return e; }
 function link(text, href) { const e = mk("a", text); e.href = href; return e; }
 function rvOf(v) { return v.rv || {v: "escalate"}; }
-const publications = new Map(), jobs = new Map();
+const publications = new Map(), jobs = new Map(), publishRequests = [];
 let prepareId = "prepare", publishId = "publish";
-function caseFetch(path) {
+function caseFetch(path, options) {
   if (path.startsWith("case/publication")) {
     const url = decodeURIComponent(path.split("url=")[1]);
     return Promise.resolve(publications.get(url) || {status: "none"});
   }
   if (path === "case/prepare") return Promise.resolve({job_id: prepareId});
-  if (path === "case/publish") return Promise.resolve({job_id: publishId});
+  if (path === "case/publish") {
+    publishRequests.push(JSON.parse(options.body));
+    return Promise.resolve({job_id: publishId});
+  }
   const id = path.split("/").pop(), values = jobs.get(id), value = Array.isArray(values) ? values.shift() : values;
   return Promise.resolve(value);
 }
@@ -578,6 +634,26 @@ async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve =
     "frozen reason unchanged");
   check(findText(box, "Retry frozen publication") && allText(box).includes("frozen publication is pending"),
     "pending retry UI");
+  jobs.set("retry-new", {state: "done", result: {status: "published",
+    url: "https://drive.test/new-pending", viber_text: "Нова замрзнута порука"}});
+  publishId = "retry-new";
+  find(box, x => x.tag === "input").checked = true;
+  findText(box, "Retry frozen publication").onclick(); await flush();
+  check(publishRequests.at(-1).summary === "Замрзнути опис" &&
+    publishRequests.at(-1).viber_reason === "Замрзнути кратак разлог", "new retry sends frozen inputs");
+
+  publications.set("legacy-pending", {status: "uploaded", summary: "Стари замрзнути опис",
+    retryable: true});
+  jobs.set("retry-legacy", {state: "done", result: {status: "published",
+    url: "https://drive.test/legacy", viber_text: "Стара замрзнута порука"}});
+  publishId = "retry-legacy";
+  box = caseBox({u: "legacy-pending", pdf: "hash"}); await flush();
+  check(!find(box, x => x.tag === "textarea" && x !== find(box, y => y.tag === "textarea") && !x.hidden),
+    "legacy retry has no visible reason");
+  find(box, x => x.tag === "input").checked = true;
+  findText(box, "Retry frozen publication").onclick(); await flush();
+  check(publishRequests.at(-1).summary === "Стари замрзнути опис" &&
+    !("viber_reason" in publishRequests.at(-1)), "legacy retry omits reason");
 
   publications.set("published", {status: "published", url: "https://drive.test/case",
     viber_text: "Могућа неправилност - Вибер порука"});
@@ -643,6 +719,36 @@ def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_
         with pytest.raises(ValueError, match="not configured"):
             jobs.submit_publish(URL, "Јавни опис", VIBER_REASON, True)
         assert jobs.publication(URL) is None
+    finally:
+        jobs.close()
+
+
+def test_publication_jobs_retry_legacy_null_and_new_frozen_reason(tmp_path):
+    store, cases, _ = handoff(tmp_path)
+    cases.claim(URL, "Замрзнути опис", VIBER_REASON)
+
+    class Publisher:
+        def __init__(self):
+            self.calls = []
+        def publish(self, url, summary, reason):
+            self.calls.append((url, summary, reason))
+            return {"status": "published"}
+
+    publisher = Publisher()
+    jobs = PublicationJobs(cases, publisher, workers=1)
+    try:
+        new_job = jobs.submit_publish(URL, "Замрзнути опис", VIBER_REASON, True)
+        assert _wait_job_result(jobs, new_job)["state"] == "done"
+        with pytest.raises(ValueError, match="frozen"):
+            jobs.submit_publish(URL, "Замрзнути опис", "Промењени разлог", True)
+        assert publisher.calls == [(URL, "Замрзнути опис", VIBER_REASON)]
+
+        store._write("UPDATE publications SET viber_reason=NULL WHERE url=?", (URL,))
+        legacy_job = jobs.submit_publish(URL, "Замрзнути опис", None, True)
+        assert _wait_job_result(jobs, legacy_job)["state"] == "done"
+        with pytest.raises(ValueError, match="legacy"):
+            jobs.submit_publish(URL, "Замрзнути опис", VIBER_REASON, True)
+        assert publisher.calls[-1] == (URL, "Замрзнути опис", None)
     finally:
         jobs.close()
 
