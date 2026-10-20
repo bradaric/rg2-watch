@@ -153,9 +153,11 @@ ntfy message is sent for a verdict.
 ## Public case handoff (Google Drive and Viber copy)
 
 This is an optional, manual handoff for one escalated document version at a time. It never sends a
-Viber or Instagram message. The operator clicks **Prepare draft**, edits the Serbian Cyrillic public
-summary, explicitly confirms that anyone with the link can open the folder, then clicks **Publish**.
-Only that case folder is made public. The app-managed **RG2 Watch** parent remains private.
+Viber or Instagram message. The operator clicks **Prepare draft**, edits the full Serbian Cyrillic
+public summary, and separately enters a short, operator-approved Viber reason. The short reason is not
+generated or shortened from the summary. After explicitly confirming that anyone with the link can
+open the folder, the operator clicks **Publish**. Only that case folder is made public. The app-managed
+**RG2 Watch** parent remains private.
 
 ### One-time Google setup
 
@@ -194,9 +196,11 @@ Only that case folder is made public. The app-managed **RG2 Watch** parent remai
 
 A new publication requires the exact URL's latest verdict to be `escalate` and its PDF already cached
 under `<db dir>/pdfs/`. Manual review alone does not cache a PDF; analysis does. Publication never
-downloads a replacement from RIK. It freezes the operator-approved UTF-8 summary and exact PDF bytes
-locally before creating anything remotely. A retry must use that frozen text and staging file;
-changed/missing bytes are refused, and this first version has no replace/abort workflow.
+downloads a replacement from RIK. It freezes the operator-approved UTF-8 summary, separately approved
+short Viber reason, and exact PDF bytes locally before creating anything remotely. A retry must use
+those frozen inputs and staging file; changed/missing inputs are refused. A pending publication created
+before the short-reason field existed keeps its original frozen summary/PDF and legacy Viber layout;
+its retry does not ask for or add a reason. There is no replace/abort workflow.
 
 The folder contains only `документ.pdf` and a plain-text case explanation with election,
 municipality/station, exact document URL, RIK link, the approved cautious concern, and SHA-256 of the
@@ -206,6 +210,38 @@ again with the same text: preallocated Drive IDs prevent a second case. Verify t
 **Share / General access** panel: “Anyone with the link — Viewer”, and open both child files in a
 private browser window. A live smoke test is always operator-initiated; automated tests use fakes and
 never create public Drive files.
+
+New cases produce this concise four-line copy, using the frozen municipality/station and existing
+stored links:
+
+```text
+Могућа неправилност за проверу.
+<општина>, БМ <број>: <одобрени кратак разлог>
+Записник и опис: <existing case-folder URL>
+РИК: <existing RIK URL>
+```
+
+### Locally correct the saved Књажевац БМ 61 copy
+
+Already-sent Viber messages cannot be edited retroactively. This guarded command changes only the
+locally saved copy displayed by `case/publication`; it does not call Drive, change the public folder or
+files, alter the approved full summary/PDF, inspect OAuth material, or send Viber.
+
+1. Restart/refresh the local case page and copy the exact **document URL** for the intended Књажевац
+   БМ 61 version. Do not guess a station-wide selector. Preview against the explicit election DB:
+
+       uv run rg2watch revise-viber --db data/election-677084.sqlite --url '<exact document URL from the local case page>' --reason 'Потребна је провера броја гласача ван бирачког места (18 од 58) и броја гласова за једну листу (53 од 58).'
+
+2. Verify the printed municipality/station, original saved message, proposed four-line message, case
+   link and RIK link. The preview opens SQLite read-only. Stop if any value is unexpected.
+3. Only after that verification, repeat the same command with `--confirm`. The command rechecks all
+   frozen identifiers and the exact legacy message under one SQLite write lock, then changes only
+   `viber_text` and `updated_at`. A repeat is a no-op; any different existing copy requires
+   investigation rather than overwrite.
+4. Restart `serve` if needed and refresh the case page. Confirm the same public case URL remains, both
+   files still open in a logged-out view, **RG2 Watch** remains restricted, and the corrected Serbian
+   copy appears before manually copying/sending it. Do not create a second publication or change Drive
+   permissions.
 
 ### One-time recovery of the pending election 677084 case
 
