@@ -3,7 +3,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 import logging
 
-from .case_handoff import CaseHandoff
+from .case_handoff import CaseHandoff, normalize_viber_reason
 from .drive_publish import DrivePublisher, _publication_diagnostic_id
 
 
@@ -63,12 +63,26 @@ class PublicationJobs:
     def submit_prepare(self, url: str) -> str:
         return self._submit("preparation", url, lambda: self.cases.prepare(url, draft=True))
 
-    def submit_publish(self, url: str, summary: str, confirm: bool) -> str:
+    def submit_publish(self, url: str, summary: str, viber_reason: str | None,
+                       confirm: bool) -> str:
         if confirm is not True:
             raise ValueError("explicit public-sharing confirmation is required")
         if self.publisher is None:
             raise ValueError("Google Drive is not configured; run `rg2watch drive-auth`")
-        return self._submit("publication", url, lambda: self.publisher.publish(url, summary))
+        row = self.cases.store.get_publication(url)
+        if row is None:
+            viber_reason = normalize_viber_reason(viber_reason)
+        elif row["phase"] != "published":
+            if row["viber_reason"] is None:
+                if viber_reason is not None:
+                    raise ValueError("legacy frozen publication does not accept a Viber reason")
+            else:
+                viber_reason = normalize_viber_reason(viber_reason)
+                if viber_reason != row["viber_reason"]:
+                    raise ValueError("inputs differ from the frozen pending package")
+        return self._submit(
+            "publication", url,
+            lambda: self.publisher.publish(url, summary, viber_reason))
 
     def job(self, job_id: str) -> dict | None:
         with self._lock:
@@ -83,6 +97,8 @@ class PublicationJobs:
             out.update(url=row["final_url"], viber_text=row["viber_text"])
         else:
             out.update(summary=row["summary"], retryable=True)
+            if row["viber_reason"] is not None:
+                out["viber_reason"] = row["viber_reason"]
         return out
 
     def close(self):

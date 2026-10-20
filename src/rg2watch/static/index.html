@@ -586,6 +586,10 @@ function caseBox(v) {
     const prep = mk("button", "Prepare draft"); prep.type = "button";
     const area = document.createElement("textarea"); area.hidden = true;
     area.setAttribute("aria-label", "public case summary in Serbian Cyrillic");
+    const areaLabel = mk("label", "Public case summary"); areaLabel.hidden = true; areaLabel.append(area);
+    const reason = document.createElement("textarea"); reason.hidden = true;
+    reason.setAttribute("aria-label", "short Viber reason in Serbian Cyrillic");
+    const reasonLabel = mk("label", "Short Viber reason"); reasonLabel.hidden = true; reasonLabel.append(reason);
     const label = mk("label", " Anyone with the link can open the published case folder.", "publicwarn");
     const confirm = document.createElement("input"); confirm.type = "checkbox"; label.prepend(confirm);
     const publish = mk("button", "Publish public case"); publish.type = "button"; publish.hidden = true;
@@ -593,26 +597,36 @@ function caseBox(v) {
       prep.disabled = true; msg.textContent = "Preparing... The internal note is sent to the AI provider if available.";
       caseFetch("case/prepare", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"}, body: JSON.stringify({url: v.u})})
         .then(j => waitCaseJob(j.job_id)).then(result => {
-          area.value = result.summary || ""; area.hidden = publish.hidden = label.hidden = false;
+          area.value = result.summary || ""; area.hidden = areaLabel.hidden = false;
+          reason.hidden = reasonLabel.hidden = publish.hidden = label.hidden = false;
           msg.textContent = result.warning ? "AI draft failed; use the manual template." : "Review and edit the draft before publishing.";
           prep.disabled = false;
         }).catch(e => { prep.disabled = false; msg.textContent = "Preparation error: " + e.message; });
     };
     label.hidden = true;
     publish.onclick = () => {
+      if (!area.value.trim() || (!pending || pending.viber_reason != null) && !reason.value.trim()) {
+        msg.textContent = "Enter both the public case summary and the short Viber reason."; return;
+      }
       if (!confirm.checked) { msg.textContent = "Confirm that anyone with the link may open the case folder."; return; }
       publish.disabled = true; msg.textContent = "Uploading; other controls remain available.";
+      const request = {url: v.u, summary: area.value, confirm: true};
+      if (!pending || pending.viber_reason != null) request.viber_reason = reason.value;
       caseFetch("case/publish", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
-        body: JSON.stringify({url: v.u, summary: area.value, confirm: true})})
+        body: JSON.stringify(request)})
         .then(j => waitCaseJob(j.job_id)).then(result => publishedCase(box, result))
         .catch(e => { publish.disabled = false; msg.textContent = "Publication error: " + e.message; });
     };
     if (pending) {
       area.value = pending.summary || ""; area.hidden = label.hidden = publish.hidden = false;
-      area.readOnly = true; publish.textContent = "Retry frozen publication";
+      areaLabel.hidden = false; area.readOnly = true; publish.textContent = "Retry frozen publication";
+      if (pending.viber_reason != null) {
+        reason.value = pending.viber_reason; reason.readOnly = true;
+        reason.hidden = reasonLabel.hidden = false;
+      }
       msg.textContent = "A frozen publication is pending. Review its text and explicitly retry; the cache and a new draft are not used.";
-      box.append(" ", area, label, publish);
-    } else box.append(" ", prep, area, label, publish);
+      box.append(" ", areaLabel, reasonLabel, label, publish);
+    } else box.append(" ", prep, areaLabel, reasonLabel, label, publish);
   };
   caseFetch("case/publication?url=" + encodeURIComponent(v.u)).then(data => {
     if (data.status === "published") publishedCase(box, data);

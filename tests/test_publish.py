@@ -23,6 +23,8 @@ from test_browse import BASE, P, add, doc
 
 
 URL = BASE + "/extfile/publish.pdf"
+VIBER_REASON = ("Потребна је провера броја гласача ван бирачког места (18 од 58) "
+                "и броја гласова за једну листу (53 од 58).")
 
 
 def _wait_job_result(jobs, job_id):
@@ -63,6 +65,67 @@ def test_old_database_migrates_publication_and_draft_cost_tables(tmp_path):
     assert {"publications", "ai_draft_costs"} <= names
 
 
+def test_existing_publications_migrate_with_nullable_viber_reason(tmp_path):
+    store, service, _ = handoff(tmp_path)
+    publication = service.claim(URL, "Замрзнути опис", VIBER_REASON)
+    store.finalize_publication(URL, "https://drive.google.com/drive/folders/folder", "Стара порука")
+    store.close()
+    import sqlite3
+    con = sqlite3.connect(tmp_path / "watch.sqlite")
+    con.execute("ALTER TABLE publications RENAME TO publications_new_schema")
+    con.execute("CREATE TABLE publications AS SELECT id,url,document_id,parent,summary,summary_sha256,"
+                "staged_pdf_path,pdf_sha256,case_json,folder_id,pdf_file_id,text_file_id,"
+                "drive_account_id,legacy_parent_recovery,final_url,viber_text,phase,created_at,"
+                "updated_at,published_at FROM publications_new_schema")
+    con.execute("DROP TABLE publications_new_schema")
+    con.commit(); con.close()
+
+    migrated = Store(tmp_path / "watch.sqlite")
+    row = migrated.get_publication(URL)
+    assert "viber_reason" in row.keys()
+    assert row["viber_reason"] is None
+    assert row["phase"] == "published" and row["viber_text"] == "Стара порука"
+
+
+def test_short_reason_is_normalized_frozen_and_validated_before_staging(tmp_path):
+    store, service, _ = handoff(tmp_path)
+    first = service.claim(URL, "Опрезан јавни опис.", "  Кратак\n  разлог.  ")
+    assert first["viber_reason"] == "Кратак разлог."
+    assert service.claim(URL, "Опрезан јавни опис.", "Кратак разлог.")["id"] == first["id"]
+    with pytest.raises(CaseError, match="frozen"):
+        service.claim(URL, "Опрезан јавни опис.", "Други разлог.")
+
+    other = tmp_path / "other"
+    other.mkdir()
+    _, fresh, _ = handoff(other)
+    for reason in ("", "x" * 501, "линк https://example.test", "контрола\x00"):
+        with pytest.raises(CaseError):
+            fresh.claim(URL, "Опис", reason)
+        assert fresh.store.get_publication(URL) is None
+        assert not (other / ".rg2watch-publications").exists()
+
+
+def test_concise_and_legacy_viber_layouts_are_distinct(tmp_path):
+    _, service, _ = handoff(tmp_path)
+    case = service._case(URL)
+    case["municipality"], case["station"] = "Књажевац", "61"
+    folder = "https://drive.google.com/drive/folders/existing"
+    concise = service.viber_text(case, VIBER_REASON, folder)
+    assert concise == ("Могућа неправилност за проверу.\n"
+                       f"Књажевац, БМ 61: {VIBER_REASON}\n"
+                       f"Записник и опис: {folder}\n"
+                       f"РИК: {case['rik_url']}")
+    assert concise.count("61") == 1
+    assert all(text not in concise for text in
+               ("људску", "није утврђена чињеница", "Разлог: Избори:"))
+    legacy = service.legacy_viber_text(case, "Избори: Замрзнути опис", folder)
+    assert legacy == ("Могућа неправилност за људску проверу — није утврђена чињеница.\n"
+                      "Бирачко место: Књажевац, 61\n"
+                      "Разлог: Избори: Замрзнути опис\n"
+                      f"РИК: {case['rik_url']}\n"
+                      f"Јавни предмет (свако са везом може да отвори): {folder}")
+
+
 def test_draft_cost_counts_against_existing_parent_cap_and_status(tmp_path):
     store, _, _ = handoff(tmp_path)
     store.record_draft_cost(P, URL, "claude-haiku-5-5", 12, 8, .125, "done")
@@ -98,20 +161,20 @@ def test_preflight_rejects_bad_or_oversize_pdf(tmp_path, data):
 
 def test_claim_freezes_summary_and_pdf_and_refuses_changed_retry(tmp_path):
     store, service, cache = handoff(tmp_path)
-    first = service.claim(URL, "Опрезан јавни опис.")
+    first = service.claim(URL, "Опрезан јавни опис.", VIBER_REASON)
     assert Path(first["staged_pdf_path"]).read_bytes() == cache.read_bytes()
     assert Path(first["staged_pdf_path"]).stat().st_mode & 0o777 == 0o600
     cache.write_bytes(b"%PDF-1.4\nchanged")
     # Recovery uses the frozen staging copy, never a newer cache file.
-    assert service.claim(URL, "Опрезан јавни опис.")["pdf_sha256"] == first["pdf_sha256"]
+    assert service.claim(URL, "Опрезан јавни опис.", VIBER_REASON)["pdf_sha256"] == first["pdf_sha256"]
     with pytest.raises(CaseError, match="frozen"):
-        service.claim(URL, "Други опис")
+        service.claim(URL, "Други опис", VIBER_REASON)
     store.close()
 
 
 def test_publication_account_binding_is_nullable_and_immutable(tmp_path):
     store, service, _ = handoff(tmp_path)
-    service.claim(URL, "Опрезан јавни опис.")
+    service.claim(URL, "Опрезан јавни опис.", VIBER_REASON)
     assert store.get_publication(URL)["drive_account_id"] is None
     store.bind_publication_account(URL, "account-1")
     assert store.get_publication(URL)["drive_account_id"] == "account-1"
@@ -131,7 +194,7 @@ def test_restart_after_preclaim_crash_discards_unclaimed_orphan_and_accepts_new_
 
     monkeypatch.setattr(store, "claim_publication", crash_before_claim)
     with pytest.raises(RuntimeError, match="claim crash"):
-        service.claim(URL, "Замрзнут опис")
+        service.claim(URL, "Замрзнут опис", VIBER_REASON)
     assert store.get_publication(URL) is None
     staged = list((tmp_path / ".rg2watch-publications").glob("*.pdf"))
     assert len(staged) == 1 and staged[0].read_bytes().startswith(b"%PDF")
@@ -148,7 +211,7 @@ def test_restart_after_preclaim_crash_discards_unclaimed_orphan_and_accepts_new_
     finally:
         jobs.close()
 
-    result = make_publisher(restarted, FakeDrive(), tmp_path).publish(URL, "Нови одобрени опис")
+    result = make_publisher(restarted, FakeDrive(), tmp_path).publish(URL, "Нови одобрени опис", VIBER_REASON)
     assert result["status"] == "published"
     frozen = restarted_store.get_publication(URL)
     assert frozen["summary"] == "Нови одобрени опис"
@@ -161,18 +224,18 @@ def test_store_will_not_commit_publication_referencing_missing_staging(tmp_path)
     case = service._case(URL)
     with pytest.raises(ValueError, match="durable staged PDF"):
         store.claim_publication(URL, "Опис", hashlib.sha256("Опис".encode()).hexdigest(),
-                                str(tmp_path / "missing.pdf"), "0" * 64, case)
+                                str(tmp_path / "missing.pdf"), "0" * 64, case, VIBER_REASON)
     assert store.get_publication(URL) is None
 
 
 def test_completed_publication_is_historical_after_ok(tmp_path):
     store, service, _ = handoff(tmp_path)
-    p = service.claim(URL, "Јавни опис")
+    p = service.claim(URL, "Јавни опис", VIBER_REASON)
     store.save_drive_ids(URL, "folder", "pdf", "text")
     store.finalize_publication(URL, "https://drive.google.com/drive/folders/folder",
                                "Вибер порука")
     store.set_review(URL, "ok", "исправљено")
-    got = service.claim(URL, "a different ignored summary")
+    got = service.claim(URL, "a different ignored summary", VIBER_REASON)
     assert got["phase"] == "published"
     assert got["final_url"].endswith("/folder")
     assert got["viber_text"] == "Вибер порука"
@@ -243,7 +306,7 @@ def test_ai_draft_is_bounded_by_publish_utf8_byte_limit(tmp_path):
     client = type("Client", (), {"messages": FakeMessages("Ж" * 4096)})()
     draft = CaseDrafter(store, service.cfg, client).draft(service._case(URL))
     assert len(draft.encode("utf-8")) <= 4096
-    service.claim(URL, draft)
+    service.claim(URL, draft, VIBER_REASON)
 
 
 def test_draft_refuses_non_anthropic_unknown_price_and_exhausted_cap(tmp_path):
@@ -272,13 +335,15 @@ def test_unusable_paid_draft_is_still_accounted(tmp_path):
 class FakeCaseAPI:
     def submit_prepare(self, url):
         return "prepare-job"
-    def submit_publish(self, url, summary, confirm):
+    def submit_publish(self, url, summary, viber_reason, confirm):
         assert confirm is True
+        assert viber_reason == VIBER_REASON
         return "publish-job"
     def job(self, job_id):
         return {"id": job_id, "state": "done", "result": {"summary": "Ћирилица"}}
     def publication(self, url):
-        return {"status": "uploaded", "summary": "Замрзнути опис", "retryable": True}
+        return {"status": "uploaded", "summary": "Замрзнути опис",
+                "viber_reason": VIBER_REASON, "retryable": True}
 
 
 def case_request(server, method, path, body=None, headers=None):
@@ -308,11 +373,13 @@ def test_case_http_routes_are_explicit_strict_and_same_origin(tmp_path):
     try:
         assert case_request(srv, "POST", "/case/prepare", {"url": URL}) == (202, {"job_id": "prepare-job"})
         assert case_request(srv, "POST", "/case/publish",
-                            {"url": URL, "summary": "Јавно", "confirm": True}) == (
+                            {"url": URL, "summary": "Јавно", "viber_reason": VIBER_REASON,
+                             "confirm": True}) == (
                                 202, {"job_id": "publish-job"})
         assert case_request(srv, "GET", "/case/jobs/prepare-job")[0] == 200
         assert case_request(srv, "GET", "/case/publication?url=" + URL) == (
-            200, {"status": "uploaded", "summary": "Замрзнути опис", "retryable": True})
+            200, {"status": "uploaded", "summary": "Замрзнути опис",
+                  "viber_reason": VIBER_REASON, "retryable": True})
         assert case_request(srv, "POST", "/case/prepare", {"url": URL},
                             {"Origin": "http://evil.example"})[0] == 403
         assert case_request(srv, "GET", "/case/jobs/prepare-job",
@@ -328,6 +395,8 @@ def test_case_http_routes_are_explicit_strict_and_same_origin(tmp_path):
     ("POST", "/case/prepare", {"url": URL, "extra": 1}, None, 400),
     ("POST", "/case/prepare", {"url": 7}, None, 400),
     ("POST", "/case/publish", {"url": URL, "summary": 7, "confirm": True}, None, 400),
+    ("POST", "/case/publish", {"url": URL, "summary": "x", "viber_reason": "",
+                                  "confirm": True}, None, 400),
     ("POST", "/case/publish", {"url": URL, "summary": "x", "confirm": True, "x": 1}, None, 400),
     ("POST", "/case/prepare", {"url": URL}, {"Content-Type": "application/json; charset=utf-8"}, 400),
     ("POST", "/case/prepare", {"url": URL}, {"X-RG2W": ""}, 403),
@@ -358,7 +427,7 @@ def test_page_has_explicit_safe_case_controls():
     assert 'document.createElement("textarea")' in html
     assert ".textContent" in html and "innerHTML = draft" not in html
     for text in ("Prepare draft", "Publish public case", "Anyone with the link can open",
-                 "public case summary in Serbian Cyrillic", "Copy", "Copied",
+                  "Public case summary", "Short Viber reason", "Copy", "Copied",
                  "Retry frozen publication", "Publication error:"):
         assert text in html
     for old in ("Припреми нацрт", "Објави јавни предмет", "Понови објаву замрзнутог предмета",
@@ -367,6 +436,7 @@ def test_page_has_explicit_safe_case_controls():
     # Prepared/public content is still Serbian Cyrillic and is never translated here.
     assert "area.value = result.summary" in html
     assert "area.value = pending.summary" in html
+    assert "reason.value = pending.viber_reason" in html
 
 
 def test_case_ui_reenables_prepare_and_publish_after_async_job_errors():
@@ -412,6 +482,8 @@ async function tick() { await new Promise(resolve => setImmediate(resolve)); }
   box = caseBox({u: "https://example.test/a.pdf", pdf: "hash"}); await tick();
   prep = findText(box, "Prepare draft"); prep.onclick(); await tick(); await tick();
   const publish = findText(box, "Publish public case");
+  const areas = []; (function collect(x) { if (x instanceof El && x.tag === "textarea") areas.push(x); for (const c of x.children || []) if (c instanceof El) collect(c); })(box);
+  areas[1].value = "Кратак разлог";
   const confirm = find(box, x => x.tag === "input"); confirm.checked = true;
   publish.onclick(); await tick(); await tick();
   if (publish.disabled || !box.querySelector(".rvmsg").textContent.includes("publish boom")) process.exit(3);
@@ -494,10 +566,14 @@ async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve =
   check(!runningPrep.disabled && find(box, x => x.tag === "textarea").value === "Текст после чекања",
     "running job completion");
 
-  publications.set("pending", {status: "uploaded", summary: "Замрзнути опис", retryable: true});
+  publications.set("pending", {status: "uploaded", summary: "Замрзнути опис",
+    viber_reason: "Замрзнути кратак разлог", retryable: true});
   box = caseBox({u: "pending", pdf: "hash"}); await flush();
   const pendingArea = find(box, x => x.tag === "textarea");
   check(pendingArea.value === "Замрзнути опис" && pendingArea.readOnly, "frozen summary unchanged");
+  const pendingReason = find(box, x => x.tag === "textarea" && x !== pendingArea);
+  check(pendingReason.value === "Замрзнути кратак разлог" && pendingReason.readOnly,
+    "frozen reason unchanged");
   check(findText(box, "Retry frozen publication") && allText(box).includes("frozen publication is pending"),
     "pending retry UI");
 
@@ -516,6 +592,8 @@ async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve =
   prepareId = "prepare-success"; publishId = "publish-success";
   box = caseBox({u: "success", pdf: "hash"}); await flush();
   findText(box, "Prepare draft").onclick(); await flush();
+  const successAreas = []; (function collect(x) { if (x instanceof El && x.tag === "textarea") successAreas.push(x); for (const c of x.children || []) if (c instanceof El) collect(c); })(box);
+  successAreas[1].value = "Одобрени кратак разлог";
   const confirm = find(box, x => x.tag === "input");
   const publish = findText(box, "Publish public case"); confirm.checked = true; publish.onclick(); await flush();
   check(allText(box).includes("Case published") && allText(box).includes("Вибер успех"), "publish success");
@@ -534,6 +612,8 @@ async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve =
   prepareId = "prepare-for-publish-error"; publishId = "publish-error";
   box = caseBox({u: "errors", pdf: "hash"}); await flush();
   findText(box, "Prepare draft").onclick(); await flush();
+  const errorAreas = []; (function collect(x) { if (x instanceof El && x.tag === "textarea") errorAreas.push(x); for (const c of x.children || []) if (c instanceof El) collect(c); })(box);
+  errorAreas[1].value = "Кратак разлог";
   const failedPublish = findText(box, "Publish public case");
   find(box, x => x.tag === "input").checked = true; failedPublish.onclick(); await flush();
   check(!failedPublish.disabled && allText(box).includes(
@@ -559,7 +639,7 @@ def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_
         assert result["state"] == "done" and result["result"]["summary"].startswith("Избори:")
         assert "note" not in result["result"]["case"]
         with pytest.raises(ValueError, match="not configured"):
-            jobs.submit_publish(URL, "Јавни опис", True)
+            jobs.submit_publish(URL, "Јавни опис", VIBER_REASON, True)
         assert jobs.publication(URL) is None
     finally:
         jobs.close()
@@ -580,13 +660,13 @@ def test_publication_job_exposes_only_sanitized_generate_ids_error(tmp_path):
             return FailingRequest()
 
     class Publisher:
-        def publish(self, url, summary):
+        def publish(self, url, summary, viber_reason):
             GoogleDriveAdapter(FilesService()).generate_ids(3)
 
     _, cases, _ = handoff(tmp_path)
     jobs = PublicationJobs(cases, Publisher(), workers=1)
     try:
-        job_id = jobs.submit_publish(URL, "Јавни опис", True)
+        job_id = jobs.submit_publish(URL, "Јавни опис", VIBER_REASON, True)
         for _ in range(100):
             result = jobs.job(job_id)
             if result["state"] != "running":
@@ -608,7 +688,7 @@ def test_publication_job_contexts_are_isolated_from_each_other_and_drafts(tmp_pa
     observed = {}
 
     class Publisher:
-        def publish(self, url, summary):
+        def publish(self, url, summary, viber_reason):
             if "retry-secret" not in url:
                 barrier.wait(timeout=5)
             observed[url] = _publication_diagnostic_id.get()
@@ -617,8 +697,8 @@ def test_publication_job_contexts_are_isolated_from_each_other_and_drafts(tmp_pa
     jobs = PublicationJobs(cases, Publisher(), workers=2)
     try:
         with caplog.at_level(logging.INFO):
-            first = jobs.submit_publish("https://fixture.invalid/first-secret", "first", True)
-            second = jobs.submit_publish("https://fixture.invalid/second-secret", "second", True)
+            first = jobs.submit_publish("https://fixture.invalid/first-secret", "first", VIBER_REASON, True)
+            second = jobs.submit_publish("https://fixture.invalid/second-secret", "second", VIBER_REASON, True)
             first_result = _wait_job_result(jobs, first)
             second_result = _wait_job_result(jobs, second)
             draft_context = []
@@ -626,7 +706,7 @@ def test_publication_job_contexts_are_isolated_from_each_other_and_drafts(tmp_pa
                                  lambda: draft_context.append(
                                      _publication_diagnostic_id.get()) or {"summary": "draft"})
             draft_result = _wait_job_result(jobs, draft)
-            retry = jobs.submit_publish("https://fixture.invalid/retry-secret", "retry", True)
+            retry = jobs.submit_publish("https://fixture.invalid/retry-secret", "retry", VIBER_REASON, True)
             retry_result = _wait_job_result(jobs, retry)
     finally:
         jobs.close()
@@ -650,7 +730,7 @@ def test_publication_job_contexts_are_isolated_from_each_other_and_drafts(tmp_pa
 
 def test_pending_publication_status_exposes_frozen_summary_for_explicit_retry(tmp_path):
     store, cases, cache = handoff(tmp_path)
-    pending = cases.claim(URL, "Замрзнути јавни опис")
+    pending = cases.claim(URL, "Замрзнути јавни опис", VIBER_REASON)
     store.save_drive_ids(URL, "folder", "pdf", "text")
     cache.unlink()
     store.set_review(URL, "ok")
@@ -660,6 +740,7 @@ def test_pending_publication_status_exposes_frozen_summary_for_explicit_retry(tm
         assert state == {
             "status": pending["phase"],
             "summary": "Замрзнути јавни опис",
+            "viber_reason": VIBER_REASON,
             "retryable": True,
         }
     finally:
@@ -740,7 +821,7 @@ def _publish_with_process_store(db, state, crash, out=None):
         drive = _ProcessDrive(state, crash)
         root = DriveRoot(Path(db).parent / "process-token.json", drive)
         root.setup()
-        result = DrivePublisher(cases, drive, root).publish(URL, "Процесни опис")
+        result = DrivePublisher(cases, drive, root).publish(URL, "Процесни опис", VIBER_REASON)
         if out is not None:
             out.put(result)
     finally:
@@ -761,14 +842,14 @@ def test_two_store_publish_owner_blocks_claim_and_upload_then_recovers_after_cra
         assert ready.wait(5)
         blocked_drive = FakeDrive()
         with pytest.raises(DriveError, match="in progress"):
-            make_publisher(cases, blocked_drive, tmp_path).publish(URL, "Јавни опис")
+            make_publisher(cases, blocked_drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
         assert blocked_drive.steps == []
         assert second.get_publication(URL) is None
     finally:
         if owner.is_alive():
             owner.kill()
         owner.join(5)
-    result = make_publisher(cases, blocked_drive, tmp_path).publish(URL, "Јавни опис")
+    result = make_publisher(cases, blocked_drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert result["status"] == "published"
 
 

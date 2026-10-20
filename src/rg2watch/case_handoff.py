@@ -1,6 +1,7 @@
 import hashlib
 import os
 import tempfile
+import unicodedata
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -9,10 +10,27 @@ from .store import Store
 
 
 SUMMARY_MAX = 4096
+VIBER_REASON_MAX = 500
 
 
 class CaseError(ValueError):
     pass
+
+
+def normalize_viber_reason(reason: str) -> str:
+    if not isinstance(reason, str):
+        raise CaseError("short Viber reason is required")
+    if any(unicodedata.category(char) == "Cc" and char not in "\t\n\r" for char in reason):
+        raise CaseError("short Viber reason contains a control character")
+    normalized = " ".join(reason.split())
+    if not normalized:
+        raise CaseError("short Viber reason must not be empty")
+    if len(normalized) > VIBER_REASON_MAX:
+        raise CaseError(f"short Viber reason is longer than {VIBER_REASON_MAX} characters")
+    lowered = normalized.casefold()
+    if "http://" in lowered or "https://" in lowered or "www." in lowered:
+        raise CaseError("short Viber reason must not contain a URL")
+    return normalized
 
 
 def manual_template(case: dict) -> str:
@@ -68,7 +86,7 @@ class CaseHandoff:
         public_case = {k: v for k, v in case.items() if k != "note"}
         return {"case": public_case, "pdf_sha256": digest, "summary": summary, "warning": warning}
 
-    def claim(self, url: str, summary: str) -> dict:
+    def claim(self, url: str, summary: str, viber_reason: str | None = None) -> dict:
         existing = self.store.get_publication(url)
         if existing and existing["phase"] == "published":
             return dict(existing)
@@ -79,12 +97,21 @@ class CaseHandoff:
             raise CaseError(f"public summary is longer than {SUMMARY_MAX} bytes")
         summary_hash = hashlib.sha256(summary.encode("utf-8")).hexdigest()
         if existing:
+            if existing["viber_reason"] is None:
+                if viber_reason is not None:
+                    raise CaseError("inputs differ from the frozen pending package; inspect the frozen case")
+                normalized_reason = None
+            else:
+                normalized_reason = normalize_viber_reason(viber_reason)
+                if existing["viber_reason"] != normalized_reason:
+                    raise CaseError("inputs differ from the frozen pending package; inspect the frozen case")
             if existing["summary_sha256"] != summary_hash:
                 raise CaseError("inputs differ from the frozen pending package; inspect the frozen case")
             staged = Path(existing["staged_pdf_path"])
             if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != existing["pdf_sha256"]:
                 raise CaseError("frozen staged PDF is missing or changed")
             return dict(existing)
+        normalized_reason = normalize_viber_reason(viber_reason)
         _, digest, pdf = self._cached_pdf(url)
         case = self._case(url)
         stage_dir = Path(self.cfg.db_path).resolve().parent / ".rg2watch-publications"
@@ -117,7 +144,7 @@ class CaseHandoff:
         finally:
             os.close(dir_fd)
         row, inserted = self.store.claim_publication(
-            url, summary, summary_hash, str(final), digest, case)
+            url, summary, summary_hash, str(final), digest, case, normalized_reason)
         if not inserted:
             if row["summary_sha256"] != summary_hash or row["pdf_sha256"] != digest:
                 if str(final) != row["staged_pdf_path"]:
@@ -130,9 +157,16 @@ class CaseHandoff:
         return dict(row)
 
     @staticmethod
-    def viber_text(case: dict, concern: str, folder_url: str) -> str:
+    def legacy_viber_text(case: dict, concern: str, folder_url: str) -> str:
         one_line = " ".join(concern.split())[:500]
         return ("Могућа неправилност за људску проверу — није утврђена чињеница.\n"
                 f"Бирачко место: {case['municipality']}, {case['station']}\n"
                 f"Разлог: {one_line}\nРИК: {case['rik_url']}\n"
                 f"Јавни предмет (свако са везом може да отвори): {folder_url}")
+
+    @staticmethod
+    def viber_text(case: dict, reason: str, folder_url: str) -> str:
+        return ("Могућа неправилност за проверу.\n"
+                f"{case['municipality']}, БМ {case['station']}: {reason}\n"
+                f"Записник и опис: {folder_url}\n"
+                f"РИК: {case['rik_url']}")

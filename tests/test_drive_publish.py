@@ -22,6 +22,8 @@ from test_browse import BASE, P, add, doc
 
 URL = BASE + "/extfile/drive.pdf"
 ROOT_MIME = "application/vnd.google-apps.folder"
+VIBER_REASON = ("Потребна је провера броја гласача ван бирачког места (18 од 58) "
+                "и броја гласова за једну листу (53 од 58).")
 
 
 class SimulatedCrash(BaseException):
@@ -401,11 +403,11 @@ def test_pending_account_mismatch_is_refused_before_any_file_get(tmp_path):
     drive = TrackingDrive()
     root = DriveRoot(tmp_path / "drive-token.json", drive)
     root.setup()
-    cases.claim(URL, "Јавни опис")
+    cases.claim(URL, "Јавни опис", VIBER_REASON)
     store.bind_publication_account(URL, "different-account")
     drive.get_calls.clear()
     with pytest.raises(DriveError, match="different Google Drive account"):
-        DrivePublisher(cases, drive, root).publish(URL, "Јавни опис")
+        DrivePublisher(cases, drive, root).publish(URL, "Јавни опис", VIBER_REASON)
     assert drive.get_calls == []
 
 
@@ -466,12 +468,16 @@ def make_publisher(cases, drive, tmp_path):
 def test_folder_is_shared_only_after_both_verified_uploads(tmp_path):
     s, cases = setup_case(tmp_path)
     drive = FakeDrive()
-    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert drive.steps == ["folder", "pdf", "text", "share"]
     assert drive.folder_creates[0][0] == "folder-id"
     assert drive.folder_creates[0][2] == "app-root-id"
     assert result["url"] == "https://drive.google.com/drive/folders/folder-id"
-    assert result["viber_text"].startswith("Могућа неправилност")
+    case = cases._case(URL)
+    assert result["viber_text"] == ("Могућа неправилност за проверу.\n"
+                                    f"{case['municipality']}, БМ {case['station']}: {VIBER_REASON}\n"
+                                    "Записник и опис: https://drive.google.com/drive/folders/folder-id\n"
+                                    f"РИК: {case['rik_url']}")
     assert s.get_publication(URL)["phase"] == "published"
 
 
@@ -480,8 +486,8 @@ def test_retry_after_each_remote_crash_reuses_ids_and_one_folder(tmp_path, crash
     s, cases = setup_case(tmp_path)
     drive = FakeDrive(crash)
     with pytest.raises(SimulatedCrash, match="simulated crash"):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
-    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert result["url"].endswith("folder-id")
     assert set(drive.files) == set(drive.ids) | {"app-root-id"}
     assert s.get_publication(URL)["folder_id"] == "folder-id"
@@ -492,12 +498,12 @@ def test_changed_retry_and_mutated_stage_fail_without_sharing(tmp_path):
     s, cases = setup_case(tmp_path)
     drive = FakeDrive("folder")
     with pytest.raises(SimulatedCrash):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Први опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Први опис", VIBER_REASON)
     with pytest.raises(CaseError, match="frozen"):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Други опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Други опис", VIBER_REASON)
     Path(s.get_publication(URL)["staged_pdf_path"]).write_bytes(b"%PDF-changed")
     with pytest.raises(CaseError, match="frozen"):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Први опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Први опис", VIBER_REASON)
     assert not drive.public
 
 
@@ -505,20 +511,20 @@ def test_ok_before_share_blocks_but_ok_after_existing_public_is_historical(tmp_p
     s, cases = setup_case(tmp_path)
     drive = FakeDrive("text")
     with pytest.raises(SimulatedCrash):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     s.set_review(URL, "ok")
     with pytest.raises(DriveError, match="escalate"):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert drive.share_calls == 0
     s.set_review(URL, "escalate")
     drive.crash = "share"
     with pytest.raises(SimulatedCrash):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert drive.public
     s.set_review(URL, "ok")
-    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert result["url"].endswith("folder-id") and drive.share_calls == 1
-    repeated = make_publisher(cases, drive, tmp_path).publish(URL, "ignored changed summary")
+    repeated = make_publisher(cases, drive, tmp_path).publish(URL, "ignored changed summary", VIBER_REASON)
     assert repeated == result
 
 
@@ -526,10 +532,10 @@ def test_remote_metadata_mismatch_fails_closed(tmp_path):
     _, cases = setup_case(tmp_path)
     drive = FakeDrive("folder")
     with pytest.raises(SimulatedCrash):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     drive.files["folder-id"]["name"] = "foreign"
     with pytest.raises(DriveError, match="metadata"):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert not drive.public
 
 
@@ -538,7 +544,8 @@ def test_legacy_pending_folder_requires_manual_move_then_reuses_same_id(tmp_path
     drive = FakeDrive()
     root = DriveRoot(tmp_path / "drive-token.json", drive)
     root_id = root.setup()
-    cases.claim(URL, "Замрзнут јавни опис")
+    cases.claim(URL, "Замрзнут јавни опис", VIBER_REASON)
+    store._write("UPDATE publications SET viber_reason=NULL WHERE url=?", (URL,))
     store.save_drive_ids(URL, *drive.ids)
     case = cases._case(URL)
     drive.files["folder-id"] = {
@@ -564,6 +571,8 @@ def test_legacy_pending_folder_requires_manual_move_then_reuses_same_id(tmp_path
     drive.files["folder-id"]["parents"] = [root_id]
     result = pub.publish(URL, "Замрзнут јавни опис")
     assert result["status"] == "published"
+    assert result["viber_text"] == cases.legacy_viber_text(
+        case, "Замрзнут јавни опис", result["url"])
     assert set(drive.ids) <= set(drive.files)
     assert drive.share_calls == 1 and not drive.root_public
     assert drive.share_targets == ["folder-id"]
@@ -574,11 +583,11 @@ def test_nonlegacy_case_parent_mismatch_requires_investigation_not_move(tmp_path
     drive = FakeDrive("folder")
     pub = make_publisher(cases, drive, tmp_path)
     with pytest.raises(SimulatedCrash):
-        pub.publish(URL, "Јавни опис")
+        pub.publish(URL, "Јавни опис", VIBER_REASON)
     drive.files["folder-id"]["parents"] = [drive.my_drive_root]
 
     with pytest.raises(DriveError) as caught:
-        pub.publish(URL, "Јавни опис")
+        pub.publish(URL, "Јавни опис", VIBER_REASON)
 
     message = str(caught.value)
     assert "investigate" in message
@@ -592,11 +601,11 @@ def test_visible_unexpected_child_blocks_case_upload_and_share(tmp_path):
     drive = FakeDrive("folder")
     pub = make_publisher(cases, drive, tmp_path)
     with pytest.raises(SimulatedCrash):
-        pub.publish(URL, "Јавни опис")
+        pub.publish(URL, "Јавни опис", VIBER_REASON)
     drive.files["unexpected"] = {"id": "unexpected", "name": "unknown",
                                   "parents": ["folder-id"]}
     with pytest.raises(DriveError, match="unexpected"):
-        pub.publish(URL, "Јавни опис")
+        pub.publish(URL, "Јавни опис", VIBER_REASON)
     assert not drive.public
 
 
@@ -618,7 +627,7 @@ def test_review_started_during_share_waits_until_publication_is_committed(tmp_pa
     publisher = make_publisher(cases, drive, tmp_path)
     publish_result = []
     publish_thread = threading.Thread(
-        target=lambda: publish_result.append(publisher.publish(URL, "Јавни опис")))
+        target=lambda: publish_result.append(publisher.publish(URL, "Јавни опис", VIBER_REASON)))
     publish_thread.start()
     assert drive.sharing.wait(5)
 
@@ -635,7 +644,7 @@ def test_review_started_during_share_waits_until_publication_is_committed(tmp_pa
     review_thread.join(5)
     assert publish_result[0]["status"] == "published"
     assert review_result[0]["verdict"] == "ok"
-    assert make_publisher(cases, drive, tmp_path).publish(URL, "ignored") == publish_result[0]
+    assert make_publisher(cases, drive, tmp_path).publish(URL, "ignored", VIBER_REASON) == publish_result[0]
     assert drive.share_calls == 1
 
 
@@ -720,7 +729,7 @@ def test_api_backed_post_share_failure_is_correlated_bounded_and_non_mutating(
         "summary": "summary-secret-5e4f",
         "provider": "provider-secret-3a2b",
     }
-    claimed = cases.claim(URL, "Јавни опис " + secrets["summary"])
+    claimed = cases.claim(URL, "Јавни опис " + secrets["summary"], VIBER_REASON)
     ids = ["folder-" + secrets["id"], "pdf-" + secrets["id"],
            "text-" + secrets["id"]]
     store.save_drive_ids(URL, *ids)
@@ -765,7 +774,7 @@ def test_api_backed_post_share_failure_is_correlated_bounded_and_non_mutating(
     jobs = PublicationJobs(cases, publisher, workers=1)
     try:
         with caplog.at_level(logging.INFO):
-            job_id = jobs.submit_publish(URL, row["summary"], True)
+            job_id = jobs.submit_publish(URL, row["summary"], VIBER_REASON, True)
             result = _wait_for_job(jobs, job_id)
     finally:
         jobs.close()
@@ -924,8 +933,8 @@ def test_direct_publication_attempts_get_distinct_context_and_reset(tmp_path, ca
     _, first_cases = setup_case(tmp_path / "first")
     _, second_cases = setup_case(tmp_path / "second")
     with caplog.at_level(logging.INFO):
-        make_publisher(first_cases, FakeDrive(), tmp_path / "first").publish(URL, "Јавни опис")
-        make_publisher(second_cases, FakeDrive(), tmp_path / "second").publish(URL, "Јавни опис")
+        make_publisher(first_cases, FakeDrive(), tmp_path / "first").publish(URL, "Јавни опис", VIBER_REASON)
+        make_publisher(second_cases, FakeDrive(), tmp_path / "second").publish(URL, "Јавни опис", VIBER_REASON)
 
     ids = set(re.findall(r"diagnostic_id=([0-9a-f]{32})", caplog.text))
     assert len(ids) == 2
@@ -965,7 +974,7 @@ def test_drive_failure_before_sharing_leaves_folder_restricted(tmp_path, failure
 
     drive = FailingDrive()
     with pytest.raises(DriveError, match="injected"):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert not drive.public and drive.share_calls == 0
 
 
@@ -980,9 +989,9 @@ def test_crash_before_uploaded_phase_update_recovers_frozen_case(tmp_path, monke
 
     monkeypatch.setattr(store, "advance_publication", crash_before_update)
     with pytest.raises(SimulatedCrash, match="phase update"):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert not drive.public
-    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert result["status"] == "published"
     assert set(drive.files) == set(drive.ids) | {"app-root-id"}
 
@@ -1003,11 +1012,11 @@ def test_crash_after_id_preallocation_persists_ids_before_any_create(tmp_path):
 
     drive = CrashBeforeCreate()
     with pytest.raises(SimulatedCrash, match="ID persistence"):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     row = store.get_publication(URL)
     assert [row["folder_id"], row["pdf_file_id"], row["text_file_id"]] == drive.ids
     assert set(drive.files) == {"app-root-id"}
-    assert make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")["status"] == "published"
+    assert make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)["status"] == "published"
 
 
 def test_crash_after_share_before_finalize_recovers_even_after_ok(tmp_path, monkeypatch):
@@ -1021,9 +1030,9 @@ def test_crash_after_share_before_finalize_recovers_even_after_ok(tmp_path, monk
 
     monkeypatch.setattr(store, "finalize_publication", crash_before_finalize)
     with pytest.raises(SimulatedCrash, match="publication commit"):
-        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+        make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert drive.public
     store.set_review(URL, "ok")
-    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис")
+    result = make_publisher(cases, drive, tmp_path).publish(URL, "Јавни опис", VIBER_REASON)
     assert result["status"] == "published"
     assert drive.share_calls == 1
