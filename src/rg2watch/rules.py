@@ -12,6 +12,42 @@ _LABELS = {
     "registered": "3", "voted": "10.1", "ballots_in_box": "10.2", "invalid": "10.3",
     "valid": "10.4", "assisted": "11", "outside_voted": "12", "outside_confirmations": "12.1",
 }
+# Plain-language description of every finding code the watcher can emit (page tooltips and legend).
+# Thresholds are the config defaults.
+RULE_INFO = {
+    "V1": "A result number (10.1-10.4 or a list's votes) was crossed out, overwritten, erased or altered",
+    "V2": "Another number (registered, assisted, outside votes or confirmations) was crossed out or altered",
+    "V3": "The committee president did not sign the form",
+    "V4": "Named committee members did not sign (2 or more rows by default)",
+    "V5": "Several signatures look like the same handwriting",
+    "V6": "The results block is in a different pen or handwriting than the rest of the form",
+    "V7": "Part of the form looks pasted over or patched",
+    "V8": "A required number is empty or illegible (registered, 10.1-10.4, list votes, items 12/12.1)",
+    "V9": "Pages are missing or do not belong together, or the form does not match the listed station",
+    "V10": "The scan is of poor quality or unreadable, so other checks are less reliable",
+    "V11": "A yes/no item has both or neither answer circled (item 14 is not checked)",
+    "V12": "Large correction: a number was changed by 5 or more and by 30% or more of the original",
+    "P1": "The control sheet was not found or not signed (item 9 or 9.1 = NE)",
+    "P2": "Voting was interrupted (item 7 = DA)",
+    "P3": "The committee recorded remarks (item 14 = DA) or wrote text in item 15",
+    "P4": "Times do not add up: polls closed before 20:00, or the minutes were completed before closing",
+    "A1": "More ballots in the box than people who voted (10.2 > 10.1)",
+    "A2": "Invalid plus valid ballots do not equal the ballots in the box (10.3 + 10.4 != 10.2)",
+    "A3": "The list votes do not add up to the valid ballots (sum of lists != 10.4)",
+    "A4": "More people voted than are registered (10.1 > 3)",
+    "A5": "More people voted outside the station than there are confirmations (12 > 12.1)",
+    "A6": "Very high turnout (95% or more, stations with over 50 registered)",
+    "A7": "One list got 90% or more of the valid votes (stations with over 50 valid votes)",
+    "A8": "Many voters were assisted (more than 5% of those who voted)",
+    "A9": "High share of votes cast outside the polling station (10%+ medium, 15%+ high)",
+    "D1": "A follow-up document (RG-7, RG-8, RG-9 or a complaint) was published for the station",
+    "D2": "A published document was replaced by a new file",
+    "D3": "The PDF could not be downloaded or read",
+    "D4": "A document disappeared from RIK's listing",
+    "X1": "The model analysis failed or its output could not be used",
+    "X2": "Analysis gave up after repeated failures",
+}
+
 _YESNO_LABELS = {
     "interruption": "7", "control_sheet_found": "9", "control_sheet_signed": "9.1",
     "observers_present": "13", "observer_form_filled": "13.1", "committee_remarks": "14",

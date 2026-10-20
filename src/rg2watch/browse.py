@@ -12,7 +12,7 @@ from .analyze import stored_model
 from .config import Config
 from .models import Doc
 from .pipeline import PROMPT_VERSION
-from .rules import evaluate_report
+from .rules import RULE_INFO, evaluate_report
 from .status import build_status, to_belgrade
 from .store import Store, _doc
 from .tally import build_tally
@@ -146,7 +146,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         log.exception("tally could not be built")
         tally = None
     return {"built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
-            "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally}
+            "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally,
+            "rules": RULE_INFO}
 
 
 def _json(data) -> str:

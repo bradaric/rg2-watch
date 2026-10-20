@@ -458,3 +458,17 @@ def test_a5_only_when_outside_votes_exceed_confirmations():
     a5 = _outside(6, None)["A5"]
     assert a5.severity == "MEDIUM"
     assert a5.summary == "outside voted 6 > confirmations 5"
+
+
+def test_every_emitted_rule_code_has_a_description():
+    import re
+    from pathlib import Path
+
+    from rg2watch.rules import RULE_INFO
+    src = Path(__file__).parent.parent / "src" / "rg2watch"
+    pat = re.compile(r'(?:\badd|add_phys|Finding|_permanent\(\w+,)\(?\s*"([A-Z]\d{1,2})"')
+    codes = {m for f in src.glob("*.py") for m in pat.findall(f.read_text(encoding="utf-8"))}
+    assert {"V1", "A9", "D2", "D3", "X1", "X2"} <= codes  # the scan finds every kind of call
+    assert codes <= set(RULE_INFO), sorted(codes - set(RULE_INFO))
+    assert set(RULE_INFO) <= codes, sorted(set(RULE_INFO) - codes)  # no stale entries
+    assert all(v and "\n" not in v and len(v) < 120 for v in RULE_INFO.values())

@@ -71,6 +71,16 @@ input[type=search]{width:15em}
 #rulesbox summary::after,#colbox summary::after{content:"";margin-left:var(--s2);border:4px solid transparent;border-top-color:currentColor;border-bottom:0}
 #rulesbox[open] summary,#colbox[open] summary{border-color:var(--accent);background:var(--accent-bg)}
 #rules,#cols{position:absolute;z-index:5;top:100%;left:0;margin-top:var(--s1);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line2);border-radius:8px;max-height:18em;overflow:auto;display:grid;grid-template-columns:repeat(3,auto);gap:var(--s1) var(--s4);box-shadow:0 8px 24px rgba(0,0,0,.18)}
+#legendbox{position:relative}
+#legendbox summary{cursor:pointer;min-height:30px;display:flex;align-items:center;padding:0 var(--s3);border:1px solid var(--line2);border-radius:var(--r);background:var(--panel);list-style:none;white-space:nowrap}
+#legendbox summary::-webkit-details-marker{display:none}
+#legendbox summary::after{content:"";margin-left:var(--s2);border:4px solid transparent;border-top-color:currentColor;border-bottom:0}
+#legendbox[open] summary{border-color:var(--accent);background:var(--accent-bg)}
+#legend{position:absolute;z-index:6;top:100%;right:0;margin:var(--s1) 0 0;padding:var(--s2) var(--s3);width:min(40em,90vw);max-height:24em;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);display:grid;grid-template-columns:auto 1fr;gap:3px var(--s3)}
+#legend dt{font-weight:700;font-variant-numeric:tabular-nums}
+#legend dd{margin:0;color:var(--fg)}
+.rc{text-decoration:underline dotted;text-decoration-thickness:1px;text-underline-offset:3px;cursor:help;position:relative}
+.rc:focus-visible::after{content:attr(data-d);position:absolute;left:0;top:calc(100% + 6px);z-index:30;width:max-content;max-width:26em;white-space:normal;padding:5px 9px;border-radius:5px;background:var(--fg);color:var(--panel);font-size:12.5px;font-weight:500;line-height:1.35;letter-spacing:0;text-transform:none;box-shadow:0 4px 12px rgba(0,0,0,.25)}
 #rules label,#cols label{white-space:nowrap;display:flex;align-items:center;gap:6px;color:var(--fg);padding:2px 0}
 /* tabs */
 #tabs{display:flex;gap:var(--s1);margin:0 0 var(--s3);border-bottom:1px solid var(--line2)}
@@ -246,6 +256,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <label><input type="checkbox" id="loc"> has local copy</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
 <details id="colbox"><summary>columns</summary><div id="cols"></div></details>
+<details id="legendbox"><summary>rule codes</summary><dl id="legend"></dl></details>
 <label><input type="checkbox" id="auto" checked> auto-refresh</label>
 <button id="esccsv" type="button">Escalated CSV</button>
 </div>
@@ -376,9 +387,10 @@ function renderStatus() {
   al.append(mk("h3", "Last " + S.alerts.length + " alerts"));
   const t = mk("table");
   for (const x of S.alerts) {
-    const tr = mk("tr"), sv = mk("td");
+    const tr = mk("tr"), sv = mk("td"), rc = mk("td");
+    rc.append(ruleEl(x[2]));
     sv.append(mk("span", x[1], "b " + (SEV.includes(x[1]) ? x[1] : "")));
-    tr.append(mk("td", when(x[0]), "mut"), sv, mk("td", x[2]), mk("td", x[3] + (x[4] ? " BM " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
+    tr.append(mk("td", when(x[0]), "mut"), sv, rc, mk("td", x[3] + (x[4] ? " BM " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
     t.append(tr);
   }
   al.append(t);
@@ -392,11 +404,37 @@ let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
 const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "fl", "rp", "rm", "fa", "loc", "dis", "auto"];
 
+// rule codes carry their plain-language description (data.json "rules"): a hover title, a focus
+// tooltip, and aria-describedby pointing at the legend entry
+const ruleInfo = code => (D.rules || {})[code];
+function ruleEl(code, focusable = true) {
+  const e = mk("span", code), d = ruleInfo(code);
+  if (!d) return e;
+  e.className = "rc"; e.title = d; e.dataset.d = d;
+  e.setAttribute("aria-describedby", "rule-" + code);
+  if (focusable) e.tabIndex = 0;
+  return e;
+}
+function ruleText(s) {  // free text with rule codes in it ("arithmetic A2, A3")
+  const f = document.createDocumentFragment();
+  for (const part of String(s).split(/\b([VPADX]\d{1,2})\b/)) f.append(ruleInfo(part) ? ruleEl(part) : part);
+  return f;
+}
+function renderLegend() {
+  const dl = $("legend"), rules = D.rules || {};
+  dl.replaceChildren(...Object.keys(rules).flatMap(k => {
+    const dd = mk("dd", rules[k]);
+    dd.id = "rule-" + k;
+    return [mk("dt", k), dd];
+  }));
+  $("legendbox").hidden = !dl.children.length;
+}
 function badges(list, dis) {
   const td = document.createDocumentFragment();
   for (const f of list) {
-    const d = mk("div", null, "f");
-    d.append(mk("span", f[1], "b " + (SEV.includes(f[1]) ? f[1] : "") + (dis && dis.includes(f[0]) && f[1] === "HIGH" ? " dis" : "")), f[0] + ": " + f[2]);
+    const d = mk("div", null, "f"), tx = mk("span");
+    tx.append(ruleEl(f[0]), ": " + f[2]);
+    d.append(mk("span", f[1], "b " + (SEV.includes(f[1]) ? f[1] : "") + (dis && dis.includes(f[0]) && f[1] === "HIGH" ? " dis" : "")), tx);
     td.append(d);
   }
   return td;
@@ -544,7 +582,12 @@ function child(r) {
     d.append("older version: uploaded " + when(v.up) + ", first seen " + when(v.seen) + ", analysis " + v.ast + " ", linksOf(v));
     if (x) d.append(" ", verdictEl(x), x.n ? " " + x.n : "");
     d.append(badges(v.f));
-    for (const o of v.ops) d.append(mk("div", o.m + ": " + (o.f.map(f => f[0] + " " + f[1]).join(", ") || "no findings"), "sub"));
+    for (const o of v.ops) {
+      const s = mk("div", o.m + ": ", "sub");
+      if (!o.f.length) s.append("no findings");
+      o.f.forEach((f, i) => s.append(i ? ", " : "", ruleEl(f[0]), " " + f[1]));
+      d.append(s);
+    }
     box.append(d);
   }
   return box;
@@ -638,6 +681,8 @@ function optsOf(sel2, first, items) {
 }
 function applyData(data) {
   D = data;
+  renderLegend();
+  if (S) renderStatus();  // alert rule codes get their descriptions
   rows = D.rows.map(prep);
   optsOf($("m"), "all municipalities", [...new Set(rows.map(r => r.muni))].sort().map(m => [m, m]));
   const parents = [...new Set(rows.map(r => r.el))].sort();
@@ -650,7 +695,8 @@ function applyData(data) {
   $("rules").replaceChildren(...[...new Set(rows.flatMap(r => [...r._rules]))].sort().map(r => {
     const l = mk("label"), c = document.createElement("input");
     c.type = "checkbox"; c.value = r; c.checked = chosen.has(r);
-    l.append(c, " " + r);
+    l.append(c, " ", ruleEl(r, false));
+    if (ruleInfo(r)) l.title = r + ": " + ruleInfo(r);
     return l; }));
   $("rulesbox").hidden = !$("rules").children.length;
   rulesSummary();
@@ -788,7 +834,8 @@ function renderTally() {
       data: T.excluded, pageLength: 50, layout: {topStart: "search", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
       columns: [{data: "m", title: "Municipality", render: DataTable.render.text()},
         {data: "no", title: "BM", render: DataTable.render.text(), defaultContent: "", className: "dt-left"},
-        {data: "why", title: "Why excluded", render: {_: d => d.join("; "), display: d => esc(d.join("; "))}},
+        {data: "why", title: "Why excluded", render: {_: d => d.join("; "), display: () => ""},
+         createdCell: (td, d) => td.append(ruleText(d.join("; ")))},
         {data: null, title: "", orderable: false, defaultContent: "", createdCell: (td, d, r) => {
           const b = mk("button", "show form"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); td.append(b); }}]});
   }
