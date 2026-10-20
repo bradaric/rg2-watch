@@ -101,7 +101,37 @@ from the database without re-alerting.
 - **Free re-score after changing a threshold** (e.g. outside voting): `eval --cached` on the
   golden set re-applies the rules to stored analyses without calling any model.
 
-## 5. Cost and speed (estimates, 20/10/2026)
+## 5. Rehearse on a past election (full run against RIK)
+
+A full dress rehearsal: watcher, analysis, page, phone alerts and review, on an election whose
+forms are already published (e.g. local 2025, `662405`). Use a separate DB so it never mixes with
+election-night data.
+
+1. Register and start (keep `RG2W_NTFY_TOPIC` in `.env` to practise the pushes and digests too):
+
+       uv run rg2watch add https://www.rik.parlament.gov.rs/zapisnici/662405 --config rg2watch.toml --db data/rehearsal-662405.sqlite
+       uv run --env-file .env rg2watch watch --parent 662405 --config rg2watch.toml --db data/rehearsal-662405.sqlite --analyze --baseline
+
+   `--baseline` records what is already published without "new document" alerts; every RG-2 is
+   still downloaded and analysed, and its findings alert as on the night.
+2. Open http://127.0.0.1:8770: watch the status panel (queue, spend, ETA), the forms filling in,
+   the Results tab and presentation mode. List names come from `list_names` under `"662405"`.
+3. Practise the review: filter "to review", open PDFs, record OK / ESCALATE / UNSURE, export the
+   escalated CSV.
+4. The watcher does not stop by itself: Ctrl-C once the status panel shows the analysis queue at 0.
+   Browse the result afterwards with:
+
+       uv run rg2watch serve --config rg2watch.toml --db data/rehearsal-662405.sqlite
+
+5. Optional free second opinion with a local model, then filter "models disagree":
+
+       uv run rg2watch analyze --parent 662405 --model ollama:bonsai-2:27b --config rg2watch.toml --db data/rehearsal-662405.sqlite
+
+Expect ~100-150 RG-2s for 662405: well under $1 on Haiku, about 5-10 minutes (PDF downloads run
+at 0.5/s). This does load RIK lightly (listing sweeps at up to 2 requests/s while it runs), so do
+not leave it running for hours. Start from an empty DB to repeat it.
+
+## 6. Cost and speed (estimates, 20/10/2026)
 
 Measured on 72 RG-2s from past local elections (RIK zapisnici 662405 and others), Anthropic list
 prices as of 19/10/2026. Election size: about 250-450 RG-2s for a local election, about 8,300 for a
