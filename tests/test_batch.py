@@ -112,7 +112,7 @@ def test_batch_analyses_records_adhoc_and_caches(run, db):
 def test_spend_cap_stops_batch(run):
     ai = FakeAnthropic(resp(clean_report()))
     code, cap = run(ai, "--yes", "--max-usd", "0.001")
-    assert ai.calls == 1 and "spend cap $0.00 reached" in cap.out and code == 1
+    assert ai.calls == 1 and "spend cap $0.00 reached" in cap.err and code == 1
 
 
 def test_overload_retried_then_skipped(run):
@@ -150,3 +150,63 @@ def test_local_model_needs_no_yes(run, monkeypatch):
     monkeypatch.setattr(batch, "analyze_document", fake)
     code, cap = run(None, "--model", "ollama:qwen", "--limit", "1")
     assert code == 0 and calls == [1] and "local model, no API cost" in cap.out
+
+
+def test_cache_hits_when_responding_model_differs(run, db):
+    r = resp(clean_report())
+    r.model = "claude-opus-5-5-20261001"
+    ai = FakeAnthropic(r)
+    run(ai, "--yes", "--municipality", "Alpha")
+    s = Store(db)
+    rep = s.latest_report(mk("a.pdf").url, "claude-opus-5-5", PROMPT_VERSION)
+    s.close()
+    assert rep["responding_model"] == "claude-opus-5-5-20261001"
+    code, cap = run(ai, "--yes", "--municipality", "Alpha")
+    assert ai.calls == 1 and "0 analysed, 1 cached" in cap.out
+
+
+def test_eval_cached_hits_when_responding_model_differs(tmp_path, db):
+    from rg2watch.config import Config
+    from rg2watch.evaluate import run_eval
+
+    pdf = make_pdf(tmp_path / "f.pdf")
+    s = Store(tmp_path / "e.sqlite")
+    cfg = Config()
+    ai = FakeAnthropic(resp(clean_report()))
+    ai.reply.model = "other-snapshot"
+    import io
+    labels = [{"file": "f.pdf", "expect": {}}]
+    run_eval(labels, tmp_path, s, ai, cfg, cached=False, out=io.StringIO())
+    res = run_eval(labels, tmp_path, s, None, cfg, cached=True, out=io.StringIO())
+    s.close()
+    assert "f.pdf" in res["files"] and not res["errors"]
+
+
+def test_blocked_downloads_stop_batch(run, monkeypatch):
+    from rg2watch.rik_client import RikBlocked
+
+    def boom(*a):
+        raise RikBlocked("403")
+    monkeypatch.setattr(batch, "fetch_pdf", boom)
+    code, cap = run(FakeAnthropic(resp(clean_report())), "--yes")
+    assert code == 1 and "3 downloads in a row" in cap.err and "2 failed" in cap.out
+
+
+def test_bad_requests_stop_batch(run):
+    ai = FakeAnthropic(api_error(anthropic.BadRequestError, 400))
+    code, cap = run(ai, "--yes")
+    assert ai.calls == 3 and code == 1 and "bad requests" in cap.err
+
+
+def test_cap_checked_before_retry(run, monkeypatch):
+    err = api_error(anthropic.InternalServerError, 529)
+    err.cost_usd = 1.0
+    code, cap = run(FakeAnthropic(err), "--yes", "--max-usd", "0.5")
+    assert code == 1 and "spend cap" in cap.err
+
+
+def test_retry_wait_capped(run, monkeypatch):
+    monkeypatch.setattr(batch, "MAX_WAIT_S", 15)
+    ai = FakeAnthropic(api_error(anthropic.InternalServerError, 529))
+    code, cap = run(ai, "--yes")
+    assert code == 1 and ai.calls == 2 and "still busy" in cap.err

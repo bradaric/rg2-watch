@@ -1,4 +1,5 @@
 """Golden-set evaluation: analyse labelled local PDFs and score each rule against hand labels."""
+import dataclasses
 import json
 import logging
 from pathlib import Path
@@ -125,7 +126,8 @@ def run_eval(labels: list[dict], pdf_dir: Path, store: Store, client, cfg: Confi
                     break
                 tiles = render_tiles(path)
                 result = analyze_document(tiles, client, cfg)
-                store.save_analysis(doc.url, result, PROMPT_VERSION)
+                store.save_analysis(doc.url, dataclasses.replace(result, model=stored_model(cfg.model)),
+                                    PROMPT_VERSION)
                 cost += result.cost_usd
                 report = result.report
             found = evaluate_report(report, doc, cfg)

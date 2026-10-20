@@ -1,10 +1,12 @@
 """`analyze --parent`: re-analyse stored RG-2 forms (second opinions), spend recorded under adhoc."""
+import dataclasses
 import hashlib
 import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import anthropic
 import httpx
 
 from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
@@ -14,9 +16,9 @@ from .evaluate import TOKENS_PER_TILE, count_tiles, usd_for
 from .fetch import fetch_pdf
 from .models import Doc
 from .names import resolve_municipalities
-from .pipeline import GLOBAL_ERRORS, PROMPT_VERSION, _is_overload, _short
+from .pipeline import BAD_REQUEST_GLOBAL, DOWNLOAD_BLOCKED_PAUSE_AFTER, GLOBAL_ERRORS, PROMPT_VERSION, _is_overload, _short
 from .render import RenderError, render_tiles
-from .rik_client import RikClient, RikError
+from .rik_client import RikBlocked, RikClient, RikError
 from .rules import evaluate_report
 from .store import Store, _doc
 
@@ -24,6 +26,7 @@ log = logging.getLogger("rg2watch.batch")
 ADHOC = "adhoc"  # parent that `analyze` records its spend under
 BACKOFF_S = (10, 60)  # waits before the retries of one form
 ASSUMED_TILES = 4  # per form whose PDF is not cached yet (estimate only)
+MAX_WAIT_S = 1800  # cumulative overload backoff per batch before giving up
 _sleep = time.sleep
 
 
@@ -114,12 +117,16 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
               max_usd: float, out, err) -> dict:
     """Analyse each form once, one at a time; returns analysed/cached/failed counts, spend, stopped."""
     model = stored_model(cfg.model)
-    res = {"analysed": 0, "cached": 0, "failed": 0, "cost_usd": 0.0, "stopped": None}
+    res = {"analysed": 0, "cached": 0, "failed": 0, "cost_usd": 0.0, "stopped": None,
+           "unrecorded": 0}
+    blocked = bad = 0  # consecutive download blocks / distinct forms rejected with 400
+    waited = 0
 
     def record(doc: Doc, save) -> None:
         try:
             save()
         except Exception:
+            res["unrecorded"] += 1
             log.error("spend of the analysis of %s could not be recorded", doc.url, exc_info=True)
 
     for doc in docs:
@@ -132,16 +139,15 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
             continue
         if res["cost_usd"] >= max_usd:
             res["stopped"] = f"spend cap ${max_usd:.2f} reached"
-            print(f"{res['stopped']}: stopping", file=out)
+            print(f"stopping: {res['stopped']}", file=err)
             break
         result = None
         for attempt in range(len(BACKOFF_S) + 1):
             try:
                 path = fetch_pdf(rik, doc.url, cache_dir)
+                blocked = 0
                 result = analyze_document(render_tiles(path), ai, cfg)
-                break
-            except GLOBAL_ERRORS as exc:
-                res["stopped"] = f"API refused the request ({type(exc).__name__}): {exc}"
+                bad = 0
                 break
             except Exception as exc:
                 cost = getattr(exc, "cost_usd", 0.0)
@@ -149,8 +155,28 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
                     res["cost_usd"] += cost
                     record(doc, lambda: store.save_failed_analysis(
                         doc.url, model, PROMPT_VERSION, cost, str(exc)[:200], parent=ADHOC))
+                if isinstance(exc, GLOBAL_ERRORS):
+                    res["stopped"] = f"API refused the request ({type(exc).__name__}): {exc}"
+                    break
+                if isinstance(exc, RikBlocked):
+                    blocked += 1
+                    if blocked >= DOWNLOAD_BLOCKED_PAUSE_AFTER:
+                        res["stopped"] = f"RIK blocked {blocked} downloads in a row: {_short(exc)}"
+                elif isinstance(exc, anthropic.BadRequestError):
+                    bad += 1
+                    if bad >= BAD_REQUEST_GLOBAL:
+                        res["stopped"] = f"{bad} forms in a row rejected as bad requests: {_short(exc)}"
+                if res["stopped"]:
+                    break
                 if _is_overload(exc) and attempt < len(BACKOFF_S):
+                    if res["cost_usd"] >= max_usd:
+                        res["stopped"] = f"spend cap ${max_usd:.2f} reached"
+                        break
+                    if waited + BACKOFF_S[attempt] > MAX_WAIT_S:
+                        res["stopped"] = "API still busy after 30 min of waiting"
+                        break
                     log.warning("%s: %s; retrying in %d s", label, _short(exc), BACKOFF_S[attempt])
+                    waited += BACKOFF_S[attempt]
                     _sleep(BACKOFF_S[attempt])
                     continue
                 if not isinstance(exc, (RikError, httpx.HTTPError, RenderError, AnalysisError,
@@ -166,7 +192,10 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
             continue
         res["cost_usd"] += result.cost_usd
         res["analysed"] += 1
-        record(doc, lambda: store.save_analysis(doc.url, result, PROMPT_VERSION, parent=ADHOC))
+        # keyed by the requested model so the cache lookup hits; the responding one stays in the report
+        stored = dataclasses.replace(result, model=model,
+                                     report={**result.report, "responding_model": result.model})
+        record(doc, lambda: store.save_analysis(doc.url, stored, PROMPT_VERSION, parent=ADHOC))
         print(f"{label} | {model} | ${result.cost_usd:.3f}", file=out)
         _print_findings(result.report, doc, cfg, out)
     return res
