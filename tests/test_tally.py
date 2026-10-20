@@ -282,9 +282,15 @@ def test_hero_markup_labelled_and_safe():
     for text in ("Општина", "Обухваћени записници", "Приказ бројева", "Режим презентације",
                  "Излаз (Esc)", "Излазност", "Обрађена бирачка места", "Записници", "Важећи гласови"):
         assert text in html
-    assert "изабраних записника допринело је збировима гласова" in html
+    assert "само записници без уочених проблема (без оних за проверу)" in html
+    assert "са исправкама (RG-7)" in html
+    assert "оригинални бројеви (RG-2)" in html
+    assert "разлика (са исправкама − оригинални)" in html
+    assert "#hs-valid{white-space:pre-line}" in html
+    assert "У збиру: " in html
+    assert "Ван заједничког збира: " in html
     assert "Неусаглашена разлика излазности" in html
-    assert "прихватљиво само са исправкама" in html and "прихватљиво само како је предато" in html
+    assert "само са исправкама: " in html and "само оригинално: " in html
 
 
 def test_hero_warning_translates_every_current_tally_warning_and_preserves_unknown_text():
@@ -667,8 +673,7 @@ assert.equal(csvValue(csv, "Reconciled valid"), "100");
 assert.equal(csvValue(csv, "1 · Листа А votes"), "60");
 assert.equal(csvValue(csv, "Unreconciled turnout gap (signed)"), "0");
 renderHero();
-assert(els["hs-valid"].textContent.includes("Неусаглашена разлика излазности: 0."));
-assert(els.herofoot.children[0].includes("opaque-model-v1"));
+assert(els["hs-valid"].textContent.includes("Неусаглашена разлика излазности: 0"));
 assert(els.herotitle.textContent.includes("Избори Ћирилица"));
 assert.equal(slots[0].nm.textContent, "Листа А");
 assert.equal(slots[1].nm.textContent, "Листа 2");
@@ -692,10 +697,47 @@ for (const [warning, expected] of renderedWarnings) {
   assert(!els.heronames.textContent.includes(warning));
 }
 T.scope_note = null;
+r = row([60, 40], [55, 45]);
+r.counted = 15; r.clean = 10; r.excluded = 5;
+r.all.vote_forms = 6; r.cl.vote_forms = 6;
+r.all.invalid = 9; r.all.withheld_valid = 11; r.all.voted = 120;
 setData(r);
+els.tview.value = "corrected";
+els.tmode.value = "all";
+renderHero();
+assert(els.herotitle.textContent.endsWith(" — са исправкама (RG-7)"));
+assert.equal(els["hs-forms"].textContent, "10 без уочених проблема · 5 за проверу");
+assert.deepEqual(els["hs-valid"].textContent.split("\n"), [
+  "Неважећи: 9",
+  "Није урачунато: 11 важећих гласова — подаци по листама нису потпуни или усаглашени",
+  "Неусаглашена разлика излазности: +11",
+  "У збиру: 6 од 15 записника",
+]);
+assert(els.herofoot.children[0].includes("НЕЗВАНИЧНО — Скенирани записници обрађени помоћу АИ; ово нису резултати РИК-а. Стање у "));
+assert(els.herofoot.children[0].includes("20:00"));
+for (const absent of ["opaque-model-v1", "Сви обрађени записници.", "Са исправкама RG-7.", "(време у Србији)", "можда застарели"])
+  assert(!els.herofoot.children[0].includes(absent));
 els.tmode.value = "cl";
 renderHero();
-assert(els["hs-forms"].textContent.includes("чистих"));
+assert.equal(els["hs-forms"].textContent, "без уочених проблема · 5 за проверу изостављено");
+assert(els["hs-valid"].textContent.split("\n").includes("У збиру: 6 од 10 записника"));
+
+els.tview.value = "filed";
+r.fclean = 8; r.fexcluded = 7; r.fcl = {...r.fcl}; r.fall.vote_forms = 4; r.fcl.vote_forms = 3;
+els.tmode.value = "all";
+renderHero();
+assert.equal(els.herotitle.textContent, "Све општине — Избори Ћирилица");
+assert.equal(els["hs-forms"].textContent, "8 без уочених проблема · 7 за проверу");
+assert(els["hs-valid"].textContent.split("\n").includes("У збиру: 4 од 15 записника"));
+els.tmode.value = "cl";
+renderHero();
+assert.equal(els["hs-forms"].textContent, "без уочених проблема · 7 за проверу изостављено");
+assert(els["hs-valid"].textContent.split("\n").includes("У збиру: 3 од 8 записника"));
+assert(!els.herofoot.children[0].includes("оригинални"));
+
+r = row([60, 40], null);
+setData(r);
+els.tview.value = "corrected";
 els.tmode.value = "all";
 let gapCol = resultCols("all").find(x => x.t === "Unreconciled turnout gap (signed)");
 assert.equal(gapCol.f(gapCol.v(vrow(r))), "0");
@@ -731,13 +773,44 @@ assert(!slots[0].val.textContent.includes("NaN"));
 
 els.tview.value = "diff";
 r = row([60, 40], [55, 45]);
+r.clean = 10; r.fclean = 8; r.excluded = 5; r.fexcluded = 7;
+r.pair.all = {...r.pair.all, pair_selected: 13, pair_vote_forms: 5, pair_not_contributing: 8,
+  corrected_only_vote_forms: 1, filed_only_vote_forms: 3, in: 2, out: 3};
+r.pair.cl = {c: totals(100, [60, 40]), f: totals(100, [55, 45]), in: 4, out: 1,
+  pair_selected: 6, pair_vote_forms: 2, pair_not_contributing: 4,
+  corrected_only_vote_forms: 1, filed_only_vote_forms: 2};
+for (const p of [r.pair.all, r.pair.cl]) {
+  p.c.invalid = 10; p.f.invalid = 3;
+  p.c.withheld_valid = 2; p.f.withheld_valid = 10;
+  p.c.voted = 107; p.f.voted = 100;
+}
 setData(r);
+els.tmode.value = "all";
 renderHero();
-assert(els["hs-valid"].textContent.includes("изабраних записника допринело је збировима гласова у оба приказа"));
+assert(els.herotitle.textContent.endsWith(" — РАЗЛИКА (са исправкама RG-7 − оригинални RG-2)"));
+assert.equal(els["hs-forms"].textContent, "промене броја: без уочених проблема / за проверу");
+assert.deepEqual(els["hs-valid"].textContent.split("\n"), [
+  "Разлика неважећих: +7",
+  "У оба приказа у збиру: 5 од 13 упарених записника",
+  "Ван заједничког збира: 8 (само са исправкама: 1; само оригинално: 3; ни у једном: 4)",
+  "Разлика неурачунатих важећих гласова: −8",
+  "Разлика неусаглашене излазности: ·",
+]);
+assert.equal(els.heronote.textContent, "Ставке присутне само у приказу са исправкама / оригиналном приказу: +2 / −3; неупарене ставке су изостављене (можда се променила читљивост, избор записника без уочених проблема или прихватљивост усаглашених гласова).");
+els.tmode.value = "cl";
+renderHero();
+assert.deepEqual(els["hs-valid"].textContent.split("\n").slice(0, 3), [
+  "Разлика неважећих: +7",
+  "У оба приказа у збиру: 2 од 6 упарених записника",
+  "Ван заједничког збира: 4 (само са исправкама: 1; само оригинално: 2; ни у једном: 1)",
+]);
+assert(els["hs-valid"].textContent.includes("Разлика неурачунатих важећих гласова: −8"));
+assert(els["hs-valid"].textContent.includes("Разлика неусаглашене излазности: ·"));
+els.tmode.value = "all";
 assert(slots[0].val.textContent.includes("п. п."));
 const diffCols = resultCols("all");
 const selected = diffCols.find(x => x.t === "Selected in both views");
-assert.equal(selected.f(selected.v(vrow(r))), "1");
+assert.equal(selected.f(selected.v(vrow(r))), "13");
 gapCol = diffCols.find(x => x.t === "Unreconciled turnout gap (difference)");
 assert.equal(gapCol.f(gapCol.v(vrow(r))), "·");
 csv = tallyCsv();
@@ -756,6 +829,7 @@ zero.counted = zero.clean = zero.excluded = zero.fclean = zero.fexcluded = 0;
 setData(zero);
 renderHero();
 assert.equal(els["hv-turn"].textContent, "-");
+assert.equal(els.herotitle.textContent, "");
 assert.equal(els["hs-valid"].textContent, "");
 assert(els.heronote.textContent.includes("Још нема обрађених записника"));
 assert(slots.every(x => x.row.hidden));
@@ -805,7 +879,13 @@ renderHero();
 assert(els.heronames.textContent.includes("future <opaque> warning"));
 S = {watching: false, ts: 0};
 renderHero();
-assert(els.herofoot.children[1].textContent.includes("можда застарели"));
+assert.equal(els.herofoot.children.length, 1);
+assert(!String(els.herofoot.children[0]).includes("можда застарели"));
+setHero(true);
+renderHero();
+assert.equal(els.herofoot.children.length, 1);
+assert(!String(els.herofoot.children[0]).includes("можда застарели"));
+setHero(false);
 S = null;
 
 els.tview.value = "corrected";
