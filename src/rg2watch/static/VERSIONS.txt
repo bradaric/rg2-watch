@@ -1,0 +1,4 @@
+# Vendored from the official npm registry tarballs (sha512 dist.integrity verified before extraction).
+package=datatables.net version=2.3.8 file=dataTables.min.js sha256=14003b703de0e0019277baff32ce03a0b8a1aba6a97c86bb4b67d430336085de source=https://registry.npmjs.org/datatables.net/-/datatables.net-2.3.8.tgz
+package=datatables.net-dt version=2.3.8 file=dataTables.dataTables.min.css sha256=f64f07b501d8f3388e58225e5f6546b2c853a706fd8d0bbd5701e7042b3d2026 source=https://registry.npmjs.org/datatables.net-dt/-/datatables.net-dt-2.3.8.tgz
+package=jquery version=3.7.1 file=jquery.min.js sha256=fc9a93dd241f6b045cbff0481cf4e1901becd0e12fb45166a8f17f95823f0b1a source=https://registry.npmjs.org/jquery/-/jquery-3.7.1.tgz

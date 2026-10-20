@@ -1,0 +1,118 @@
+# Base URL of the RIK site (override for replay/testing)
+base_url = "https://www.rik.parlament.gov.rs"
+# SQLite database path
+db_path = "data/rg2watch.sqlite"
+# Global request cap (requests/second), shared by all lanes
+max_rps = 2.0
+# Seconds between cheap count probes (a new probe round starts this long after the previous one ended)
+probe_interval_s = 30
+# Seconds between sweeps of rare document types
+rare_interval_s = 60
+# Seconds between the starts of full safety sweeps (a long sweep is followed straight by the next)
+safety_sweep_interval_s = 300
+# Max listing requests per tick shared by all lanes, in priority order: rare sweeps, removal
+# re-checks, watchlist, probe, missing stations, safety sweep. Rare-type count checks are not
+# charged and always run every rare_interval_s. Minimum 5. (Old name: sweep_pages_per_tick.)
+tick_request_budget = 40
+# Seconds between full re-sweeps of every non-empty rare type (finds count-neutral replacements)
+rare_resweep_interval_s = 300
+# Share of the budget held back from watchlist/probe for the safety sweep (first) and the
+# missing-station lane while they have work; unused reserve goes back to the probe (range 0.0-0.9)
+reserved_share = 0.25
+# Pause all lanes this long after repeated 401/403 answers from RIK
+blocked_pause_s = 300
+# Push one "[rg2-watch] RIK unreachable/blocking" alert after this long without a successful request
+blind_alert_s = 300
+# Stations missing from a sweep before it is treated as suspicious
+missing_station_threshold = 50
+# Max per-station re-queries per tick for stations still without an RG-2
+missing_max_per_tick = 10
+# Do a full RG-2 sweep instead of per-municipality probes when probing would cost as much
+probe_cost_guard = true
+# Municipalities/stations to flag with priority
+watchlist = []
+# Watch only these municipalities (Cyrillic or Latin names, substring match; `watch --only` wins); [] = all
+only_municipalities = []
+# ntfy server and topic (topic can also come from env RG2W_NTFY_TOPIC, which wins)
+ntfy_url = "https://ntfy.sh"
+# ntfy_topic = "my-topic"
+# Seconds between MEDIUM-severity digests
+medium_digest_s = 600
+# HIGH findings are pushed one by one, at most high_push_max per high_push_window_s seconds; the
+# rest roll into one "[HIGH] N findings" digest (same compact format), sent when the window allows.
+# Status alerts (RIK unreachable, analysis paused, spend cap) are never held back by that backlog.
+high_push_max = 10
+high_push_window_s = 300
+# More than this many replaced documents in one sweep: ONE "[rg2-watch] mass replacement" alert,
+# and those D2 findings go to the digest instead of individual pushes (RIK re-upload?)
+mass_replace_threshold = 20
+# Per-request timeout in seconds
+request_timeout_s = 20.0
+# Max size of a downloaded PDF in bytes
+max_pdf_bytes = 50000000
+
+# --- Claude vision analysis of RG-2 forms (needs ANTHROPIC_API_KEY or an ant profile) ---
+# Off by default: it calls a paid API. `watch --analyze` turns it on for one run.
+analysis_enabled = false
+# Model and effort for the forensic check (Haiku 5.5 default after calibration, 20/10/2026:
+# same findings as Sonnet 5.5 on 72 RG-2s at 1/12 of the cost)
+model = "claude-haiku-5-5"
+effort = "high"
+# Local model instead: model = "ollama:qwen3.8:27b-64k" (free, no API key; or `--model` on
+# eval/analyze/watch). Settings for that backend:
+ollama_url = "http://localhost:11434"
+ollama_num_ctx = 65536
+ollama_timeout_s = 900
+# Server-side refusal fallback to another model
+fallbacks = true
+# Analysis pauses once the recorded analysis + explicit case-drafting spend of this election
+# reaches this (USD); eval and ad-hoc `analyze` spend are counted separately. Concurrent in-flight
+# calls can exceed the cap slightly.
+max_spend_usd = 60.0  # a parliamentary election (~8,300 forms) is estimated at ~$40 on Haiku
+# Spend is priced by model from a built-in table (USD per million tokens; also with `--model`):
+# Haiku 5.5 0.10/0.50, Sonnet 5.5 2/10, Opus 5.5 4/20, local ollama 0/0. Source: Anthropic list
+# price as of 20/10/2026. Haiku's price rises above 100k-token prompts (ours are ~20k).
+# Uncomment to override the table; REQUIRED for a model that is not in it (else analysis is refused).
+# price_in_per_mtok = 0.10
+# price_out_per_mtok = 0.50
+# Background analysis worker threads
+analysis_workers = 4
+# Seconds between rebuilds of the local browse page (index.html in <db dir>/<db stem>/) while watching; 0 = off
+browse_interval_s = 120
+
+# Local web server of `watch` for the browse page (127.0.0.1 only); 0 = off
+serve_port = 8770
+# Optional manual case publication. Download an OAuth "Desktop app" client JSON from Google Cloud,
+# keep it outside version control, set this path, then run `rg2watch drive-auth --config ...` once.
+# The app requests only drive.file and stores the operator account token locally (mode 0600).
+# drive_client_secrets = "data/google-oauth-client.json"
+# `rg2watch drive-root` derives a shared private root-state path from this token path.
+drive_token_path = "data/drive-token.json"
+# PDF downloads have their own rate limiter (requests/second), on top of max_rps for listings
+download_max_rps = 0.5
+# Pause all analysis this long after a key/permission/model/request error (then one probe form)
+analysis_pause_s = 600
+# On shutdown, wait this long for in-flight analyses so their cost is recorded
+stop_wait_s = 80
+# Rule thresholds: turnout (A6), one list's share of valid votes (A7), assisted voters share (A8),
+# minimum registered/valid voters for ratio rules, named committee rows without signature (V4)
+turnout_high = 0.95
+leader_share_high = 0.90
+assisted_share = 0.05
+min_registered_for_ratio = 50
+unsigned_rows_threshold = 2
+# High outside-station voting (A9): share of voted. Initial values, to be tuned after calibration.
+# outside_share_medium raised from 5% to 10% by operator decision (2026-10-19).
+outside_share_high = 0.15
+outside_share_medium = 0.10
+# Large correction (V12): original vs final value differ by at least this many, and by this share of the original
+large_correction_abs = 5
+large_correction_share = 0.3
+
+# Tally scope per election: "national" (one ballot everywhere) or "municipal" (own lists per
+# municipality). Default from RIK's election type: 2 national, 3 municipal, else municipal.
+# tally_scope = {"779676" = "national"}
+# List names, by hand (never read from the scans): national = list, municipal = per municipality
+# [list_names]
+# "779676" = ["List A", "List B"]
+# "662405" = {"Beograd" = ["List A", "List B"]}
