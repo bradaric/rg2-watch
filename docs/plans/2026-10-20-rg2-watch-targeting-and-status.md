@@ -64,6 +64,15 @@ Builds on the browse page (docs/plans/2026-10-20-rg2-watch-browse-page.md).
 - `rg2watch browse` (no watcher) writes `data.js` and a status file saying "watcher not running",
   with the DB-derived parts filled.
 
+## Table library (decided 20/10/2026)
+
+The forms table uses DataTables 2.x + jQuery 3.7.x, vendored: exact versions downloaded once from
+the official npm tarballs, sha256 recorded in `src/rg2watch/static/VERSIONS.txt`, committed under
+`src/rg2watch/static/`, copied next to `index.html` on build (only when changed). No CDN, no
+external requests from the page. `deferRender`, paging (default 100 rows), child rows for older
+versions and second opinions, custom filters via `DataTable.ext.search`, `stateSave` for filters.
+All data cells rendered with `DataTable.render.text()` (escaped); no HTML from data.
+
 ## Browse page review fixes (fold into C + D)
 
 From the review of 09d953d:
