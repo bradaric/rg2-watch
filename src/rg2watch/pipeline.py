@@ -118,9 +118,9 @@ class AnalysisPipeline:
         if self.backlog:
             n = self.store.requeue_skipped(self.parent, self.municipalities)
             log.info("--analyze-backlog: %d form(s) seen before analysis was enabled queued", n)
-        n7 = self.store.requeue_rg7(self.parent, self.municipalities)
+        n7 = self.store.requeue_rg7(self.parent, self.municipalities, RG7_PROMPT_VERSION)
         if n7:
-            log.info("%d RG-7 decision(s) never analysed queued", n7)
+            log.info("%d RG-7 decision(s) without an %s analysis queued", n7, RG7_PROMPT_VERSION)
         for doc in self.store.requeue_running(self.parent, self.municipalities):
             self._emit([Finding("X2", "LOW", doc, f"analysis failed after {MAX_ANALYSIS_ATTEMPTS} "
                                 "attempts: interrupted every time (crash or shutdown)")])
@@ -264,6 +264,10 @@ class AnalysisPipeline:
             return None
 
         rg7 = doc.doc_type in RG7_TYPES
+        if not rg7 and doc.doc_type not in ANALYSED_TYPES:  # an RG-7 never takes the RG-2 path
+            self._permanent(doc, "X1", f"unexpected document type {doc.doc_type}",
+                            ValueError("not an analysable type"))
+            return None
         kind, version = ("rg7", RG7_PROMPT_VERSION) if rg7 else ("rg2", PROMPT_VERSION)
         if self._stop.is_set():  # shutting down: do not start a billed call
             self.store.mark_analysis(doc.url, "new", refund=True)
@@ -312,6 +316,10 @@ class AnalysisPipeline:
 
         try:
             if rg7:
+                gone = self.store.delete_rg2_findings(doc.url)  # left by an analysis with the RG-2 prompt
+                if gone:
+                    log.warning("removed %d RG-2 finding(s) from RG-7 %s (analysed with the wrong prompt)",
+                                gone, doc.url)
                 rg2 = self.store.station_rg2_report(self.parent, doc.station_key, RG2_OF_RG7[doc.doc_type],
                                                     stored_model(self.cfg.model), PROMPT_VERSION)
                 found = evaluate_rg7(result.report, doc, self.cfg, rg2, self._prior_decisions(doc))

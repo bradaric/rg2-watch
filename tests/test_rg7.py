@@ -483,3 +483,48 @@ def test_page_shows_which_model_read_a_decision(tmp_path):
     put(s, x, NEGOTIN, model="some-other-model", version=RG7_PROMPT_VERSION)
     r7 = build_data(s, tmp_path, cfg=Config(model=M))["rows"][0]["r7"]
     assert r7[0]["ch"] is None and r7[0]["by"] == ["some-other-model"]
+
+
+def test_rg7_analysed_with_the_rg2_prompt_is_reread_and_bogus_findings_removed(tmp_path, caplog):
+    e = Env(tmp_path, rg7_reply(NEGOTIN))
+    s = Store(":memory:")
+    s.upsert_election(ELECTION)
+    P = ELECTION.parent
+    bad, ok, failed, rg2 = (pdoc("a.pdf", dt=20, no="1"), pdoc("b.pdf", dt=19, no="2"),
+                            pdoc("c.pdf", dt=21, no="3"), pdoc("d.pdf", dt=6, no="4"))
+    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", x) for x in (bad, ok, failed, rg2)])
+    s.enable_analysis(P)
+    # a half-applied run: the RG-7 went through the RG-2 prompt and was marked done
+    s.save_analysis(bad.url, AnalysisResult(clean_report(), 1, 1, 0.0, "claude-opus-5-5", "stop"), PROMPT_VERSION)
+    s.save_analysis(ok.url, AnalysisResult(NEGOTIN, 1, 1, 0.0, "claude-opus-5-5", "stop"), RG7_PROMPT_VERSION)
+    for x in (bad, ok, rg2):
+        s.mark_analysis(x.url, "done")
+    s.mark_analysis(failed.url, "failed", "boom")  # permanently failed, no retry time
+    for rule, sev in (("V3", "HIGH"), ("V9", "HIGH"), ("D1", "MEDIUM"), ("R3", "LOW"), ("X1", "LOW")):
+        s.add_finding(P, Finding(rule, sev, bad, rule), bad.url)
+    s.add_finding(P, Finding("V3", "HIGH", rg2, "real"), rg2.url)
+    e.store = s
+    e.pipe = AnalysisPipeline(e.rik, s, e.notifier, e.ai, e.cfg, e.on_findings, tmp_path / "c", clock=e.clock)
+    e.pipe._stop.set()
+    e.pipe.start()
+    assert e.status(bad.url)[0] == "new" and e.status(failed.url) == ("new", 0)
+    assert e.status(ok.url)[0] == "done" and e.status(rg2.url)[0] == "done"  # r1-read and RG-2 left alone
+    e.pipe._stop.clear()
+    with caplog.at_level("WARNING", logger="rg2watch.pipeline"):
+        assert e.drain() == 2
+    rules = lambda d: sorted(r[0] for r in s._db.execute(
+        "SELECT rule FROM findings WHERE document_id=(SELECT id FROM documents WHERE url=?)", (d.url,)))
+    assert rules(bad) == ["D1", "R1", "R3", "X1"] and rules(rg2) == ["V3"]  # R1 from the re-read
+    assert "removed 2 RG-2 finding(s)" in caplog.text
+    prompts = {r[0] for r in s._db.execute(
+        "SELECT prompt_version FROM analyses a JOIN documents d ON d.id=a.document_id WHERE d.url=?", (bad.url,))}
+    assert prompts == {PROMPT_VERSION, RG7_PROMPT_VERSION}
+
+
+def test_rg7_never_takes_the_rg2_path(tmp_path):
+    e = Env(tmp_path, _rg2_reply())  # the reply is an RG-2 report: an RG-7 must be rejected, not stored as one
+    d = pdoc("a.pdf", dt=20)
+    e.publish(d)
+    e.drain()
+    assert e.status(d.url)[0] != "done"
+    assert e.store._db.execute("SELECT COUNT(*) FROM analyses WHERE prompt_version=?", (PROMPT_VERSION,)).fetchone()[0] == 0

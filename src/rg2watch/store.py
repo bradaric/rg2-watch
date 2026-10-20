@@ -393,16 +393,29 @@ class Store:
         return {"docs": docs, "done": ast.get("done", 0), "failed": ast.get("failed", 0) - retrying,
                 "skipped": ast.get("skipped", 0), "findings": sev}
 
-    def requeue_rg7(self, parent: str, municipalities: Collection[str] | None = None) -> int:
-        """Queue active RG-7 decisions never analysed (recorded before RG-7 analysis existed or
-        before analysis was enabled): they are few and cheap, so no opt-in is needed."""
+    def requeue_rg7(self, parent: str, municipalities: Collection[str] | None = None,
+                    prompt_version: str = "r1") -> int:
+        """Queue active RG-7 decisions that have no successful analysis with `prompt_version`: never
+        analysed (recorded before RG-7 analysis existed or before analysis was enabled), or marked
+        done/failed after an analysis with another (the RG-2) prompt. They are few and cheap, so no
+        opt-in is needed. Documents already queued, running or retrying are left alone."""
         where, extra = _in_municipalities(municipalities)
         return self._write(
-            "UPDATE documents SET analysis_status='new' WHERE parent=? AND active=1 "
+            "UPDATE documents SET analysis_status='new', analysis_attempts=0, analysis_next_at=NULL, "
+            "analysis_error=NULL WHERE parent=? AND active=1 "
             f"AND doc_type IN ({','.join(map(str, RG7_TYPES))}) "
-            "AND (analysis_status IS NULL OR analysis_status='skipped') AND NOT EXISTS "
-            f"(SELECT 1 FROM analyses a WHERE a.document_id=documents.id AND a.status='done'){where}",
-            (parent, *extra)).rowcount
+            "AND (analysis_status IS NULL OR analysis_status IN ('skipped', 'done') OR "
+            "(analysis_status='failed' AND analysis_next_at IS NULL)) AND NOT EXISTS "
+            "(SELECT 1 FROM analyses a WHERE a.document_id=documents.id AND a.status='done' "
+            f"AND a.prompt_version=?){where}",
+            (parent, prompt_version, *extra)).rowcount
+
+    def delete_rg2_findings(self, url: str) -> int:
+        """Remove the V/P/A findings of a document: on an RG-7 they can only come from an analysis
+        with the wrong (RG-2) prompt. D, R and X findings stay."""
+        return self._write(
+            "DELETE FROM findings WHERE document_id=(SELECT id FROM documents WHERE url=?) "
+            "AND substr(rule, 1, 1) IN ('V', 'P', 'A')", (url,)).rowcount
 
     def requeue_skipped(self, parent: str | None = None,
                         municipalities: Collection[str] | None = None) -> int:
