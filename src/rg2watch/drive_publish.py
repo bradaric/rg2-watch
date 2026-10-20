@@ -54,7 +54,11 @@ class GoogleDriveAdapter:
         self.service = service
 
     def generate_ids(self, count: int) -> list[str]:
-        data = self.service.files().generateIds(count=count, space="drive", type="files").execute()
+        try:
+            data = self.service.files().generateIds(
+                count=count, space="drive", type="files").execute()
+        except Exception as exc:
+            raise DriveError("Drive file ID preallocation did not complete; retry safely") from exc
         ids = data.get("ids", [])
         if len(ids) != count:
             raise DriveError("Drive did not preallocate the requested file IDs")

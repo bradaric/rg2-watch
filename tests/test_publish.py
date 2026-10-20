@@ -428,6 +428,41 @@ def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_
         jobs.close()
 
 
+def test_publication_job_exposes_only_sanitized_generate_ids_error(tmp_path):
+    from rg2watch.drive_publish import DriveError, GoogleDriveAdapter
+
+    class FailingRequest:
+        def execute(self):
+            raise RuntimeError("provider debug: bearer secret-token-value")
+
+    class FilesService:
+        def files(self):
+            return self
+
+        def generateIds(self, **kwargs):
+            return FailingRequest()
+
+    class Publisher:
+        def publish(self, url, summary):
+            GoogleDriveAdapter(FilesService()).generate_ids(3)
+
+    _, cases, _ = handoff(tmp_path)
+    jobs = PublicationJobs(cases, Publisher(), workers=1)
+    try:
+        job_id = jobs.submit_publish(URL, "Јавни опис", True)
+        for _ in range(100):
+            result = jobs.job(job_id)
+            if result["state"] != "running":
+                break
+            time.sleep(.01)
+        assert result == {"id": job_id, "state": "error", "kind": "publication",
+                          "error": "Drive file ID preallocation did not complete; retry safely"}
+        assert "provider debug" not in json.dumps(result)
+        assert "secret-token-value" not in json.dumps(result)
+    finally:
+        jobs.close()
+
+
 def test_pending_publication_status_exposes_frozen_summary_for_explicit_retry(tmp_path):
     store, cases, cache = handoff(tmp_path)
     pending = cases.claim(URL, "Замрзнути јавни опис")

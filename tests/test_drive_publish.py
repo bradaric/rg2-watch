@@ -421,6 +421,25 @@ class PermissionRequest:
         return self.payload
 
 
+def test_adapter_sanitizes_generate_ids_provider_failure():
+    class FailingRequest:
+        def execute(self):
+            raise RuntimeError("provider debug: bearer secret-token-value")
+
+    class FilesService:
+        def files(self):
+            return self
+
+        def generateIds(self, **kwargs):
+            return FailingRequest()
+
+    with pytest.raises(DriveError) as caught:
+        GoogleDriveAdapter(FilesService()).generate_ids(1)
+    assert str(caught.value) == "Drive file ID preallocation did not complete; retry safely"
+    assert "provider debug" not in str(caught.value)
+    assert "secret-token-value" not in str(caught.value)
+
+
 class PermissionService:
     def __init__(self, by_file):
         self.by_file = by_file
