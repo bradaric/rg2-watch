@@ -47,6 +47,7 @@ OVERLOAD_ERRORS = (anthropic.RateLimitError, anthropic.InternalServerError,
 # The same errors arriving mid-stream reach us as a plain APIStatusError carrying the error type.
 _OVERLOAD_TYPES = {"rate_limit_error", "overloaded_error", "api_error"}
 OVERLOAD_RETRY_S = 120
+OVERLOAD_FORM_MAX = 10  # consecutive overload deferrals of one form before one counts as an attempt
 OVERLOAD_ALERT_AFTER = 5  # consecutive overload failures before a status alert
 _MAX_ERROR = 200
 _RENDER_LOCK = threading.Lock()  # PDFium is not thread-safe
@@ -96,6 +97,7 @@ class AnalysisPipeline:
         self._download_alerted = False
         self._download_paused_until = float("-inf")  # pipeline clock; PDFs blocked (401/403)
         self._overloads = 0  # consecutive Anthropic overload failures
+        self._form_overloads: dict[str, int] = {}  # url -> consecutive overload deferrals
         self._overloaded_since = 0.0
         self._overload_alerted = False
         self._pause_reason = ""
@@ -304,6 +306,7 @@ class AnalysisPipeline:
                 self._api_ok()
             return "api" if isinstance(exc, (AnalysisError, anthropic.APIStatusError)) else None
         self._api_ok()
+        self._form_overloads.pop(doc.url, None)
         try:  # first write after a billed call: never lose its cost
             # keyed by the requested model (cache lookups hit); the responding one stays in the report
             self.store.save_analysis(
@@ -380,8 +383,16 @@ class AnalysisPipeline:
     def _overloaded(self, doc: Doc, exc: BaseException) -> None:
         log.warning("analysis of %s deferred %d s, Anthropic busy: %s", doc.url, OVERLOAD_RETRY_S,
                     _short(exc))
-        self.store.mark_analysis(doc.url, "failed", _short(exc),
-                                 retry_at=self.clock() + OVERLOAD_RETRY_S, refund=True)
+        with self._state:
+            n = self._form_overloads[doc.url] = self._form_overloads.get(doc.url, 0) + 1
+            if n >= OVERLOAD_FORM_MAX:
+                del self._form_overloads[doc.url]
+        if n >= OVERLOAD_FORM_MAX:  # a form that never gets through still ends as X2 eventually
+            log.warning("%s deferred %d times in a row: counted as a used attempt", doc.url, n)
+            self._transient(doc, exc)
+        else:
+            self.store.mark_analysis(doc.url, "failed", _short(exc),
+                                     retry_at=self.clock() + OVERLOAD_RETRY_S, refund=True)
         with self._state:
             if self._overloads == 0:
                 self._overloaded_since = self.clock()

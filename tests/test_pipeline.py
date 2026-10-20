@@ -1148,3 +1148,21 @@ def test_status_snapshot_does_no_db_access(tmp_path):
 
     e.store.total_spend = boom
     assert e.pipe.status_snapshot()["paused"][0] == "spend cap reached"
+
+
+def test_endless_overload_of_one_form_ends_as_x2(tmp_path):
+    e = Env(tmp_path, api_error(anthropic.OverloadedError, 529))
+    d = doc()
+    e.publish(d)
+    for _ in range(9):
+        assert e.drain() == 1
+        e.clock.now += 120
+    assert e.status(d.url) == ("failed", 0)  # nine deferrals: every attempt still refunded
+    assert e.drain() == 1  # the tenth counts as a used attempt
+    assert e.status(d.url) == ("failed", 1)
+    for _ in range(40):
+        e.clock.now += 3600
+        e.drain()
+    assert e.ai.calls == 30  # 3 attempts x 10 deferrals
+    assert [f.rule for f in e.findings] == ["X2"]
+    assert e.status(d.url)[0] == "failed" and e.drain() == 0
