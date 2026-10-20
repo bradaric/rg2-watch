@@ -138,6 +138,10 @@ td.disagree{color:var(--hi);font-weight:700}
 .rv-older{display:table;margin-top:var(--s1);font-size:10px;line-height:15px}
 td .rv+.rv-older{margin-top:var(--s1)}
 .review{margin:var(--s1) 0 var(--s2);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+.casebox{margin-top:var(--s2);padding-top:var(--s2);border-top:1px solid var(--line)}
+.casebox textarea{display:block;width:min(100%,70em);min-height:9em;margin:var(--s2) 0;font:inherit}
+.casebox .publicwarn{display:block;margin:var(--s2) 0;color:var(--warn)}
+.caseout{white-space:pre-wrap;overflow-wrap:anywhere}
 .rvhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s2);margin-bottom:var(--s2)}
 .rvnote{overflow-wrap:anywhere}
 .rvctl{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
@@ -538,7 +542,71 @@ function reviewBox(r) {
     el.title = "read-only: open the page from rg2watch serve or watch to record verdicts";
   } else if (cur && cur.pending) for (const b of btns) { b.disabled = true; b.title = "saving..."; }
   ctl.append(...btns, note, msg);
-  box.append(head, ctl);
+  box.append(head, ctl, caseBox(r));
+  return box;
+}
+
+function caseFetch(path, options) {
+  return fetch(path, Object.assign({cache: "no-store", headers: {"X-RG2W": "1"}}, options || {}))
+    .then(res => res.json().catch(() => ({})).then(j => res.ok ? j : Promise.reject(new Error(j.error || "HTTP " + res.status))));
+}
+function copyButton(text) {
+  const b = mk("button", "Копирај"); b.type = "button";
+  b.onclick = () => navigator.clipboard.writeText(text).then(() => { b.textContent = "Копирано"; });
+  return b;
+}
+function publishedCase(box, data) {
+  box.replaceChildren(mk("strong", "Предмет је већ јавно објављен"));
+  const p = mk("div", null, "caseout"), a = link(data.url, data.url);
+  p.append(a, " ", copyButton(data.url));
+  const message = mk("div", data.viber_text || "", "caseout");
+  box.append(p, message, copyButton(data.viber_text || ""));
+}
+function waitCaseJob(id, box, done) {
+  caseFetch("case/jobs/" + encodeURIComponent(id)).then(j => {
+    if (j.state === "running") return setTimeout(() => waitCaseJob(id, box, done), 700);
+    if (j.state === "error") throw new Error(j.error || "job failed");
+    done(j.result);
+  }).catch(e => { box.querySelector(".rvmsg").textContent = "Грешка: " + e.message; });
+}
+function caseBox(v) {
+  const box = mk("div", null, "casebox"), msg = mk("span", null, "rvmsg");
+  box.append(msg);
+  if (!HTTP) { msg.textContent = "Објављивање је доступно само преко локалног rg2watch сервера."; return box; }
+  const controls = () => {
+    const rv = rvOf(v);
+    if (!rv || rv.v !== "escalate") { msg.textContent = "Нова објава тражи најновију одлуку escalate за ову верзију."; return; }
+    if (!v.pdf) { msg.textContent = "Нема локално кешираног PDF-а; rg2watch га неће поново преузети са РИК-а."; return; }
+    const prep = mk("button", "Припреми нацрт"); prep.type = "button";
+    const area = document.createElement("textarea"); area.hidden = true;
+    area.setAttribute("aria-label", "јавни опис предмета на српској ћирилици");
+    const label = mk("label", " Објавом фасциклу може да отвори свако са везом.", "publicwarn");
+    const confirm = document.createElement("input"); confirm.type = "checkbox"; label.prepend(confirm);
+    const publish = mk("button", "Објави јавни предмет"); publish.type = "button"; publish.hidden = true;
+    prep.onclick = () => {
+      prep.disabled = true; msg.textContent = "Припрема... Интерна напомена се шаље AI провајдеру ако је доступан.";
+      caseFetch("case/prepare", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"}, body: JSON.stringify({url: v.u})})
+        .then(j => waitCaseJob(j.job_id, box, result => {
+          area.value = result.summary || ""; area.hidden = publish.hidden = label.hidden = false;
+          msg.textContent = result.warning ? "AI нацрт није доступан: " + result.warning : "Проверите и измените нацрт пре објаве.";
+          prep.disabled = false;
+        })).catch(e => { prep.disabled = false; msg.textContent = "Грешка: " + e.message; });
+    };
+    label.hidden = true;
+    publish.onclick = () => {
+      if (!confirm.checked) { msg.textContent = "Потврдите да фасцикла постаје доступна свакоме са везом."; return; }
+      publish.disabled = true; msg.textContent = "Отпремање је у току; остале контроле остају доступне.";
+      caseFetch("case/publish", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
+        body: JSON.stringify({url: v.u, summary: area.value, confirm: true})})
+        .then(j => waitCaseJob(j.job_id, box, result => publishedCase(box, result)))
+        .catch(e => { publish.disabled = false; msg.textContent = "Грешка: " + e.message; });
+    };
+    box.append(" ", prep, area, label, publish);
+  };
+  caseFetch("case/publication?url=" + encodeURIComponent(v.u)).then(data => {
+    if (data.status === "published") publishedCase(box, data);
+    else { if (data.status && data.status !== "none") msg.textContent = "Постоји замрзнут незавршен предмет; поновите Објави са истим текстом. "; controls(); }
+  }).catch(e => { msg.textContent = "Стање објаве није доступно: " + e.message; });
   return box;
 }
 function rowOf(id) {
@@ -641,6 +709,7 @@ function child(r) {
     const d = mk("div", null, "sub mut"), x = rvOf(v);
     d.append("older version: uploaded " + when(v.up) + ", first seen " + when(v.seen) + ", analysis " + v.ast + " ", linksOf(v));
     if (x) d.append(" ", verdictEl(x), x.n ? " " + x.n : "");
+    d.append(caseBox(v));
     d.append(badges(v.f));
     for (const o of v.ops) {
       const s = mk("div", o.m + ": ", "sub");

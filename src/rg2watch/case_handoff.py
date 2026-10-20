@@ -65,7 +65,8 @@ class CaseHandoff:
                 summary = self.drafter.draft(case)
             except Exception as exc:
                 warning = str(exc)
-        return {"case": case, "pdf_sha256": digest, "summary": summary, "warning": warning}
+        public_case = {k: v for k, v in case.items() if k != "note"}
+        return {"case": public_case, "pdf_sha256": digest, "summary": summary, "warning": warning}
 
     def claim(self, url: str, summary: str) -> dict:
         existing = self.store.get_publication(url)

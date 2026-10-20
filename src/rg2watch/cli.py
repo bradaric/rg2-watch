@@ -279,14 +279,33 @@ def _browse_path(cfg: Config) -> Path:
 PORT_TRIES = 11  # the configured port and the 10 above it
 
 
-def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store):
+def _publication_api(store: Store, cfg: Config):
+    from .case_draft import CaseDrafter
+    from .case_handoff import CaseHandoff
+    from .drive_publish import DrivePublisher, LazyConfiguredDrive
+    from .publication_service import PublicationJobs
+    ai = None
+    if not is_ollama(cfg.model):
+        ai, why = _anthropic_client()
+        if ai is None:
+            log.info("case AI draft unavailable (manual template remains available): %s", why)
+    cases = CaseHandoff(store, cfg, CaseDrafter(store, cfg, ai) if ai is not None else None)
+    publisher = (DrivePublisher(cases, LazyConfiguredDrive(cfg.drive_token_path))
+                 if cfg.drive_token_path.is_file() else None)
+    return PublicationJobs(cases, publisher)
+
+
+def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Config | None = None):
     """Serve the page on `port`, else the next free port up to +10; None when none is free."""
+    case_api = _publication_api(store, cfg) if cfg is not None else None
     for p in range(port, min(port + PORT_TRIES, 65536)):
-        server = start_server(page_dir, cache_dir, p, *_review_api(store))
+        server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api)
         if server is not None:
             if p != port:
                 log.warning("port %d busy, using %d", port, p)
             return server
+    if case_api is not None:
+        case_api.close()
     log.warning("no free web port in %d-%d", port, port + PORT_TRIES - 1)
     return None
 
@@ -400,7 +419,7 @@ def _cmd_serve(args) -> int:
         if not (out.parent / "data.json").is_file():
             build_page(store, out, _cache_dir(cfg), cfg=cfg,
                        with_status=not _watcher_live(out.resolve().parent))
-        server = _start_web(out.parent, _cache_dir(cfg), port, store)
+        server = _start_web(out.parent, _cache_dir(cfg), port, store, cfg)
         if server is None:
             print(f"no free port in {port}-{port + PORT_TRIES - 1}", file=sys.stderr)
             return 1
@@ -412,6 +431,8 @@ def _cmd_serve(args) -> int:
         finally:
             server.shutdown()
             server.server_close()
+            if server.case_api is not None:
+                server.case_api.close()
         return 0
     finally:
         store.close()
@@ -776,7 +797,7 @@ def _run_watch(args, cfg: Config) -> int:
                                        lambda: (deliver(), watcher.check_health()))
                 port = cfg.serve_port if args.serve_port is None else args.serve_port
                 if port:
-                    server = _start_web(_browse_path(cfg).parent, _cache_dir(cfg), port, store)
+                    server = _start_web(_browse_path(cfg).parent, _cache_dir(cfg), port, store, cfg)
                 url = f"http://127.0.0.1:{server.server_port}" if server else None
                 if url:
                     notifier.page_url = url
@@ -818,6 +839,8 @@ def _run_watch(args, cfg: Config) -> int:
             if server is not None:
                 server.shutdown()
                 server.server_close()
+                if server.case_api is not None:
+                    server.case_api.close()
             helpers_by = time.monotonic() + HELPER_JOIN_S  # one shared deadline for all helpers
             for t in threads:  # a build in flight should finish before the store is closed
                 t.join(max(0.0, helpers_by - time.monotonic()))

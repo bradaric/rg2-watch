@@ -1,5 +1,8 @@
 import hashlib
+import http.client
+import json
 import multiprocessing
+import time
 from pathlib import Path
 
 import pytest
@@ -9,6 +12,8 @@ from rg2watch.case_locks import CaseLocks
 from rg2watch.case_draft import CaseDrafter, DraftUnavailable
 from rg2watch.config import Config
 from rg2watch.store import Store
+from rg2watch.server import start_server
+from rg2watch.publication_service import PublicationJobs
 from test_browse import BASE, P, add, doc
 
 
@@ -184,3 +189,94 @@ def test_unusable_paid_draft_is_still_accounted(tmp_path):
     with pytest.raises(DraftUnavailable, match="Cyrillic"):
         CaseDrafter(store, service.cfg, client).draft(service._case(URL))
     assert store.total_spend(P) > 0
+
+
+class FakeCaseAPI:
+    def submit_prepare(self, url):
+        return "prepare-job"
+    def submit_publish(self, url, summary, confirm):
+        assert confirm is True
+        return "publish-job"
+    def job(self, job_id):
+        return {"id": job_id, "state": "done", "result": {"summary": "Ћирилица"}}
+    def publication(self, url):
+        return {"status": "published", "url": "https://drive.example/f", "viber_text": "Порука"}
+
+
+def case_request(server, method, path, body=None, headers=None):
+    host = f"127.0.0.1:{server.server_port}"
+    h = {"Host": host, "Origin": "http://" + host, "Sec-Fetch-Site": "same-origin",
+         "X-RG2W": "1"}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        h.update({"Content-Type": "application/json", "Content-Length": str(len(data))})
+    h.update(headers or {})
+    c = http.client.HTTPConnection("127.0.0.1", server.server_port)
+    c.request(method, path, body=data, headers=h)
+    r = c.getresponse(); raw = r.read()
+    try:
+        payload = json.loads(raw or b"{}")
+    except ValueError:
+        payload = raw.decode()
+    out = r.status, payload
+    c.close()
+    return out
+
+
+def test_case_http_routes_are_explicit_strict_and_same_origin(tmp_path):
+    (tmp_path / "index.html").write_text("ok")
+    srv = start_server(tmp_path, tmp_path, 0, case_api=FakeCaseAPI())
+    try:
+        assert case_request(srv, "POST", "/case/prepare", {"url": URL}) == (202, {"job_id": "prepare-job"})
+        assert case_request(srv, "POST", "/case/publish",
+                            {"url": URL, "summary": "Јавно", "confirm": True}) == (
+                                202, {"job_id": "publish-job"})
+        assert case_request(srv, "GET", "/case/jobs/prepare-job")[0] == 200
+        assert case_request(srv, "GET", "/case/publication?url=" + URL)[0] == 200
+        assert case_request(srv, "POST", "/case/prepare", {"url": URL},
+                            {"Origin": "http://evil.example"})[0] == 403
+        assert case_request(srv, "GET", "/case/jobs/prepare-job",
+                            headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
+        assert case_request(srv, "POST", "/case/publish", {"url": URL, "summary": "x",
+                                                             "confirm": False})[0] == 400
+        assert case_request(srv, "GET", "/case/prepare")[0] == 404
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_server_without_case_configuration_refuses_case_routes(tmp_path):
+    (tmp_path / "index.html").write_text("ok")
+    srv = start_server(tmp_path, tmp_path, 0)
+    try:
+        assert case_request(srv, "POST", "/case/prepare", {"url": URL})[0] == 403
+        assert case_request(srv, "GET", "/case/jobs/x")[0] == 404
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_page_has_explicit_safe_case_controls():
+    html = (Path("src/rg2watch/static/index.html")).read_text(encoding="utf-8")
+    assert '"case/prepare"' in html and '"case/publish"' in html
+    assert 'document.createElement("textarea")' in html
+    assert ".textContent" in html and "innerHTML = draft" not in html
+    assert "свако са везом" in html
+
+
+def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_path):
+    _, cases, _ = handoff(tmp_path)
+    jobs = PublicationJobs(cases, None, workers=1)
+    try:
+        job_id = jobs.submit_prepare(URL)
+        for _ in range(100):
+            result = jobs.job(job_id)
+            if result["state"] != "running":
+                break
+            time.sleep(.01)
+        assert result["state"] == "done" and result["result"]["summary"].startswith("Избори:")
+        assert "note" not in result["result"]["case"]
+        with pytest.raises(ValueError, match="not configured"):
+            jobs.submit_publish(URL, "Јавни опис", True)
+        assert jobs.publication(URL) is None
+    finally:
+        jobs.close()

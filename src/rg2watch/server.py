@@ -9,7 +9,7 @@ import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .store import VERDICTS
 
@@ -23,6 +23,7 @@ FILES = {
     "dataTables.dataTables.min.css": "text/css; charset=utf-8"}
 PDF = re.compile(r"/pdfs/([0-9a-f]{64})\.pdf")
 REVIEW_MAX_BYTES = 4096
+CASE_MAX_BYTES = 8192
 REVIEW_HEADERS = ("Host", "Origin", "Content-Length", "Content-Type", "X-RG2W", "Sec-Fetch-Site")
 LENGTH = re.compile(r"[0-9]{1,6}")
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
@@ -119,8 +120,33 @@ class _Handler(BaseHTTPRequestHandler):
             return 400, f"body must have a Content-Length of at most {REVIEW_MAX_BYTES} bytes"
         return None
 
+    def _same_origin(self) -> bool:
+        host = self._host()
+        if host is None or self.headers.get("Sec-Fetch-Site") == "cross-site":
+            return False
+        site, origin = self.headers.get("Sec-Fetch-Site"), self.headers.get("Origin")
+        return not ((origin is not None and origin.lower() != f"http://{host}") or
+                    (site != "same-origin" and not (site is None and origin is not None)))
+
+    def _case_post_refusal(self) -> tuple[int, str] | None:
+        if any(len(self.headers.get_all(h) or ()) > 1 for h in REVIEW_HEADERS):
+            return 400, "duplicate header"
+        if self.server.case_api is None or not self._same_origin():
+            return 403, "forbidden"
+        if self.headers.get("X-RG2W") != "1":
+            return 403, "missing X-RG2W"
+        if (self.headers.get("Content-Type") or "").strip().lower() != "application/json":
+            return 400, "Content-Type must be exactly application/json"
+        n = self.headers.get("Content-Length")
+        if n is None or not LENGTH.fullmatch(n) or int(n) > CASE_MAX_BYTES:
+            return 400, f"body must have a Content-Length of at most {CASE_MAX_BYTES} bytes"
+        return None
+
     def do_POST(self) -> None:
-        if urlsplit(self.path).path != "/review" or urlsplit(self.path).query:
+        parsed = urlsplit(self.path)
+        if parsed.path in ("/case/prepare", "/case/publish") and not parsed.query:
+            return self._case_post(parsed.path)
+        if parsed.path != "/review" or parsed.query:
             return self._refuse()
         self.close_connection = True  # a refused body is never read: do not reuse the connection
         refusal = self._review_refusal()
@@ -155,7 +181,77 @@ class _Handler(BaseHTTPRequestHandler):
         log.info("review: %s %s", req["verdict"], req["url"])
         self._json(200, {"review": rec})
 
+    def _case_post(self, path: str) -> None:
+        self.close_connection = True
+        refusal = self._case_post_refusal()
+        if refusal:
+            return self._json(refusal[0], {"error": refusal[1]})
+        n = int(self.headers["Content-Length"])
+        try:
+            raw = self.rfile.read(n)
+        except (OSError, TimeoutError):
+            return
+        if len(raw) != n:
+            return self._json(400, {"error": "body shorter than Content-Length"})
+        try:
+            req = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return self._json(400, {"error": "body is not JSON"})
+        try:
+            if path == "/case/prepare":
+                if not (isinstance(req, dict) and set(req) == {"url"}
+                        and isinstance(req["url"], str) and req["url"]):
+                    return self._json(400, {"error": "expected {url}"})
+                job = self.server.case_api.submit_prepare(req["url"])
+            else:
+                if not (isinstance(req, dict) and set(req) == {"url", "summary", "confirm"}
+                        and isinstance(req["url"], str) and isinstance(req["summary"], str)
+                        and req["confirm"] is True):
+                    return self._json(400, {"error": "expected {url, summary, confirm: true}"})
+                job = self.server.case_api.submit_publish(req["url"], req["summary"], True)
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)[:300]})
+        except Exception:
+            log.exception("case job could not be submitted")
+            return self._json(500, {"error": "case job could not be submitted"})
+        self._json(202, {"job_id": job})
+
+    def _case_get(self) -> bool:
+        parsed = urlsplit(self.path)
+        if not (parsed.path.startswith("/case/jobs/") or parsed.path == "/case/publication"):
+            return False
+        if self.server.case_api is None:
+            return False
+        if not self._same_origin():
+            self._json(403, {"error": "forbidden"})
+            return True
+        try:
+            if parsed.path.startswith("/case/jobs/") and not parsed.query:
+                job_id = parsed.path.removeprefix("/case/jobs/")
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", job_id):
+                    self._json(404, {"error": "not found"})
+                else:
+                    data = self.server.case_api.job(job_id)
+                    self._json(200 if data else 404, data or {"error": "not found"})
+            elif parsed.path == "/case/publication":
+                values = parse_qs(parsed.query, strict_parsing=True)
+                if set(values) != {"url"} or len(values["url"]) != 1:
+                    self._json(400, {"error": "expected one url query parameter"})
+                else:
+                    data = self.server.case_api.publication(values["url"][0])
+                    self._json(200, data or {"status": "none"})
+            else:
+                self._json(404, {"error": "not found"})
+        except (ValueError, KeyError):
+            self._json(400, {"error": "bad request"})
+        except Exception:
+            log.exception("case status could not be read")
+            self._json(500, {"error": "case status could not be read"})
+        return True
+
     def do_GET(self) -> None:
+        if self._case_get():
+            return
         self._send(True)
 
     def do_HEAD(self) -> None:
@@ -174,8 +270,9 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def start_server(out_dir: Path, cache_dir: Path, port: int,
-                 get_reviews: Callable[[], dict] | None = None,
-                 put_review: Callable[[str, str, str | None], dict | None] | None = None
+                  get_reviews: Callable[[], dict] | None = None,
+                  put_review: Callable[[str, str, str | None], dict | None] | None = None,
+                  case_api=None
                  ) -> ThreadingHTTPServer | None:
     """Serve `out_dir` (+ cached PDFs) in a daemon thread; None when the port is unavailable.
     `get_reviews` serves GET /reviews.json, `put_review(url, verdict, note)` backs POST /review
@@ -188,6 +285,7 @@ def start_server(out_dir: Path, cache_dir: Path, port: int,
     server.daemon_threads = True
     server.out_dir, server.cache_dir = Path(out_dir).resolve(), Path(cache_dir).resolve()
     server.get_reviews, server.put_review = get_reviews, put_review
+    server.case_api = case_api
     threading.Thread(target=server.serve_forever, name="web", daemon=True).start()
     log.info("browse page at http://127.0.0.1:%d", server.server_port)
     return server

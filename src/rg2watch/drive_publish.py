@@ -103,6 +103,18 @@ class GoogleDriveAdapter:
         return True
 
 
+class LazyConfiguredDrive:
+    """Delay credential refresh/client construction until an explicit Publish worker runs."""
+    def __init__(self, token_path: Path):
+        self.token_path = token_path
+        self._drive = None
+
+    def __getattr__(self, name):
+        if self._drive is None:
+            self._drive = configured_drive(self.token_path)
+        return getattr(self._drive, name)
+
+
 class DrivePublisher:
     def __init__(self, cases: CaseHandoff, drive):
         self.cases, self.drive, self.store = cases, drive, cases.store
