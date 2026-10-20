@@ -201,17 +201,17 @@ class DrivePublisher:
     def __init__(self, cases: CaseHandoff, drive, root):
         self.cases, self.drive, self.root, self.store = cases, drive, root, cases.store
 
-    def publish(self, url: str, summary: str) -> dict:
+    def publish(self, url: str, summary: str, viber_reason: str | None = None) -> dict:
         token = None
         if _publication_diagnostic_id.get() is None:
             token = _publication_diagnostic_id.set(uuid.uuid4().hex)
         try:
-            return self._publish(url, summary)
+            return self._publish(url, summary, viber_reason)
         finally:
             if token is not None:
                 _publication_diagnostic_id.reset(token)
 
-    def _publish(self, url: str, summary: str) -> dict:
+    def _publish(self, url: str, summary: str, viber_reason: str | None) -> dict:
         diagnostic_id = _publication_diagnostic_id.get()
         completed = self.store.get_publication(url)
         if completed and completed["phase"] == "published":
@@ -226,7 +226,7 @@ class DrivePublisher:
             if completed and completed["phase"] == "published":
                 return self._result(completed)
             root_id, account_id = self.root.registration()
-            publication = self.cases.claim(url, summary)
+            publication = self.cases.claim(url, summary, viber_reason)
             case = json.loads(publication["case_json"])
             folder_name = f"RG2 предмет — {case['municipality']} БМ {case['station']}"
             bound = publication.get("drive_account_id")
@@ -330,7 +330,10 @@ class DrivePublisher:
                                 "stage=child-check-failed", diagnostic_id)
                     raise DriveError("Drive account policy did not expose both folder children")
                 final = "https://drive.google.com/drive/folders/" + publication["folder_id"]
-                viber = self.cases.viber_text(case, publication["summary"], final)
+                if publication["viber_reason"] is None:
+                    viber = self.cases.legacy_viber_text(case, publication["summary"], final)
+                else:
+                    viber = self.cases.viber_text(case, publication["viber_reason"], final)
                 self.store.finalize_publication(url, final, viber)
             staged.unlink(missing_ok=True)
             logger.info("publication checkpoint diagnostic_id=%s stage=published", diagnostic_id)

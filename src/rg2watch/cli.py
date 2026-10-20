@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -184,6 +185,14 @@ def _parser() -> argparse.ArgumentParser:
                     help="authorize the operator's Google account for app-created Drive files")
     sub.add_parser("drive-root", parents=[common],
                    help="create or verify the private shared RG2 Watch Drive root")
+
+    s = sub.add_parser("revise-viber",
+                       help="preview or confirm the guarded local Књажевац 61 Viber correction")
+    s.add_argument("--db", type=Path, required=True, help="explicit on-disk SQLite database")
+    s.add_argument("--url", required=True, help="exact document URL from the local case page")
+    s.add_argument("--reason", required=True, help="exact operator-approved short reason")
+    s.add_argument("--confirm", action="store_true", help="update only the saved Viber text")
+    s.add_argument("--verbose", "-v", action="store_true", help=argparse.SUPPRESS)
 
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
@@ -1171,6 +1180,44 @@ def _cmd_fixtures(args) -> int:
     return 0
 
 
+def _read_viber_revision(path: Path, url: str, reason: str) -> dict:
+    from .case_handoff import viber_revision
+
+    if not path.is_file() or str(path) == ":memory:":
+        raise ValueError("--db must name an existing on-disk SQLite database")
+    db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    db.row_factory = sqlite3.Row
+    try:
+        rows = db.execute("SELECT * FROM publications WHERE url=?", (url,)).fetchall()
+        if len(rows) != 1:
+            raise ValueError("the exact document URL did not select one publication")
+        return viber_revision(rows[0], url, reason)
+    finally:
+        db.close()
+
+
+def _cmd_revise_viber(args) -> int:
+    try:
+        if args.confirm:
+            revision = Store.revise_viber_text(args.db, args.url, args.reason)
+        else:
+            revision = _read_viber_revision(args.db, args.url, args.reason)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        print(f"Saved Viber text was not changed: {exc}", file=sys.stderr)
+        return 1
+    case = revision["case"]
+    print(f"Target: {case['municipality']}, БМ {case['station']}")
+    print("\nSaved old message:\n" + revision["old"])
+    print("\nProposed new message:\n" + revision["proposed"])
+    if not revision["changed"]:
+        print("\nThis case already has the approved saved Viber text; no change was made.")
+    elif args.confirm:
+        print("\nUpdated only the saved Viber text. No Drive or Viber operation was performed.")
+    else:
+        print("\nPreview only: confirmation would replace only the saved Viber text.")
+    return 0
+
+
 def _sigterm(signum, frame):
     raise KeyboardInterrupt
 
@@ -1188,6 +1235,7 @@ def main(argv: list[str] | None = None) -> int:
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
                "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "status": _cmd_status, "tally": _cmd_tally,
                "review": _cmd_review, "labels": _cmd_labels, "drive-auth": _cmd_drive_auth,
+               "revise-viber": _cmd_revise_viber,
                "drive-root": _cmd_drive_root}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay", "serve"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)

@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS publications(
     pdf_sha256 TEXT NOT NULL, case_json TEXT NOT NULL,
     folder_id TEXT, pdf_file_id TEXT, text_file_id TEXT, drive_account_id TEXT,
     legacy_parent_recovery INTEGER NOT NULL DEFAULT 0,
-    final_url TEXT, viber_text TEXT,
+    final_url TEXT, viber_text TEXT, viber_reason TEXT,
     phase TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, published_at TEXT);
 CREATE TABLE IF NOT EXISTS ai_draft_costs(
     id INTEGER PRIMARY KEY, parent TEXT NOT NULL, url TEXT NOT NULL, model TEXT NOT NULL,
@@ -160,6 +160,9 @@ class Store:
                 self._db.execute("UPDATE publications SET legacy_parent_recovery=1 "
                                  "WHERE drive_account_id IS NULL AND folder_id IS NOT NULL "
                                  "AND phase<>'published'")
+        if "viber_reason" not in cols:
+            with self._db:
+                self._db.execute("ALTER TABLE publications ADD COLUMN viber_reason TEXT")
         self._db.executescript(INDEXES)
         self.case_locks = CaseLocks(path)
 
@@ -781,7 +784,8 @@ class Store:
         return row["verdict"] if row else None
 
     def claim_publication(self, url: str, summary: str, summary_sha256: str, staged_pdf_path: str,
-                          pdf_sha256: str, case: dict) -> tuple[sqlite3.Row, bool]:
+                          pdf_sha256: str, case: dict, viber_reason: str | None) \
+            -> tuple[sqlite3.Row, bool]:
         staged = Path(staged_pdf_path)
         try:
             if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != pdf_sha256:
@@ -793,13 +797,24 @@ class Store:
             doc = self._db.execute("SELECT id, parent FROM documents WHERE url=?", (url,)).fetchone()
             if doc is None:
                 raise KeyError(url)
+            previous = self._db.execute(
+                "SELECT * FROM publications WHERE url=?", (url,)).fetchone()
+            if previous is None and viber_reason is None:
+                raise ValueError("a short Viber reason is required for a new publication")
             inserted = self._db.execute(
                 "INSERT OR IGNORE INTO publications(url,document_id,parent,summary,summary_sha256,"
-                "staged_pdf_path,pdf_sha256,case_json,phase,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "staged_pdf_path,pdf_sha256,case_json,viber_reason,phase,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (url, doc["id"], doc["parent"], summary, summary_sha256, staged_pdf_path,
-                 pdf_sha256, json.dumps(case, ensure_ascii=False), "preparing", now, now))
+                 pdf_sha256, json.dumps(case, ensure_ascii=False), viber_reason, "preparing", now, now))
             row = self._db.execute("SELECT * FROM publications WHERE url=?", (url,)).fetchone()
+            if inserted.rowcount != 1 and (row["summary"] != summary
+                    or row["summary_sha256"] != summary_sha256
+                    or row["staged_pdf_path"] != staged_pdf_path
+                    or row["pdf_sha256"] != pdf_sha256
+                    or row["case_json"] != json.dumps(case, ensure_ascii=False)
+                    or row["viber_reason"] != viber_reason):
+                raise ValueError("inputs differ from the frozen pending package")
             return row, inserted.rowcount == 1
 
     def get_publication(self, url: str) -> sqlite3.Row | None:
@@ -851,6 +866,45 @@ class Store:
         now = _now()
         self._write("UPDATE publications SET phase='published',final_url=?,viber_text=?,"
                     "updated_at=?,published_at=? WHERE url=?", (final_url, viber_text, now, now, url))
+
+    @staticmethod
+    def revise_viber_text(path: Path | str, url: str, reason: str) -> dict:
+        """Atomically apply the single guarded historical Viber-copy correction."""
+        from .case_handoff import viber_revision
+
+        if str(path) == ":memory:" or not Path(path).is_file():
+            raise ValueError("--db must name an existing on-disk SQLite database")
+        db = sqlite3.connect(str(path), isolation_level=None)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute("SELECT * FROM publications WHERE url=?", (url,)).fetchall()
+            if len(rows) != 1:
+                raise ValueError("the exact document URL did not select one publication")
+            row = rows[0]
+            revision = viber_revision(row, url, reason)
+            if not revision["changed"]:
+                db.commit()
+                return revision
+            compared = ("url", "phase", "viber_text", "final_url", "case_json", "summary",
+                        "summary_sha256", "staged_pdf_path", "pdf_sha256", "folder_id",
+                        "pdf_file_id", "text_file_id")
+            where = " AND ".join(f"{column} IS ?" for column in compared)
+            args = [revision["proposed"], _now(), row["id"]]
+            args.extend(row[column] for column in compared)
+            changed = db.execute(
+                f"UPDATE publications SET viber_text=?,updated_at=? WHERE id=? AND {where}",
+                args)
+            if changed.rowcount != 1:
+                raise ValueError("publication changed while the correction was being applied")
+            db.commit()
+            return revision
+        except BaseException:
+            if db.in_transaction:
+                db.rollback()
+            raise
+        finally:
+            db.close()
 
     def record_draft_cost(self, parent: str, url: str, model: str, input_tokens: int,
                           output_tokens: int, cost_usd: float, status: str) -> None:

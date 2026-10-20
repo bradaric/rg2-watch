@@ -204,11 +204,25 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._json(400, {"error": "expected {url}"})
                 job = self.server.case_api.submit_prepare(req["url"])
             else:
-                if not (isinstance(req, dict) and set(req) == {"url", "summary", "confirm"}
+                if not (isinstance(req, dict)
+                        and set(req) in ({"url", "summary", "confirm"},
+                                        {"url", "summary", "viber_reason", "confirm"})
                         and isinstance(req["url"], str) and isinstance(req["summary"], str)
+                        and ("viber_reason" not in req or isinstance(req["viber_reason"], str))
                         and req["confirm"] is True):
-                    return self._json(400, {"error": "expected {url, summary, confirm: true}"})
-                job = self.server.case_api.submit_publish(req["url"], req["summary"], True)
+                    return self._json(400, {"error":
+                                      "expected {url, summary, viber_reason, confirm: true}"})
+                reason = req.get("viber_reason")
+                if "viber_reason" not in req:
+                    pending = self.server.case_api.publication(req["url"])
+                    if not (pending and pending.get("status") not in (None, "none", "published")
+                            and "viber_reason" not in pending):
+                        return self._json(400, {"error": "short Viber reason is required"})
+                else:
+                    from .case_handoff import normalize_viber_reason
+                    reason = normalize_viber_reason(reason)
+                job = self.server.case_api.submit_publish(
+                    req["url"], req["summary"], reason, True)
         except ValueError as exc:
             return self._json(400, {"error": str(exc)[:300]})
         except Exception:
