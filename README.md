@@ -91,8 +91,9 @@ Each database has its own page folder, `<db dir>/<db stem>/` (`data/election-662
 `watch` serves the page on `serve_port` (default 8770; `--serve-port`, `0` = off); if that port is busy it tries the next ones up to +10. The URL actually used is printed (`page: http://127.0.0.1:PORT`), recorded in `status.json` and shown by `rg2watch status`; open the URL it prints. `rg2watch serve [--port N]` serves the same files without
 watching (same port fallback, prints the URL). The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed allow-list
 (`index.html`, `status.json`, `data.json`, `reviews.json` (live verdicts), the vendored libraries, `pdfs/<sha256>.pdf`; the `.js` twins are not served, and cross-site requests are refused); the DB,
-`.env` and everything else are 404. No free port: a warning, and the watcher carries on. The only write
-is `POST /review` (operator verdicts, below): accepted only from the page itself - Host
+`.env` and everything else are 404. No free port: a warning, and the watcher carries on. Writes are
+limited to `POST /review` and the explicit case preparation/publication routes described below. They
+are accepted only from the page itself - Host
 127.0.0.1/localhost on the server's port, `Sec-Fetch-Site: same-origin` (or no such header and an
 `Origin` equal to the server's), `Content-Type: application/json`, header `X-RG2W: 1` (a cross-site
 form or fetch cannot send it without a preflight, which is never answered), body at most 4 KB, a
@@ -148,6 +149,64 @@ ntfy message is sent for a verdict.
   `escalate` marks every rule that fired `true` and `ok` every one `false`: edit the suggestions
   before merging (a legitimate correction marked `ok` may still be a wanted alert, and an escalated
   form may have had one real and one spurious rule).
+
+## Public case handoff (Google Drive and Viber copy)
+
+This is an optional, manual handoff for one escalated document version at a time. It never sends a
+Viber or Instagram message. The operator clicks **Prepare draft**, edits the Serbian Cyrillic public
+summary, explicitly confirms that anyone with the link can open the folder, then clicks **Publish**.
+Only that case folder is made public; the user's Drive root and other folders are not changed.
+
+### One-time Google setup
+
+1. In a Google Cloud project enable the Drive API, configure its OAuth consent screen, and create an
+   OAuth client of type **Desktop app**. Download the client JSON into an ignored local location such
+   as `data/google-oauth-client.json` (never commit it).
+2. Configure paths (both `data/` and `rg2watch.toml` are ignored):
+
+       drive_client_secrets = "data/google-oauth-client.json"
+       drive_token_path = "data/drive-token.json"
+
+3. Authorize the operator's own Google account in advance:
+
+       uv run rg2watch drive-auth --config rg2watch.toml
+
+   This is the only command that opens the installed-app OAuth browser. It requests only
+   `https://www.googleapis.com/auth/drive.file` (files/folders this app creates) and saves the local
+   token with mode 0600. `watch`, `serve`, and HTTP requests never start an OAuth flow. Missing or
+   expired/revoked authorization disables publication without stopping the watcher or review page.
+
+A new publication requires the exact URL's latest verdict to be `escalate` and its PDF already cached
+under `<db dir>/pdfs/`. Manual review alone does not cache a PDF; analysis does. Publication never
+downloads a replacement from RIK. It freezes the operator-approved UTF-8 summary and exact PDF bytes
+locally before creating anything remotely. A retry must use that frozen text and staging file;
+changed/missing bytes are refused, and this first version has no replace/abort workflow.
+
+The folder contains only `документ.pdf` and a plain-text case explanation with election,
+municipality/station, exact document URL, RIK link, the approved cautious concern, and SHA-256 of the
+PDF bytes. Uploads are verified while the folder remains restricted; only then is that individual
+folder shared as `anyone` / `reader`. If an upload/share is interrupted, explicitly click Publish
+again with the same text: preallocated Drive IDs prevent a second case. Verify the result in Drive's
+**Share / General access** panel: “Anyone with the link — Viewer”, and open both child files in a
+private browser window. A live smoke test is always operator-initiated; automated tests use fakes and
+never create public Drive files.
+
+Preparation sends only the document context and the internal review note (not the PDF, stored analysis
+report, or personal names) to the configured Anthropic model, asking for cautious Cyrillic prose. It
+runs only after an explicit click, never publishes model output automatically, and falls back to an
+editable manual template when credentials/model/pricing/cap/API output are unavailable. Actual draft
+usage is recorded in the same per-election `max_spend_usd` total as document analysis. As with the
+existing analysis workers, simultaneous calls can exceed the cap slightly while already in flight.
+
+The returned Drive URL and Viber text are copy/paste only. Anyone receiving or forwarding the URL can
+open the case. A later correction or `ok`/`unsure` verdict does **not** revoke, replace, or silently
+alter an already-public case; subsequent notification or correction management is manual and out of
+scope. A completed case remains visible in the page with its original stable link/message.
+
+Manual QA before election night: test a current and an older escalated version; keyboard-edit and copy
+Cyrillic text; confirm missing-cache and missing-auth messages; observe that reviews remain responsive
+during a slow fake/test upload; restart `serve` after an interrupted attempt and retry the same frozen
+package; and confirm a completed case still displays after recording `ok`.
 
 ## Unofficial tally
 
@@ -269,7 +328,7 @@ MTok in/out, Anthropic list prices as of 20/10/2026: Haiku 5.5 0.10/0.50, Sonnet
 priced by the responding model; cache reads at 5% of the input price). `price_in_per_mtok`/
 `price_out_per_mtok` override the table only when set; a model outside the table is refused
 without them and capped per election: `max_spend_usd` (default 60) is the sum of all
-analyses of that election (`parent`) in this DB, so each election has its own budget; `eval` runs
+analyses and case-drafting calls of that election (`parent`) in this DB, so each election has its own budget; `eval` runs
 count under the election `eval` and `analyze` under `adhoc`. When the cap is reached analysis
 pauses with one "[rg2-watch] spend cap reached" alert while the watcher keeps running. With several
 workers busy, the cap can be overshot by up to one form per worker. PDFs are cached under
@@ -406,6 +465,10 @@ Only polling-station and municipality names, document types, timestamps and URLs
 No personal names are stored or included in alerts. Content fetched from RIK is treated as untrusted data.
 Form scans are sent to the Anthropic API for analysis; the report schema has no name fields and the
 prompt forbids transcribing names. Text inside the scans is treated as data, never as instructions.
+An explicit case-draft click sends document context and the operator's review note to Anthropic; the
+operator must edit/approve the returned public text before a separate Publish click. Google OAuth
+client secrets and tokens stay in ignored local files and are never put into page data, responses, or
+logs.
 
 ## Tests
 

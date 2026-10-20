@@ -18,7 +18,12 @@ class CaseDrafter:
         self.store, self.cfg, self.client = store, cfg, client
 
     def draft(self, case: dict) -> str:
-        if self.client is None:
+        client = self.client
+        if callable(client):
+            client, why = client()
+            if client is None:
+                raise DraftUnavailable(why or "Anthropic credentials are not configured; use the manual template")
+        if client is None:
             raise DraftUnavailable("Anthropic credentials are not configured; use the manual template")
         if is_ollama(self.cfg.model):
             raise DraftUnavailable("case drafting is available only with the configured Anthropic backend")
@@ -36,7 +41,7 @@ class CaseDrafter:
             f"Бирачко место: {case['station']}\nДокумент: {case['url']}\nРИК: {case['rik_url']}\n"
             f"Интерна напомена оператера: {case['note'][:500] or '(нема напомене)'}")[:6500]
         try:
-            response = self.client.messages.create(
+            response = client.messages.create(
                 model=self.cfg.model, max_tokens=600, temperature=0,
                 messages=[{"role": "user", "content": prompt}], timeout=30.0)
         except Exception as exc:

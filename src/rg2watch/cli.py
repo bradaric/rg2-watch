@@ -284,12 +284,8 @@ def _publication_api(store: Store, cfg: Config):
     from .case_handoff import CaseHandoff
     from .drive_publish import DrivePublisher, LazyConfiguredDrive
     from .publication_service import PublicationJobs
-    ai = None
-    if not is_ollama(cfg.model):
-        ai, why = _anthropic_client()
-        if ai is None:
-            log.info("case AI draft unavailable (manual template remains available): %s", why)
-    cases = CaseHandoff(store, cfg, CaseDrafter(store, cfg, ai) if ai is not None else None)
+    drafter = None if is_ollama(cfg.model) else CaseDrafter(store, cfg, _anthropic_client)
+    cases = CaseHandoff(store, cfg, drafter)
     publisher = (DrivePublisher(cases, LazyConfiguredDrive(cfg.drive_token_path))
                  if cfg.drive_token_path.is_file() else None)
     return PublicationJobs(cases, publisher)

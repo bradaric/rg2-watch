@@ -65,8 +65,9 @@ ollama_num_ctx = 65536
 ollama_timeout_s = 900
 # Server-side refusal fallback to another model
 fallbacks = true
-# Analysis pauses (one "[rg2-watch] spend cap reached" alert) once the recorded spend of this
-# election (parent) reaches this (USD); eval and ad-hoc `analyze` spend are counted separately
+# Analysis pauses once the recorded analysis + explicit case-drafting spend of this election
+# reaches this (USD); eval and ad-hoc `analyze` spend are counted separately. Concurrent in-flight
+# calls can exceed the cap slightly.
 max_spend_usd = 60.0  # a parliamentary election (~8,300 forms) is estimated at ~$40 on Haiku
 # Spend is priced by model from a built-in table (USD per million tokens; also with `--model`):
 # Haiku 5.5 0.10/0.50, Sonnet 5.5 2/10, Opus 5.5 4/20, local ollama 0/0. Source: Anthropic list
