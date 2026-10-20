@@ -203,3 +203,10 @@ def test_cli_tally_prints_clean_then_all(tmp_path, capsys):
 def test_format_tally_empty():
     s = store()
     assert "0 form(s) counted" in format_tally(tally(s))
+
+
+def test_hero_markup_labelled_and_safe():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'id="hero"' in html and "UNOFFICIAL - numbers read by" in html and "Very early" in html
+    assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
+    assert "Escape" in html and 'get("hero") === "1"' in html
