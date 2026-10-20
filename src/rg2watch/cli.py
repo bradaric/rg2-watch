@@ -282,7 +282,7 @@ def _cmd_tally(args) -> int:
         parent = default_parent(store, args.parent)
         only = None
         if args.municipality:
-            known = {d["municipality"] or "(unknown)": "" for d in store.browse_rows(parent)[0]}
+            known = {m: "" for m in store.tally_municipalities(parent)}
             try:
                 only = set(resolve_municipalities(known, _csv(args.municipality) or []))
             except MunicipalityError as exc:

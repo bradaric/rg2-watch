@@ -511,6 +511,14 @@ class Store:
                 (parent,)).fetchall()
         return {r[0]: r[1] for r in rows}
 
+    def tally_municipalities(self, parent: str) -> list[str]:
+        """Municipality names of an election: from its first-round forms and the municipality list."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT COALESCE(municipality, '(unknown)') FROM documents WHERE parent=? AND doc_type=6 "
+                "UNION SELECT name FROM municipalities WHERE parent=?", (parent, parent)).fetchall()
+        return sorted(r[0] for r in rows)
+
     def latest_document_parent(self) -> str | None:
         with self._lock:
             row = self._db.execute("SELECT parent FROM documents ORDER BY id DESC LIMIT 1").fetchone()

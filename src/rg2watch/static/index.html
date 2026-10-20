@@ -129,6 +129,7 @@ td.disagree{color:var(--hi);font-weight:600}
 <h3>Overall</h3><div id="toverall"></div>
 <h3>Per municipality</h3><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
 <h3>Excluded forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
+<h3 id="tnoteshead" hidden>Notes (not excluded)</h3><ul id="tnotes"></ul>
 </div>
 <script src="jquery.min.js"></script>
 <script src="dataTables.min.js"></script>
@@ -396,7 +397,7 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]
     ["Valid", r => t(r).valid, num], ["Outside", r => t(r).outside_voted, num]];
   T.names.forEach((n, i) => {
     c.push([n + " votes", r => t(r).lists[i], num]);
-    c.push([n + " %", r => ratio(t(r).lists[i], t(r).valid), pc, r => ratio(t(r).lists[i], t(r).valid) == null ? "" : (100 * t(r).lists[i] / t(r).valid).toFixed(1)]);
+    c.push([n + " %", r => ratio(t(r).lists[i], t(r).lists_valid), pc, r => ratio(t(r).lists[i], t(r).lists_valid) == null ? "" : (100 * t(r).lists[i] / t(r).lists_valid).toFixed(1)]);
   });
   return c.map(x => ({t: x[0], v: x[1], f: x[2], c: x[3] || x[1]}));
 }
@@ -409,46 +410,68 @@ function csvCell(x) {  // text starting with = + - @ would run as a spreadsheet 
 }
 function tallyCsv() {
   const cols = resultCols($("tmode").value), rows = [...T.munis, T.overall];
-  const head = cols.map(c => csvCell(c.t)).join(",");
-  const lines = rows.map(r => cols.map(c => csvCell(c.c(r))).join(","));
-  const note = csvCell("Unofficial - numbers read by " + T.model + " from the scanned forms; " +
-    ($("tmode").value === "cl" ? "clean forms only" : "all counted forms"));
-  return [note, head, ...lines].join("\r\n") + "\r\n";
+  // header is row 1 (pandas/Excel read it cleanly); the unofficial note is a last column, first data row
+  const note = "Unofficial - numbers read by " + T.model + " from the scanned forms; " +
+    ($("tmode").value === "cl" ? "clean forms only" : "all counted forms");
+  const head = [...cols.map(c => csvCell(c.t)), "Note"].join(",");
+  const lines = rows.map((r, i) => [...cols.map(c => csvCell(c.c(r))), i ? "" : csvCell(note)].join(","));
+  return [head, ...lines].join("\r\n") + "\r\n";
 }
 function showForm(id, label) {
   onlyId = id;
-  $("onlytxt").textContent = "showing only: " + label;
+  setCtl({});  // other form filters would hide it
+  writeHash();
+  $("onlytxt").textContent = "showing only: " + label + " (other filters cleared)";
   $("onlyid").hidden = false;
   setHero(false);
   setTab("forms");
   redraw();
 }
+let tkey = "", tcols = "";
 function renderTally() {
   $("hmode").value = $("tmode").value;
-  const none = !T || !T.munis.length;
-  $("tmeta").textContent = T ? "Model: " + T.model + ". " + T.title + ". Repeat-vote forms are not included." : "";
   $("tabres").hidden = !T;
-  if (!T) { renderHero(); return; }
-  const cols = resultCols($("tmode").value), ov = $("toverall");
+  if (!T) {  // no tally any more: leave the results views
+    if (!$("resview").hidden || document.body.classList.contains("hero")) { setHero(false); setTab("forms"); }
+    renderHero();
+    return;
+  }
+  $("tmeta").textContent = "Model: " + T.model + ". " + T.title + ". Repeat-vote forms are not included.";
+  renderHero();
+  const key = $("tmode").value + JSON.stringify(T);
+  if (key === tkey) return;  // unchanged: keep the tables (search, sort, page) as they are
+  tkey = key;
+  const none = !T.munis.length, cols = resultCols($("tmode").value), ov = $("toverall");
   const tbl = mk("table"), hr = mk("tr"), dr = mk("tr");
   for (const c of cols) { hr.append(mk("th", c.t)); dr.append(mk("td", c.f(c.v(T.overall)))); }
   tbl.append(hr, dr);
   ov.replaceChildren(none ? mk("p", "no analysed forms yet", "mut") : tbl);
-  if (tmTable) { tmTable.destroy(); $("tmunis").replaceChildren(); }
-  tmTable = new DataTable("#tmunis", {
-    data: T.munis, paging: false, order: [[0, "asc"]], layout: {topStart: "search", topEnd: null, bottomStart: "info"},
-    columns: cols.map((c, i) => ({title: c.t, type: i ? "num" : "string", className: i ? "dt-right" : "",
-      render: {_: (d, t, r) => { const v = c.v(r); return v == null ? -1 : v; }, display: (d, t, r) => esc(c.f(c.v(r)))}}))});
-  if (teTable) { teTable.destroy(); $("texcl").replaceChildren(); }
-  teTable = new DataTable("#texcl", {
-    data: T.excluded, pageLength: 50, layout: {topStart: "search", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
-    columns: [{data: "m", title: "Municipality", render: DataTable.render.text()},
-      {data: "no", title: "BM", render: DataTable.render.text(), defaultContent: ""},
-      {data: "why", title: "Why excluded", render: {_: d => d.join("; "), display: d => esc(d.join("; "))}},
-      {data: null, title: "", orderable: false, defaultContent: "", createdCell: (td, d, r) => {
-        const b = mk("button", "show form"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); td.append(b); }}]});
-  renderHero();
+  const sig = $("tmode").value + "\n" + T.names.join("\n");
+  if (tmTable && sig === tcols) {
+    tmTable.clear().rows.add(T.munis).draw(false);
+  } else {
+    tcols = sig;
+    if (tmTable) { tmTable.destroy(); $("tmunis").replaceChildren(); }
+    tmTable = new DataTable("#tmunis", {
+      data: T.munis, paging: false, order: [[0, "asc"]], layout: {topStart: "search", topEnd: null, bottomStart: "info"},
+      columns: cols.map((c, i) => ({title: esc(c.t), type: i ? "num" : "string", className: i ? "dt-right" : "",
+        render: {_: (d, t, r) => { const v = c.v(r); return v == null ? -1 : v; }, display: (d, t, r) => esc(c.f(c.v(r)))}}))});
+  }
+  if (teTable) {
+    teTable.clear().rows.add(T.excluded).draw(false);
+  } else {
+    teTable = new DataTable("#texcl", {
+      data: T.excluded, pageLength: 50, layout: {topStart: "search", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
+      columns: [{data: "m", title: "Municipality", render: DataTable.render.text()},
+        {data: "no", title: "BM", render: DataTable.render.text(), defaultContent: "", className: "dt-left"},
+        {data: "why", title: "Why excluded", render: {_: d => d.join("; "), display: d => esc(d.join("; "))}},
+        {data: null, title: "", orderable: false, defaultContent: "", createdCell: (td, d, r) => {
+          const b = mk("button", "show form"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); td.append(b); }}]});
+  }
+  $("tnotes").replaceChildren(...T.notes.map(n => mk("li", n.m + " BM " + n.no + ": " + n.note)));
+  $("tnoteshead").hidden = !T.notes.length;
 }
+
 // ---- hero display -------------------------------------------------------------------------
 const OKABE = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"];
 const TOP_LISTS = 8;
@@ -503,7 +526,7 @@ function renderHero() {
   put("hs-valid", none || !t.registered ? "" : "valid votes counted");
   $("heronote").textContent = none ? "No forms counted yet - no results to show."
     : cover != null && cover < 0.1 ? "Very early - few stations counted. Do not read these shares as a result." : "";
-  const rows = none || !t.valid ? [] : T.names.map((n, i) => ({n, i, v: t.lists[i]}))
+  const rows = none || !t.lists_valid ? [] : T.names.map((n, i) => ({n, i, v: t.lists[i]}))
     .sort((a, b) => b.v - a.v || a.i - b.i);
   const shown = rows.slice(0, TOP_LISTS), rest = rows.slice(TOP_LISTS);
   if (rest.length) shown.push({n: "Others (" + rest.length + " lists)", i: -1, v: rest.reduce((a, x) => a + x.v, 0)});
@@ -511,7 +534,7 @@ function renderHero() {
     const e = shown[k];
     s.row.hidden = !e;
     if (!e) return;
-    const share = e.v / t.valid;
+    const share = e.v / t.lists_valid;
     s.nm.textContent = e.n; s.nm.title = e.n;
     s.val.textContent = num(e.v) + "  " + pc(share);
     s.fill.style.width = Math.min(100, share * 100) + "%";
@@ -544,7 +567,7 @@ $("csv").onclick = () => {
   if (!T) return;
   const a = mk("a");
   a.href = URL.createObjectURL(new Blob(["\ufeff" + tallyCsv()], {type: "text/csv;charset=utf-8"}));
-  a.download = "rg2-unofficial-tally-" + T.parent + ".csv";
+  a.download = "rg2-unofficial-tally-" + String(T.parent).replace(/[^\w.-]+/g, "_") + ".csv";
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };

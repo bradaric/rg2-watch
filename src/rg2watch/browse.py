@@ -37,12 +37,12 @@ def _rik_link(url: str, base: str | None) -> str | None:
     return full if urlsplit(full).scheme in ("http", "https") else None
 
 
-def _opinions(store: Store, docs: dict[int, Doc], parent: str | None, cfg: Config,
+def _opinions(store: Store, docs: dict[int, Doc], arows: list, cfg: Config,
               cache: dict) -> dict[int, list[dict]]:
     """document id -> [{m, at, f}]: findings of the newest stored analysis of each model (current
     prompt version preferred), from the current rules (pure, no API). `cache` keeps the evaluated
     findings by analysis id across builds (None = could not be evaluated, logged once)."""
-    rows = [a for a in store.browse_analyses(parent, PROMPT_VERSION) if a["document_id"] in docs]
+    rows = [a for a in arows if a["document_id"] in docs]
     live = {a["id"] for a in rows}
     for gone in set(cache) - live:
         del cache[gone]
@@ -93,7 +93,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     found: dict[int, list] = {}
     for f in findings:
         found.setdefault(f["document_id"], []).append(f)
-    opinions = _opinions(store, {d["id"]: _doc(d) for d in docs}, parent, cfg or Config(),
+    arows = store.browse_analyses(parent, PROMPT_VERSION)
+    opinions = _opinions(store, {d["id"]: _doc(d) for d in docs}, arows, cfg or Config(),
                          {} if cache is None else cache.setdefault("ops", {}))
     elections = {e.parent: e for e in store.elections()}
     groups: dict[tuple, list] = {}
@@ -117,7 +118,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     cfg = cfg or Config()
     try:
         tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
-                            cache=None if cache is None else cache.setdefault("tally", {}))
+                            cache=None if cache is None else cache.setdefault("tally", {}),
+                            docs=docs, arows=arows)
     except Exception:
         log.exception("tally could not be built")
         tally = None

@@ -72,7 +72,7 @@ def test_excluded_reasons(name, rep, expect):
     assert any(expect in w for w in why(t)["12"]), why(t)
     o = t["overall"]
     assert o["clean"] == 0 and o["excluded"] == 1 and o["cl"]["voted"] == 0
-    assert o["all"]["voted"] > 0 or name == "illegible"  # "all forms" still counts what was read
+    assert o["all"]["voted"] > 0 or name in ("illegible", "empty")  # "all forms" still counts what was read
 
 
 def test_empty_outside_voted_is_not_a_reason_but_illegible_is():
@@ -105,9 +105,11 @@ def test_disagreement_unit_fields_and_list_rows():
     same = extract(clean_report(), doc(BASE + "/x.pdf", no="12"), cfg)
     other = extract(report(list_votes=[{"row": 1, "field": nf(400)}, {"row": 2, "field": nf(381)}]),
                     doc(BASE + "/x.pdf", no="12"), cfg)
-    assert disagreements(mine, {"b": same}, "a") == []
-    (d,) = disagreements(mine, {"b": other}, "a")
-    assert d == {"f": "list row 2", "v": {"a": 380, "b": 381}}
+    assert disagreements(mine, {"b": same}, "a") == ([], [])
+    (d,), notes = disagreements(mine, {"b": other}, "a")
+    assert d == {"f": "list row 2", "v": {"a": 380, "b": 381}} and notes == []
+    blind = extract(report(voted=nf(None, legible=False)), doc(BASE + "/x.pdf", no="12"), cfg)
+    assert disagreements(mine, {"b": blind}, "a") == ([], ["b could not read voted"])
 
 
 def test_forms_without_watch_model_analysis_are_not_counted():
@@ -210,3 +212,61 @@ def test_hero_markup_labelled_and_safe():
     assert 'id="hero"' in html and "UNOFFICIAL - numbers read by" in html and "Very early" in html
     assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
     assert "Escape" in html and 'get("hero") === "1"' in html
+
+
+def test_unreadable_by_other_model_is_a_note_not_an_exclusion():
+    s = store()
+    d = form(s, 12, clean_report())
+    put(s, d, report(voted=nf(None, legible=False)), "other")
+    t = tally(s)
+    assert t["excluded"] == [] and t["overall"]["clean"] == 1
+    assert t["notes"][0]["note"] == "other could not read voted"
+
+
+def test_overall_stations_cover_municipalities_without_forms():
+    s = store()
+    s.save_municipalities(P, {"1": "Alpha", "2": "Beta"})
+    s.save_stations(P, "1", {"1": "a1", "2": "a2"})
+    s.save_stations(P, "2", {str(i): f"b{i}" for i in range(1, 9)})
+    form(s, 1, clean_report())
+    t = tally(s)
+    assert t["overall"]["stations"] == 10 and t["overall"]["counted"] == 1
+    assert [m["m"] for m in t["munis"]] == ["Alpha", "Beta"] and t["munis"][1]["counted"] == 0
+    assert tally(s, municipalities={"Alpha"})["overall"]["stations"] == 2
+
+
+def test_all_mode_denominators_are_paired():
+    s = store()
+    form(s, 1, clean_report())
+    # registered unreadable: its voted must not enter turnout, nor its lists enter shares without valid
+    form(s, 2, report(registered=nf(None, legible=False), valid=nf(None, legible=False)))
+    a = tally(s)["overall"]["all"]
+    assert a["registered"] == 1000 and a["voted"] == 800 and a["turnout"] == pytest.approx(0.8)
+    assert a["lists"] == [400, 380] and a["lists_valid"] == 780
+
+
+def test_malformed_row_set_is_excluded_and_never_widens_the_table():
+    s = store()
+    form(s, 1, clean_report())
+    form(s, 2, clean_report())
+    form(s, 3, report(list_votes=[{"row": i, "field": nf(10)} for i in range(1, 6)]))
+    t = tally(s)
+    assert t["nlists"] == 2 and why(t)["3"][0] == "list rows differ (got 5, expected 2)"
+    assert t["overall"]["all"]["lists"] == [800, 760]  # the odd form's lists are not mixed in
+    t = tally(s, cfg=Config(list_names={P: ["A", "B", "C"]}))  # configured names win
+    assert t["nlists"] == 3 and len(t["excluded"]) == 3
+
+
+def test_tally_municipalities_for_cli_names():
+    s = store()
+    s.save_municipalities(P, {"1": "Alpha", "2": "Beta"})
+    form(s, 1, clean_report(), muni="Gamma")
+    assert s.tally_municipalities(P) == ["Alpha", "Beta", "Gamma"]
+
+
+def test_page_rebuild_csv_and_filter_details():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert '"Note"' in html and "title: esc(c.t)" in html
+    assert tally(store())["overall"]["m"] == "(all)"
+    assert "other filters cleared" in html and "replace(/[^\\w.-]+/g" in html
+    assert "draw(false)" in html and "tkey" in html

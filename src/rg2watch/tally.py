@@ -2,6 +2,7 @@
 Never RIK's official results; numbers are model readings and are marked as such."""
 import json
 import logging
+from collections import Counter
 
 from .config import Config
 from .models import Doc
@@ -44,19 +45,25 @@ def extract(report: dict, doc: Doc, cfg: Config) -> dict:
             "pq": report["visual"]["page_quality"], "arith": arith}
 
 
-def disagreements(mine: dict, others: dict[str, dict], model: str) -> list[dict]:
-    """Counted fields (or list rows) on which another model's newest reading differs."""
-    out = []
+def disagreements(mine: dict, others: dict[str, dict], model: str) -> tuple[list[dict], list[str]]:
+    """(fields on which readable values differ between models, fields another model could not read).
+    Only the first excludes a form."""
+    diff, notes = [], []
     for key in (*COUNTED, *sorted(set(mine["l"]).union(*(o["l"] for o in others.values())))):
         get = (lambda e, k=key: e["n"][k]) if isinstance(key, str) else (lambda e, k=key: e["l"].get(k))
+        name = key if isinstance(key, str) else f"list row {key}"
         vals = {model: get(mine), **{m: get(o) for m, o in others.items()}}
-        if len(set(vals.values())) > 1:
-            out.append({"f": key if isinstance(key, str) else f"list row {key}", "v": vals})
-    return out
+        if len({v for v in vals.values() if v is not None}) > 1:
+            diff.append({"f": name, "v": vals})
+        elif get(mine) is not None:
+            notes += [f"{m} could not read {name}" for m, v in vals.items() if v is None and m != model]
+    return diff, notes
 
 
-def reasons(ex: dict, dis: list[dict]) -> list[str]:
+def reasons(ex: dict, dis: list[dict], rows: list[int]) -> list[str]:
     out = []
+    if sorted(ex["l"]) != rows:
+        out.append(f"list rows differ (got {len(ex['l'])}, expected {len(rows)})")
     if ex["conf"] == "low":
         out.append("low confidence")
     if ex["pq"] in ("poor", "unreadable"):
@@ -71,36 +78,59 @@ def reasons(ex: dict, dis: list[dict]) -> list[str]:
 
 
 def _acc(nlists: int) -> dict:
-    return {**{k: 0 for k in COUNTED}, "lists": {r: 0 for r in range(1, nlists + 1)}, "tv": 0, "tr": 0}
+    return {**{k: 0 for k in COUNTED}, "lists": [0] * nlists, "lv": 0, "tv": 0, "tr": 0}
 
 
-def _add(acc: dict, ex: dict) -> None:
+def _add(acc: dict, ex: dict, rows: list[int]) -> None:
+    """Every sum only takes forms where all its terms are known, so ratios share a denominator:
+    registered and voted come from forms with both, list votes from forms with every list row
+    (of the expected set) and valid."""
     for k in COUNTED:
-        if ex["n"][k] is not None:
+        if ex["n"][k] is not None and k not in ("registered", "voted"):
             acc[k] += ex["n"][k]
-    for r, v in ex["l"].items():
-        if v is not None:
-            acc["lists"][r] = acc["lists"].get(r, 0) + v
     if ex["n"]["voted"] is not None and ex["n"]["registered"] is not None:
-        acc["tv"] += ex["n"]["voted"]
-        acc["tr"] += ex["n"]["registered"]
+        acc["registered"] += ex["n"]["registered"]
+        acc["voted"] += ex["n"]["voted"]
+    vals = [ex["l"].get(r) for r in rows]
+    if sorted(ex["l"]) == rows and rows and None not in vals and ex["n"]["valid"] is not None:
+        acc["lists"] = [a + v for a, v in zip(acc["lists"], vals)]
+        acc["lv"] += ex["n"]["valid"]
 
 
-def _tot(acc: dict, nlists: int) -> dict:
-    return {**{k: acc[k] for k in COUNTED}, "turnout": acc["tv"] / acc["tr"] if acc["tr"] else None,
-            "lists": [acc["lists"].get(r, 0) for r in range(1, nlists + 1)]}
+def _tot(acc: dict) -> dict:
+    return {**{k: acc[k] for k in COUNTED}, "lists": acc["lists"], "lists_valid": acc["lv"],
+            "turnout": acc["voted"] / acc["registered"] if acc["registered"] else None}
+
+
+def expected_rows(cfg: Config, parent: str, exs: list[dict]) -> list[int]:
+    """The list rows every form should have: len(list_names) when configured, else the most common
+    row set (ties: the larger). A stray extra row on one form never widens the table."""
+    if cfg.list_names.get(parent):
+        return list(range(1, len(cfg.list_names[parent]) + 1))
+    common = Counter(tuple(sorted(e["l"])) for e in exs).most_common()
+    if not common:
+        return []
+    top = max(n for _, n in common)
+    return list(max((r for r, n in common if n == top), key=len))
 
 
 def build_tally(store: Store, cfg: Config, parent: str, model: str,
-                municipalities: set[str] | None = None, cache: dict | None = None) -> dict:
+                municipalities: set[str] | None = None, cache: dict | None = None,
+                docs=None, arows=None) -> dict:
     """Totals per municipality and overall, over all counted forms and over clean ones only.
-    `model` is the stored model name; `cache` keeps extracts by analysis id between builds."""
+    `model` is the stored model name; `cache` keeps extracts by analysis id between builds;
+    `docs`/`arows` let the caller share its reads (browse_rows / browse_analyses)."""
     cache = {} if cache is None else cache
-    docs = [d for d in store.browse_rows(parent)[0] if d["doc_type"] == FIRST_ROUND]
-    arows = store.browse_analyses(parent, PROMPT_VERSION)
-    by_doc: dict[int, dict[str, int]] = {}
+    docs = store.browse_rows(parent)[0] if docs is None else docs
+    # Only doc type 6 (the first-round RG-2): the repeat-vote RG-2 types (10, 15, 16) are another
+    # round and would double count stations. Assumes RIK files first-round forms under type 6.
+    docs = [d for d in docs if d["doc_type"] == FIRST_ROUND and d["parent"] == parent]
+    ids = {d["id"] for d in docs}
+    arows = [a for a in (store.browse_analyses(parent, PROMPT_VERSION) if arows is None else arows)
+             if a["document_id"] in ids]
+    by_doc: dict[int, dict[str, object]] = {}
     for a in arows:
-        by_doc.setdefault(a["document_id"], {})[a["model"]] = a["id"]
+        by_doc.setdefault(a["document_id"], {})[a["model"]] = a
     groups: dict[object, list] = {}
     for d in docs:  # a NULL station_key cannot be grouped: the document stands alone
         groups.setdefault(d["station_key"] if d["station_key"] is not None else ("id", d["id"]), []).append(d)
@@ -109,63 +139,72 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         active = [d for d in ds if d["active"]]
         if active:  # removed forms are not counted
             mains.append(max(active, key=lambda d: (d["uploaded_at"] or "", d["id"])))
-    need = [i for d in mains for m, i in by_doc.get(d["id"], {}).items() if i not in cache]
+    need = [a["id"] for d in mains for m, a in by_doc.get(d["id"], {}).items()
+            if a["id"] not in cache and (m == model or a["prompt_version"] == PROMPT_VERSION)]
     reports = store.analysis_reports(need)
     docobj = {d["id"]: _doc(d) for d in mains}
-    owner = {i: d for d in mains for i in by_doc.get(d["id"], {}).values()}
 
-    def ex_of(aid: int) -> dict | None:
-        if aid not in cache:
+    def ex_of(a) -> dict | None:
+        if a["id"] not in cache:
             try:
-                cache[aid] = extract(json.loads(reports[aid]), docobj[owner[aid]["id"]], cfg)
+                cache[a["id"]] = extract(json.loads(reports[a["id"]]), docobj[a["document_id"]], cfg)
             except Exception:
-                log.warning("stored analysis %s could not be read for the tally", aid, exc_info=True)
-                cache[aid] = None
-        return cache[aid]
+                log.warning("stored analysis %s could not be read for the tally", a["id"], exc_info=True)
+                cache[a["id"]] = None
+        return cache[a["id"]]
 
-    live = set(owner)
-    for gone in set(cache) - live:
+    for gone in set(cache) - {a["id"] for a in arows}:
         del cache[gone]
     forms, unanalysed = [], {}
     for d in mains:
         muni = d["municipality"] or "(unknown)"
         if municipalities is not None and muni not in municipalities:
             continue
-        ids = by_doc.get(d["id"], {})
-        mine = ex_of(ids[model]) if model in ids else None
+        got = by_doc.get(d["id"], {})
+        mine = ex_of(got[model]) if model in got else None
         if mine is None:
             unanalysed[muni] = unanalysed.get(muni, 0) + 1
             continue
-        others = {m: e for m, i in ids.items() if m != model and (e := ex_of(i)) is not None}
-        dis = disagreements(mine, others, model)
-        forms.append({"d": d, "muni": muni, "ex": mine, "dis": dis, "why": reasons(mine, dis)})
-    nlists = max((r for f in forms for r in f["ex"]["l"]), default=0)
-    stations = store.station_counts(parent)
-    names = sorted({f["muni"] for f in forms} | set(unanalysed))
+        others = {m: e for m, a in got.items() if m != model and a["prompt_version"] == PROMPT_VERSION
+                  and (e := ex_of(a)) is not None}
+        forms.append({"d": d, "muni": muni, "ex": mine, "others": others})
+    rows = expected_rows(cfg, parent, [f["ex"] for f in forms])
+    nlists = len(rows)
+    notes = []
+    for f in forms:
+        dis, note = disagreements(f["ex"], f["others"], model)
+        f["why"] = reasons(f["ex"], dis, rows)
+        notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
+    stations = {m: n for m, n in store.station_counts(parent).items()
+                if municipalities is None or m in municipalities}
+    by_muni: dict[str, list] = {}
+    for f in forms:
+        by_muni.setdefault(f["muni"], []).append(f)
+    names = sorted({*by_muni, *unanalysed, *stations})
     overall = {"all": _acc(nlists), "cl": _acc(nlists)}
     counts = {"stations": 0, "counted": 0, "clean": 0, "unanalysed": 0}
     munis = []
     for name in names:
-        mine = [f for f in forms if f["muni"] == name]
+        mine = by_muni.get(name, [])
         acc = {"all": _acc(nlists), "cl": _acc(nlists)}
         for f in mine:
-            for key, target in (("all", True), ("cl", not f["why"])):
-                if target:
-                    _add(acc[key], f["ex"])
-                    _add(overall[key], f["ex"])
+            for key, take in (("all", True), ("cl", not f["why"])):
+                if take:
+                    _add(acc[key], f["ex"], rows)
+                    _add(overall[key], f["ex"], rows)
         row = {"m": name, "stations": stations.get(name, 0), "counted": len(mine),
                "clean": sum(1 for f in mine if not f["why"]), "unanalysed": unanalysed.get(name, 0),
-               "all": _tot(acc["all"], nlists), "cl": _tot(acc["cl"], nlists)}
+               "all": _tot(acc["all"]), "cl": _tot(acc["cl"])}
         row["excluded"] = row["counted"] - row["clean"]
         for k in counts:
             counts[k] += row[k]
         munis.append(row)
-    total = {"m": "All", **counts, "all": _tot(overall["all"], nlists), "cl": _tot(overall["cl"], nlists)}
+    total = {"m": "(all)", **counts, "all": _tot(overall["all"]), "cl": _tot(overall["cl"])}
     total["excluded"] = total["counted"] - total["clean"]
     e = store.get_election(parent)
     return {"model": model, "parent": parent, "title": e.title if e else parent, "nlists": nlists,
             "names": [list_name(cfg, parent, r) for r in range(1, nlists + 1)],
-            "munis": munis, "overall": total,
+            "munis": munis, "overall": total, "notes": notes,
             "excluded": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                           "why": f["why"]} for f in forms if f["why"]]}
 
@@ -196,12 +235,14 @@ def format_tally(t: dict, all_forms: bool = False) -> str:
     out += _table(head, body)
     if t["nlists"]:
         out += ["", "votes per list (share of valid votes)"]
-        body = [[r["m"], *(f"{v:,} ({_pct(v / r[key]['valid'] if r[key]['valid'] else None)})"
+        body = [[r["m"], *(f"{v:,} ({_pct(v / r[key]['lists_valid'] if r[key]['lists_valid'] else None)})"
                            for v in r[key]["lists"])] for r in rows]
         out += _table(["municipality", *t["names"]], body)
     pending = t["overall"]["unanalysed"]
     out += ["", f"{t['overall']['counted']} form(s) counted, {t['overall']['clean']} clean, "
             f"{t['overall']['excluded']} excluded, {pending} not analysed by {t['model']}"]
+    if t["notes"]:
+        out += ["", "notes (not excluded):"] + [f"  {n['m']} BM {n['no']}: {n['note']}" for n in t["notes"]]
     if t["excluded"]:
         out += ["", "excluded forms (reason):"]
         out += [f"  {e['m']} BM {e['no']}: " + "; ".join(e["why"]) for e in t["excluded"]]
