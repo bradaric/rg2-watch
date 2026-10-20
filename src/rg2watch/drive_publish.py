@@ -106,8 +106,12 @@ class GoogleDriveAdapter:
     def children_inherit_public(self, folder_id: str, child_ids: list[str]) -> bool:
         for child in child_ids:
             permissions = self._permissions(child)
-            if not any(p.get("type") == "anyone" and p.get("role") == "reader"
-                       for p in permissions):
+            if not any(
+                p.get("type") == "anyone" and p.get("role") == "reader" and any(
+                    detail.get("inherited") is True and detail.get("inheritedFrom") == folder_id
+                    for detail in p.get("permissionDetails", [])
+                ) for p in permissions
+            ):
                 return False
         return True
 

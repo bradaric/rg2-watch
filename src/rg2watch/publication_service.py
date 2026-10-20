@@ -67,7 +67,7 @@ class PublicationJobs:
         if row["phase"] == "published":
             out.update(url=row["final_url"], viber_text=row["viber_text"])
         else:
-            out["retryable"] = True
+            out.update(summary=row["summary"], retryable=True)
         return out
 
     def close(self):

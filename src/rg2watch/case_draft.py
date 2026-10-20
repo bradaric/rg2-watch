@@ -59,4 +59,5 @@ class CaseDrafter:
                                      tin, tout, cost, status)
         if not text.strip() or not _CYRILLIC.search(text):
             raise DraftUnavailable("AI draft was not usable Serbian Cyrillic; use the manual template")
-        return text.strip()[:4096]
+        # Publish enforces a UTF-8 byte limit, so bound the editable draft by the same unit.
+        return text.strip().encode("utf-8")[:4096].decode("utf-8", errors="ignore").strip()

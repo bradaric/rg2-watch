@@ -767,19 +767,20 @@ class Store:
         return row["verdict"] if row else None
 
     def claim_publication(self, url: str, summary: str, summary_sha256: str, staged_pdf_path: str,
-                          pdf_sha256: str, case: dict) -> sqlite3.Row:
+                          pdf_sha256: str, case: dict) -> tuple[sqlite3.Row, bool]:
         now = _now()
         with self._lock, self._db:
             doc = self._db.execute("SELECT id, parent FROM documents WHERE url=?", (url,)).fetchone()
             if doc is None:
                 raise KeyError(url)
-            self._db.execute(
+            inserted = self._db.execute(
                 "INSERT OR IGNORE INTO publications(url,document_id,parent,summary,summary_sha256,"
                 "staged_pdf_path,pdf_sha256,case_json,phase,created_at,updated_at) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (url, doc["id"], doc["parent"], summary, summary_sha256, staged_pdf_path,
                  pdf_sha256, json.dumps(case, ensure_ascii=False), "preparing", now, now))
-            return self._db.execute("SELECT * FROM publications WHERE url=?", (url,)).fetchone()
+            row = self._db.execute("SELECT * FROM publications WHERE url=?", (url,)).fetchone()
+            return row, inserted.rowcount == 1
 
     def get_publication(self, url: str) -> sqlite3.Row | None:
         with self._lock:

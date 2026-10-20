@@ -40,7 +40,7 @@ class CaseHandoff:
                 "station": row["station_no"] or "?", "label": row["label"] or "документ",
                 "rik_url": rik, "note": row["note"] or ""}
 
-    def _cached_pdf(self, url: str) -> tuple[Path, str]:
+    def _cached_pdf(self, url: str) -> tuple[Path, str, bytes]:
         cache_dir = ((Path("data") if str(self.cfg.db_path) == ":memory:" else
                       Path(self.cfg.db_path).parent) / "pdfs").resolve()
         path = (cache_dir / (hashlib.sha256(url.encode()).hexdigest() + ".pdf")).resolve()
@@ -54,11 +54,11 @@ class CaseHandoff:
             raise CaseError("cached PDF is missing") from exc
         if not data.startswith(b"%PDF"):
             raise CaseError("cached PDF is malformed")
-        return path, hashlib.sha256(data).hexdigest()
+        return path, hashlib.sha256(data).hexdigest(), data
 
     def prepare(self, url: str, draft: bool = True) -> dict:
         case = self._case(url)
-        _, digest = self._cached_pdf(url)
+        _, digest, _ = self._cached_pdf(url)
         summary, warning = manual_template(case), None
         if draft and self.drafter is not None:
             try:
@@ -85,16 +85,25 @@ class CaseHandoff:
             if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != existing["pdf_sha256"]:
                 raise CaseError("frozen staged PDF is missing or changed")
             return dict(existing)
-        cached, digest = self._cached_pdf(url)
+        _, digest, pdf = self._cached_pdf(url)
         case = self._case(url)
         stage_dir = Path(self.cfg.db_path).resolve().parent / ".rg2watch-publications"
         stage_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(stage_dir, 0o700)
         final = stage_dir / (hashlib.sha256(url.encode()).hexdigest() + ".pdf")
+        row, inserted = self.store.claim_publication(
+            url, summary, summary_hash, str(final), digest, case)
+        if not inserted:
+            if row["summary_sha256"] != summary_hash or row["pdf_sha256"] != digest:
+                raise CaseError("inputs differ from the frozen pending package; inspect the frozen case")
+            staged = Path(row["staged_pdf_path"])
+            if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != row["pdf_sha256"]:
+                raise CaseError("frozen package is incomplete: staged PDF is missing or changed")
+            return dict(row)
         fd, tmp = tempfile.mkstemp(dir=stage_dir, suffix=".tmp")
         try:
             with os.fdopen(fd, "wb") as fh:
-                fh.write(cached.read_bytes())
+                fh.write(pdf)
                 fh.flush(); os.fsync(fh.fileno())
             os.chmod(tmp, 0o600)
             if hashlib.sha256(Path(tmp).read_bytes()).hexdigest() != digest:
@@ -103,7 +112,6 @@ class CaseHandoff:
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
-        row = self.store.claim_publication(url, summary, summary_hash, str(final), digest, case)
         return dict(row)
 
     @staticmethod

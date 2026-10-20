@@ -1,11 +1,13 @@
 import hashlib
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from rg2watch.case_handoff import CaseError, CaseHandoff
 from rg2watch.config import Config
-from rg2watch.drive_publish import DriveError, DrivePublisher
+from rg2watch.drive_publish import DriveError, DrivePublisher, GoogleDriveAdapter
 from rg2watch.store import Store
 from test_browse import BASE, P, add, doc
 
@@ -141,3 +143,158 @@ def test_remote_metadata_mismatch_fails_closed(tmp_path):
     with pytest.raises(DriveError, match="metadata"):
         DrivePublisher(cases, drive).publish(URL, "Јавни опис")
     assert not drive.public
+
+
+class BlockingShareDrive(FakeDrive):
+    def __init__(self):
+        super().__init__()
+        self.sharing = threading.Event()
+        self.release = threading.Event()
+
+    def share_folder(self, folder_id):
+        self.sharing.set()
+        assert self.release.wait(5)
+        super().share_folder(folder_id)
+
+
+def test_review_started_during_share_waits_until_publication_is_committed(tmp_path):
+    first, cases = setup_case(tmp_path)
+    drive = BlockingShareDrive()
+    publisher = DrivePublisher(cases, drive)
+    publish_result = []
+    publish_thread = threading.Thread(
+        target=lambda: publish_result.append(publisher.publish(URL, "Јавни опис")))
+    publish_thread.start()
+    assert drive.sharing.wait(5)
+
+    second = Store(first.path)
+    review_result = []
+    review_thread = threading.Thread(target=lambda: review_result.append(second.set_review(URL, "ok")))
+    review_thread.start()
+    time.sleep(.05)
+    assert review_thread.is_alive()
+    assert first.get_publication(URL)["phase"] != "published"
+
+    drive.release.set()
+    publish_thread.join(5)
+    review_thread.join(5)
+    assert publish_result[0]["status"] == "published"
+    assert review_result[0]["verdict"] == "ok"
+    assert DrivePublisher(cases, drive).publish(URL, "ignored") == publish_result[0]
+    assert drive.share_calls == 1
+
+
+class PermissionRequest:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def execute(self):
+        return self.payload
+
+
+class PermissionService:
+    def __init__(self, by_file):
+        self.by_file = by_file
+
+    def permissions(self):
+        return self
+
+    def list(self, fileId, fields):
+        return PermissionRequest({"permissions": self.by_file[fileId]})
+
+
+def test_child_public_permission_must_be_inherited_from_expected_folder():
+    anyone_from = lambda parent: {
+        "type": "anyone", "role": "reader",
+        "permissionDetails": [{"inherited": True, "inheritedFrom": parent}],
+    }
+    service = PermissionService({
+        "pdf": [anyone_from("folder")],
+        "text": [anyone_from("other-public-folder")],
+    })
+    adapter = GoogleDriveAdapter(service)
+    assert not adapter.children_inherit_public("folder", ["pdf", "text"])
+    service.by_file["text"] = [anyone_from("folder")]
+    assert adapter.children_inherit_public("folder", ["pdf", "text"])
+
+
+@pytest.mark.parametrize("failure", ["folder", "pdf", "text"])
+def test_drive_failure_before_sharing_leaves_folder_restricted(tmp_path, failure):
+    _, cases = setup_case(tmp_path)
+
+    class FailingDrive(FakeDrive):
+        def create_folder(self, file_id, name):
+            if failure == "folder":
+                raise DriveError("injected Drive failure")
+            super().create_folder(file_id, name)
+
+        def upload(self, file_id, name, mime, parent, data):
+            kind = "pdf" if mime == "application/pdf" else "text"
+            if failure == kind:
+                raise DriveError("injected Drive failure")
+            super().upload(file_id, name, mime, parent, data)
+
+    drive = FailingDrive()
+    with pytest.raises(DriveError, match="injected"):
+        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    assert not drive.public and drive.share_calls == 0
+
+
+def test_crash_before_uploaded_phase_update_recovers_frozen_case(tmp_path, monkeypatch):
+    store, cases = setup_case(tmp_path)
+    drive = FakeDrive()
+    real_advance = store.advance_publication
+
+    def crash_before_update(url, phase):
+        monkeypatch.setattr(store, "advance_publication", real_advance)
+        raise SimulatedCrash("before uploaded phase update")
+
+    monkeypatch.setattr(store, "advance_publication", crash_before_update)
+    with pytest.raises(SimulatedCrash, match="phase update"):
+        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    assert not drive.public
+    result = DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    assert result["status"] == "published"
+    assert set(drive.files) == set(drive.ids)
+
+
+def test_crash_after_id_preallocation_persists_ids_before_any_create(tmp_path):
+    store, cases = setup_case(tmp_path)
+
+    class CrashBeforeCreate(FakeDrive):
+        def __init__(self):
+            super().__init__()
+            self.once = True
+
+        def get_file(self, file_id):
+            if self.once:
+                self.once = False
+                raise SimulatedCrash("after ID persistence")
+            return super().get_file(file_id)
+
+    drive = CrashBeforeCreate()
+    with pytest.raises(SimulatedCrash, match="ID persistence"):
+        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    row = store.get_publication(URL)
+    assert [row["folder_id"], row["pdf_file_id"], row["text_file_id"]] == drive.ids
+    assert drive.files == {}
+    assert DrivePublisher(cases, drive).publish(URL, "Јавни опис")["status"] == "published"
+
+
+def test_crash_after_share_before_finalize_recovers_even_after_ok(tmp_path, monkeypatch):
+    store, cases = setup_case(tmp_path)
+    drive = FakeDrive()
+    real_finalize = store.finalize_publication
+
+    def crash_before_finalize(url, final_url, viber_text):
+        monkeypatch.setattr(store, "finalize_publication", real_finalize)
+        raise SimulatedCrash("before publication commit")
+
+    monkeypatch.setattr(store, "finalize_publication", crash_before_finalize)
+    with pytest.raises(SimulatedCrash, match="publication commit"):
+        DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    assert drive.public
+    store.set_review(URL, "ok")
+    result = DrivePublisher(cases, drive).publish(URL, "Јавни опис")
+    assert result["status"] == "published"
+    assert drive.share_calls == 1

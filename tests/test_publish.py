@@ -2,6 +2,8 @@ import hashlib
 import http.client
 import json
 import multiprocessing
+import os
+import signal
 import time
 from pathlib import Path
 
@@ -95,6 +97,28 @@ def test_claim_freezes_summary_and_pdf_and_refuses_changed_retry(tmp_path):
     store.close()
 
 
+def test_crash_while_staging_leaves_durable_incomplete_freeze(tmp_path, monkeypatch):
+    store, service, _ = handoff(tmp_path)
+    real_replace = os.replace
+
+    def crash_before_stage_publish(source, destination):
+        if str(destination).endswith(".pdf"):
+            raise RuntimeError("simulated staging crash")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", crash_before_stage_publish)
+    with pytest.raises(RuntimeError, match="staging crash"):
+        service.claim(URL, "Замрзнут опис")
+    pending = store.get_publication(URL)
+    assert pending is not None
+    assert pending["summary"] == "Замрзнут опис"
+    assert not Path(pending["staged_pdf_path"]).exists()
+
+    monkeypatch.setattr(os, "replace", real_replace)
+    with pytest.raises(CaseError, match="incomplete|missing"):
+        service.claim(URL, "Замрзнут опис")
+
+
 def test_completed_publication_is_historical_after_ok(tmp_path):
     store, service, _ = handoff(tmp_path)
     p = service.claim(URL, "Јавни опис")
@@ -168,6 +192,14 @@ def test_ai_draft_is_explicit_bounded_cyrillic_and_billed_to_existing_cap(tmp_pa
     assert store.total_spend(P) > 0
 
 
+def test_ai_draft_is_bounded_by_publish_utf8_byte_limit(tmp_path):
+    store, service, _ = handoff(tmp_path)
+    client = type("Client", (), {"messages": FakeMessages("Ж" * 4096)})()
+    draft = CaseDrafter(store, service.cfg, client).draft(service._case(URL))
+    assert len(draft.encode("utf-8")) <= 4096
+    service.claim(URL, draft)
+
+
 def test_draft_refuses_non_anthropic_unknown_price_and_exhausted_cap(tmp_path):
     store, service, _ = handoff(tmp_path)
     client = type("Client", (), {"messages": FakeMessages()})()
@@ -200,7 +232,7 @@ class FakeCaseAPI:
     def job(self, job_id):
         return {"id": job_id, "state": "done", "result": {"summary": "Ћирилица"}}
     def publication(self, url):
-        return {"status": "published", "url": "https://drive.example/f", "viber_text": "Порука"}
+        return {"status": "uploaded", "summary": "Замрзнути опис", "retryable": True}
 
 
 def case_request(server, method, path, body=None, headers=None):
@@ -233,7 +265,8 @@ def test_case_http_routes_are_explicit_strict_and_same_origin(tmp_path):
                             {"url": URL, "summary": "Јавно", "confirm": True}) == (
                                 202, {"job_id": "publish-job"})
         assert case_request(srv, "GET", "/case/jobs/prepare-job")[0] == 200
-        assert case_request(srv, "GET", "/case/publication?url=" + URL)[0] == 200
+        assert case_request(srv, "GET", "/case/publication?url=" + URL) == (
+            200, {"status": "uploaded", "summary": "Замрзнути опис", "retryable": True})
         assert case_request(srv, "POST", "/case/prepare", {"url": URL},
                             {"Origin": "http://evil.example"})[0] == 403
         assert case_request(srv, "GET", "/case/jobs/prepare-job",
@@ -241,6 +274,24 @@ def test_case_http_routes_are_explicit_strict_and_same_origin(tmp_path):
         assert case_request(srv, "POST", "/case/publish", {"url": URL, "summary": "x",
                                                              "confirm": False})[0] == 400
         assert case_request(srv, "GET", "/case/prepare")[0] == 404
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+@pytest.mark.parametrize("method,path,body,headers,status", [
+    ("POST", "/case/prepare", {"url": URL, "extra": 1}, None, 400),
+    ("POST", "/case/prepare", {"url": 7}, None, 400),
+    ("POST", "/case/publish", {"url": URL, "summary": 7, "confirm": True}, None, 400),
+    ("POST", "/case/publish", {"url": URL, "summary": "x", "confirm": True, "x": 1}, None, 400),
+    ("POST", "/case/prepare", {"url": URL}, {"Content-Type": "application/json; charset=utf-8"}, 400),
+    ("POST", "/case/prepare", {"url": URL}, {"X-RG2W": ""}, 403),
+])
+def test_case_http_rejects_invalid_fields_types_and_headers(
+        tmp_path, method, path, body, headers, status):
+    (tmp_path / "index.html").write_text("ok")
+    srv = start_server(tmp_path, tmp_path, 0, case_api=FakeCaseAPI())
+    try:
+        assert case_request(srv, method, path, body, headers)[0] == status
     finally:
         srv.shutdown(); srv.server_close()
 
@@ -261,6 +312,8 @@ def test_page_has_explicit_safe_case_controls():
     assert 'document.createElement("textarea")' in html
     assert ".textContent" in html and "innerHTML = draft" not in html
     assert "свако са везом" in html
+    assert "area.value = pending.summary" in html
+    assert "Понови објаву замрзнутог предмета" in html
 
 
 def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_path):
@@ -280,3 +333,54 @@ def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_
         assert jobs.publication(URL) is None
     finally:
         jobs.close()
+
+
+def test_pending_publication_status_exposes_frozen_summary_for_explicit_retry(tmp_path):
+    store, cases, cache = handoff(tmp_path)
+    pending = cases.claim(URL, "Замрзнути јавни опис")
+    store.save_drive_ids(URL, "folder", "pdf", "text")
+    cache.unlink()
+    store.set_review(URL, "ok")
+    jobs = PublicationJobs(cases, object(), workers=1)
+    try:
+        state = jobs.publication(URL)
+        assert state == {
+            "status": pending["phase"],
+            "summary": "Замрзнути јавни опис",
+            "retryable": True,
+        }
+    finally:
+        jobs.close()
+
+
+def _hold_publish_lock(db, url, ready):
+    store = Store(db)
+    lock = store.case_locks.publish(url, blocking=False)
+    assert lock is not None
+    ready.set()
+    signal.pause()
+
+
+def test_two_store_publish_owner_blocks_claim_and_upload_then_recovers_after_crash(tmp_path):
+    from test_drive_publish import FakeDrive
+    from rg2watch.drive_publish import DrivePublisher, DriveError
+
+    first, _, _ = handoff(tmp_path)
+    second = Store(first.path)
+    cases = CaseHandoff(second, Config(db_path=Path(first.path), max_pdf_bytes=1000))
+    ready = multiprocessing.Event()
+    owner = multiprocessing.Process(target=_hold_publish_lock, args=(first.path, URL, ready))
+    owner.start()
+    try:
+        assert ready.wait(5)
+        blocked_drive = FakeDrive()
+        with pytest.raises(DriveError, match="in progress"):
+            DrivePublisher(cases, blocked_drive).publish(URL, "Јавни опис")
+        assert blocked_drive.steps == []
+        assert second.get_publication(URL) is None
+    finally:
+        if owner.is_alive():
+            owner.kill()
+        owner.join(5)
+    result = DrivePublisher(cases, blocked_drive).publish(URL, "Јавни опис")
+    assert result["status"] == "published"

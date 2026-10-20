@@ -577,10 +577,10 @@ function caseBox(v) {
   const box = mk("div", null, "casebox"), msg = mk("span", null, "rvmsg");
   box.append(msg);
   if (!HTTP) { msg.textContent = "Објављивање је доступно само преко локалног rg2watch сервера."; return box; }
-  const controls = () => {
+  const controls = pending => {
     const rv = rvOf(v);
-    if (!rv || rv.v !== "escalate") { msg.textContent = "Нова објава тражи најновију одлуку escalate за ову верзију."; return; }
-    if (!v.pdf) { msg.textContent = "Нема локално кешираног PDF-а; rg2watch га неће поново преузети са РИК-а."; return; }
+    if (!pending && (!rv || rv.v !== "escalate")) { msg.textContent = "Нова објава тражи најновију одлуку escalate за ову верзију."; return; }
+    if (!pending && !v.pdf) { msg.textContent = "Нема локално кешираног PDF-а; rg2watch га неће поново преузети са РИК-а."; return; }
     const prep = mk("button", "Припреми нацрт"); prep.type = "button";
     const area = document.createElement("textarea"); area.hidden = true;
     area.setAttribute("aria-label", "јавни опис предмета на српској ћирилици");
@@ -605,11 +605,16 @@ function caseBox(v) {
         .then(j => waitCaseJob(j.job_id, box, result => publishedCase(box, result)))
         .catch(e => { publish.disabled = false; msg.textContent = "Грешка: " + e.message; });
     };
-    box.append(" ", prep, area, label, publish);
+    if (pending) {
+      area.value = pending.summary || ""; area.hidden = label.hidden = publish.hidden = false;
+      area.readOnly = true; publish.textContent = "Понови објаву замрзнутог предмета";
+      msg.textContent = "Постоји замрзнут незавршен предмет. Проверите текст и изричито поновите објаву; кеш и нови нацрт се не користе.";
+      box.append(" ", area, label, publish);
+    } else box.append(" ", prep, area, label, publish);
   };
   caseFetch("case/publication?url=" + encodeURIComponent(v.u)).then(data => {
     if (data.status === "published") publishedCase(box, data);
-    else { if (data.status && data.status !== "none") msg.textContent = "Постоји замрзнут незавршен предмет; поновите Објави са истим текстом. "; controls(); }
+    else controls(data.status && data.status !== "none" ? data : null);
   }).catch(e => { msg.textContent = "Стање објаве није доступно: " + e.message; });
   return box;
 }
