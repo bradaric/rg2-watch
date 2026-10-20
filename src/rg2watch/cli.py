@@ -313,6 +313,7 @@ def _cmd_browse(args) -> int:
 
 STATUS_EVERY_S = 10
 HELPER_JOIN_S = 5  # shutdown: status/browse threads, together
+FINAL_DELIVER_WAIT_S = 15  # shutdown: wait for an in-flight delivery (ntfy timeout is 10 s)
 DELIVERY_JOIN_S = 3  # shutdown: delivery thread, after the pipeline stopped
 DELIVER_EVERY_S = 5  # alert delivery and RIK health check run on their own clock, not per tick
 
@@ -490,13 +491,25 @@ def _review_api(store: Store) -> tuple:
 
 
 def _handlers(store: Store, notifier: Notifier, parent: str, pipeline=None):
-    def deliver(flush: bool = False) -> None:
-        """Called once per tick by the watch loop; `flush` also pushes the MEDIUM digest now."""
+    lock = threading.Lock()  # one read-send-mark sequence at a time (delivery thread vs final shutdown run)
+
+    def deliver(flush: bool = False, wait: float | None = None) -> None:
+        """Called every few seconds by the delivery thread; `flush` also pushes the MEDIUM digest now.
+        `wait` bounds the wait for an in-flight delivery (shutdown); on timeout findings stay unalerted."""
+        if not lock.acquire(timeout=-1 if wait is None else wait):
+            log.warning("alert delivery still in flight; findings stay unalerted until next start")
+            return
         try:
-            store.mark_alerted(notifier.send(store.unalerted(parent, {"HIGH", "MEDIUM", "LOW"}),
-                                             flush))
+            held = notifier.unmarked  # sent but the mark failed: mark again, never re-send
+            fresh = [r for r in store.unalerted(parent, {"HIGH", "MEDIUM", "LOW"}) if r[0] not in held]
+            notifier.send(fresh, flush)
+            ids = sorted(notifier.unmarked)
+            store.mark_alerted(ids)
+            notifier.marked(ids)
         except Exception:
             log.exception("alert delivery failed; retrying next tick")
+        finally:
+            lock.release()
 
     def on_events(events: list[Event]) -> None:
         try:
@@ -791,10 +804,14 @@ def _run_watch(args, cfg: Config) -> int:
             stop_delivery.set()
             if delivery is not None:
                 delivery.join(DELIVERY_JOIN_S)
-            if reached:  # --until-done verdict: last alerts, last page, then the summary
+            if not args.once:  # every exit path: the pipeline's last findings still go out
+                try:
+                    deliver(flush=reached, wait=FINAL_DELIVER_WAIT_S)
+                except BaseException:
+                    log.exception("final delivery failed")
+            if reached:  # --until-done verdict: last page, then the summary
                 try:
                     try:
-                        deliver(flush=True)
                         live = {"ntfy": notifier.status_snapshot(), "url": None}
                         if pipeline is not None:
                             live["analysis"] = pipeline.status_snapshot()

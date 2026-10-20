@@ -225,7 +225,7 @@ def _delivery_env(tmp_path, monkeypatch, delivered):
 
     def handlers(*a):
         on_events, _ = real(*a)
-        return on_events, lambda flush=False: delivered.append(flush)
+        return on_events, lambda flush=False, **kw: delivered.append(flush)
 
     monkeypatch.setattr(cli, "_handlers", handlers)
     monkeypatch.setattr(cli, "DELIVER_EVERY_S", 0.01)
@@ -289,3 +289,118 @@ def test_baseline_refused_on_database_with_documents(tmp_path, capsys):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def _deliver_env(post):
+    import io
+
+    import httpx
+
+    from rg2watch.cli import _handlers
+    from rg2watch.config import Config
+    from rg2watch.models import Finding
+    from rg2watch.notify import Notifier
+    from rg2watch.store import Store
+
+    store = Store(":memory:")
+    store.upsert_election(__import__("rg2watch.models", fromlist=["Election"]).Election(
+        "p", "c", "3", "T", "http://x"))
+    d = _doc(1)
+    store.apply_events("p", store.start_sweep("p", "t"),
+                       [__import__("rg2watch.models", fromlist=["Event"]).Event("added", d)])
+    store.add_finding("p", Finding("D1", "HIGH", d, "new"), d.url)
+    cfg = Config(ntfy_topic="t", ntfy_url="http://ntfy.test")
+    http = httpx.Client(transport=httpx.MockTransport(post))
+    notifier = Notifier(cfg, http, io.StringIO())
+    _, deliver = _handlers(store, notifier, "p")
+    return store, notifier, deliver
+
+
+def test_final_deliver_waits_for_in_flight_delivery_no_double_push():
+    import threading
+    import time
+
+    import httpx
+
+    posts, inside, release = [], threading.Event(), threading.Event()
+
+    def post(req):
+        posts.append(req)
+        inside.set()
+        release.wait(5)
+        return httpx.Response(200)
+
+    store, _, deliver = _deliver_env(post)
+    t = threading.Thread(target=deliver)
+    t.start()
+    assert inside.wait(5)
+    threading.Timer(0.3, release.set).start()
+    t0 = time.monotonic()
+    deliver(flush=True, wait=5)  # blocks on the lock until the first run has marked
+    assert time.monotonic() - t0 >= 0.2
+    t.join()
+    assert len(posts) == 1
+    assert store.unalerted("p", {"HIGH"}) == []
+
+
+def test_final_deliver_gives_up_after_bounded_wait(caplog):
+    import threading
+
+    import httpx
+
+    inside, release = threading.Event(), threading.Event()
+
+    def post(req):
+        inside.set()
+        release.wait(5)
+        return httpx.Response(200)
+
+    store, _, deliver = _deliver_env(post)
+    t = threading.Thread(target=deliver)
+    t.start()
+    assert inside.wait(5)
+    deliver(flush=True, wait=0.05)
+    assert "still in flight" in caplog.text
+    release.set()
+    t.join()
+
+
+def test_mark_alerted_failure_does_not_resend_then_marks_later():
+    import httpx
+
+    posts = []
+    store, notifier, deliver = _deliver_env(lambda r: posts.append(r) or httpx.Response(200))
+    real, fail = store.mark_alerted, [True]
+
+    def flaky(ids):
+        if fail[0]:
+            raise RuntimeError("db busy")
+        real(ids)
+
+    store.mark_alerted = flaky
+    deliver()
+    assert len(posts) == 1 and len(store.unalerted("p", {"HIGH"})) == 1
+    deliver()
+    assert len(posts) == 1  # no re-send
+    fail[0] = False
+    deliver()
+    assert len(posts) == 1 and store.unalerted("p", {"HIGH"}) == [] and not notifier.unmarked
+
+
+def test_ctrl_c_runs_final_delivery(tmp_path, monkeypatch):
+    import rg2watch.cli as cli
+    from rg2watch.watcher import Watcher
+
+    delivered = []
+    argv = _delivery_env(tmp_path, monkeypatch, delivered)
+    monkeypatch.setattr(cli, "DELIVER_EVERY_S", 1000)  # the loop thread only runs once
+    seen = []
+
+    def interrupt(self):
+        seen.append(list(delivered))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Watcher, "run_once", interrupt)
+    assert main(argv) == 0
+    assert len(delivered) > len(seen[0])  # a delivery after the stop, with flush=False
+    assert delivered[-1] is False

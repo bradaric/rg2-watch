@@ -58,7 +58,7 @@ def test_final_status_says_stopped_and_digest_flushed(rehearsal, monkeypatch):
 
     def handlers(*a):
         on_events, deliver = real(*a)
-        return on_events, lambda flush=False: (calls.append(flush), deliver(flush))[1]
+        return on_events, lambda flush=False, **kw: (calls.append(flush), deliver(flush, **kw))[1]
     monkeypatch.setattr(cli, "_handlers", handlers)
     assert main([*argv, "--until-done"]) == 0
     assert calls[-1] is True and not any(calls[:-1])

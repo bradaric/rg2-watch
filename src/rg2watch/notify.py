@@ -102,6 +102,7 @@ class Notifier:
         self.last_ok: float | None = None  # wall time of the last accepted push
         self.last_fail: float | None = None
         self._lock = threading.RLock()  # status() is called from analysis worker threads
+        self.unmarked: set[int] = set()  # delivered but not yet marked alerted (mark failed): never re-sent
 
     def _post(self, title: str, body: str, priority: str, tags: str, click: str | None = None) -> bool:
         """Push one message; after a failure, skip pushes until the backoff window ends."""
@@ -165,7 +166,13 @@ class Notifier:
     def send(self, findings_with_ids: list[tuple[int, Finding]], flush: bool = False) -> list[int]:
         """`flush` pushes the MEDIUM digest now instead of waiting for medium_digest_s."""
         with self._lock:
-            return self._send(findings_with_ids, flush)
+            delivered = self._send(findings_with_ids, flush)
+            self.unmarked.update(delivered)
+            return delivered
+
+    def marked(self, ids) -> None:
+        with self._lock:
+            self.unmarked.difference_update(ids)
 
     def _send(self, findings_with_ids: list[tuple[int, Finding]], flush: bool = False) -> list[int]:
         delivered: list[int] = []
