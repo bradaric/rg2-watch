@@ -57,7 +57,7 @@ def test_medium_digest_waits_for_interval():
     assert reqs == []
     clock.t = 600
     assert sorted(n.send(m)) == [5, 6]
-    assert len(reqs) == 1 and len(reqs[0].content.decode().splitlines()) == 2
+    assert len(reqs) == 1 and len(reqs[0].content.decode().splitlines()) == 3
     assert out.getvalue().count("[MEDIUM] D1") == 1  # printed once despite retries
     assert n.send([]) == []
 
@@ -133,7 +133,7 @@ def test_to_ascii_strips_control_chars():
     assert to_ascii("Град\x00Зајечар\x1b[31m\x7fX\t") == "Grad Zajecar [31m X"
 
 
-def test_d2_alert_and_digest_show_previous_url():
+def test_d2_alert_shows_previous_url_digest_does_not():
     f = fin()
     f = Finding(f.rule, f.severity, f.doc, f.summary, previous_url="https://x/old.pdf")
     assert format_alert(f)[1].split("\n")[-1] == "was: https://x/old.pdf"
@@ -144,7 +144,8 @@ def test_d2_alert_and_digest_show_previous_url():
     n.send([(1, m)])
     clock.t = 600
     assert n.send([(1, m)]) == [1]
-    assert reqs[0].content.decode().endswith("https://x/a.pdf was: https://x/old.pdf")
+    body = reqs[0].content.decode()
+    assert body.endswith("https://x/a.pdf") and "was:" not in body
 
 
 def test_unreachable_ntfy_backs_off_exponentially():
@@ -241,3 +242,63 @@ def test_printed_alerts_are_flushed():
     n = Notifier(cfg, None, out, Clock())
     n.send([(1, fin())])
     assert Out.flushes >= 1
+
+
+def _digest(findings, page_url=None):
+    reqs = []
+    clock = Clock()
+    n, _ = make(lambda r: reqs.append(r) or httpx.Response(200), clock=clock)
+    n.page_url = page_url
+    items = list(enumerate(findings))
+    n.send(items)
+    clock.t = 600
+    assert n.send(items) == [i for i, _ in items]
+    assert len(reqs) == 1
+    return reqs[0]
+
+
+def _mf(rule, no, summary="remark"):
+    f = fin("MEDIUM", rule, str(no))
+    return Finding(rule, "MEDIUM", f.doc, summary)
+
+
+def test_big_digest_is_capped_and_lists_counts():
+    fs = [_mf("P3", i, "x" * 200) for i in range(41)] + [_mf("V4", i) for i in range(28)]
+    fs += [_mf(r, i) for i, r in enumerate(["A9"] * 12 + ["V8"] * 7 + ["Z1", "Z2", "Z3", "Z4", "Z5", "Z6", "Z7", "Z8"])]
+    r = _digest(fs)
+    body = r.content.decode("utf-8")
+    assert len(r.content) <= 3500
+    assert r.headers["Title"] == f"[MEDIUM] {len(fs)} findings"
+    assert body.split("\n")[0] == "P3 41, V4 28, A9 12, V8 7, Z1 1, Z2 1, other 6"
+    assert "http" not in body and "x" * 81 not in body
+    assert body.split("\n")[-1] == f"+{len(fs) - 10} more - open the page, filter MEDIUM"
+
+
+def test_digest_orders_priority_rules_first_and_limits_to_ten():
+    fs = [_mf("P3", i) for i in range(5)] + [_mf("D4", 1), _mf("A9", 2), _mf("V2", 3), _mf("A5", 4)]
+    fs += [_mf("P3", 9 + i) for i in range(5)]
+    lines = _digest(fs).content.decode("utf-8").split("\n")
+    assert [ln.split()[0] for ln in lines[1:5]] == ["A9", "A5", "V2", "D4"]
+    assert len(lines) == 1 + 10 + 1 and lines[-1].startswith("+4 more")
+    assert lines[1] == "A9 Град Зајечар BM 2: remark"
+
+
+def test_single_finding_digest_keeps_url():
+    body = _digest([_mf("D1", 7)]).content.decode("utf-8")
+    assert body.split("\n") == ["D1 1", "D1 Град Зајечар BM 7: remark https://x/a.pdf"]
+
+
+def test_digest_appends_page_url():
+    fs = [_mf("P3", i) for i in range(12)]
+    body = _digest(fs, "http://127.0.0.1:8000").content.decode("utf-8")
+    assert body.endswith("+2 more - open the page, filter MEDIUM http://127.0.0.1:8000")
+    assert "http" not in body.replace("http://127.0.0.1:8000", "")
+
+
+def test_digest_cap_never_splits_characters():
+    f = _mf("P3", 1, "ш" * 5000)
+    f = Finding("P3", "MEDIUM", f.doc, f.summary)
+    from rg2watch.notify import digest_body
+    big = Finding("P3", "MEDIUM", Doc("Ш" * 3000, "1", "s", "x", 6, "https://x/a.pdf", "2025-11-02T21:05"), "s")
+    out = digest_body([big, f])
+    assert len(out.encode("utf-8")) <= 3500

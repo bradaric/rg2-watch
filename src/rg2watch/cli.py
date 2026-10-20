@@ -674,6 +674,7 @@ def _cmd_watch(args) -> int:
                     server = _start_web(_browse_path(cfg).parent, _cache_dir(cfg), port, store)
                 url = f"http://127.0.0.1:{server.server_port}" if server else None
                 if url:
+                    notifier.page_url = url
                     print(f"page: {url}", flush=True)
                 live = _live(watcher, pipeline, notifier, url)
                 threads.append(_background("status", stop, STATUS_EVERY_S, lambda: write_status(

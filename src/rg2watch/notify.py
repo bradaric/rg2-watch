@@ -2,6 +2,7 @@ import re
 import sys
 import threading
 import time
+from collections import Counter
 from datetime import datetime
 from urllib.parse import quote
 
@@ -45,6 +46,39 @@ def format_alert(f: Finding) -> tuple[str, str]:
     return title, body
 
 
+DIGEST_MAX_BYTES = 3500  # ntfy.sh body limit is 4096
+DIGEST_DETAIL_LINES = 10
+DIGEST_CODES = 6
+DIGEST_SUMMARY_CHARS = 80
+_DIGEST_PRIORITY = ["A9", "A5", "V2", "V8", "R1", "D1", "D2", "D4"]
+
+
+def digest_body(findings: list[Finding], page_url: str | None = None) -> str:
+    """Compact MEDIUM digest: counts by rule, a few detail lines, no URLs (except for a single finding)."""
+    counts = Counter(f.rule for f in findings)
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    parts = [f"{r} {c}" for r, c in ranked[:DIGEST_CODES]]
+    if len(ranked) > DIGEST_CODES:
+        parts.append(f"other {sum(c for _, c in ranked[DIGEST_CODES:])}")
+    lines = [", ".join(parts)]
+    rank = {r: i for i, r in enumerate(_DIGEST_PRIORITY)}
+    shown = sorted(findings, key=lambda f: rank.get(f.rule, len(rank)))[:DIGEST_DETAIL_LINES]
+    for f in shown:
+        summary = f.summary if len(f.summary) <= DIGEST_SUMMARY_CHARS else f.summary[:DIGEST_SUMMARY_CHARS - 3] + "..."
+        line = f"{f.rule} {f.doc.municipality} BM {f.doc.station_no}: {summary}"
+        if len(findings) == 1:
+            line += f" {f.doc.url}"
+        lines.append(line)
+    if len(findings) > len(shown):
+        more = f"+{len(findings) - len(shown)} more - open the page, filter MEDIUM"
+        lines.append(f"{more} {page_url}" if page_url else more)
+    body = "\n".join(lines)
+    while len(body.encode("utf-8")) > DIGEST_MAX_BYTES and len(lines) > 1:
+        lines.pop(-2 if len(lines) > 2 and lines[-1].startswith("+") else -1)
+        body = "\n".join(lines)
+    return body.encode("utf-8")[:DIGEST_MAX_BYTES].decode("utf-8", "ignore")
+
+
 BACKOFF_START_S = 5.0
 BACKOFF_CAP_S = 60.0
 
@@ -59,6 +93,7 @@ class Notifier:
         self._pending: dict[int, Finding] = {}
         self._pending_since: float | None = None
         self._status: list[str] = []
+        self.page_url: str | None = None  # set by the CLI once the web page is serving
         self._backoff = 0.0
         self._backoff_until = 0.0
         self.last_ok: float | None = None  # wall time of the last accepted push
@@ -139,15 +174,9 @@ class Notifier:
             and self._pending_since is not None
             and (flush or self.clock() - self._pending_since >= self.cfg.medium_digest_s)
         ):
-            lines = []
-            for f in self._pending.values():
-                lines.append(
-                    f"{f.rule} {f.doc.municipality} BM {f.doc.station_no} "
-                    f"{f.doc.station_name}: {f.summary} {f.doc.url}"
-                    + (f" was: {f.previous_url}" if f.previous_url else "")
-                )
-            n = len(lines)
-            if self._post(f"[MEDIUM] {n} finding{'s' if n != 1 else ''}", "\n".join(lines), "default", "warning"):
+            n = len(self._pending)
+            body = digest_body(list(self._pending.values()), self.page_url)
+            if self._post(f"[MEDIUM] {n} finding{'s' if n != 1 else ''}", body, "default", "warning"):
                 delivered.extend(self._pending)
                 self._pending.clear()
                 self._pending_since = None
