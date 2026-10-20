@@ -114,13 +114,15 @@ class GoogleDriveAdapter:
             raise DriveError("Drive case folder contents could not be inspected") from exc
 
     def _permissions(self, file_id: str) -> list[dict]:
-        return self.service.permissions().list(
-            fileId=file_id, fields="permissions(id,type,role,permissionDetails)").execute().get(
-                "permissions", [])
+        try:
+            return self.service.permissions().list(
+                fileId=file_id, fields="permissions(id,type,role,permissionDetails)").execute().get(
+                    "permissions", [])
+        except Exception as exc:
+            raise DriveError("Drive permissions could not be inspected") from exc
 
     def folder_is_public(self, folder_id: str) -> bool:
-        return any(p.get("type") == "anyone" and p.get("role") == "reader"
-                   for p in self._permissions(folder_id))
+        return any(p.get("type") == "anyone" for p in self._permissions(folder_id))
 
     def share_folder(self, folder_id: str):
         try:
