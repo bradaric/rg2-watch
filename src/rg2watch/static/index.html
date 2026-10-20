@@ -874,7 +874,7 @@ function deltaOf(a, b) {  // totals block: corrected minus as filed (turnout and
 function vrow(r) {  // the row as the chosen numbers view shows it
   const v = NV();
   if (v === "filed") return {...r, all: r.fall, cl: r.fcl, clean: r.fclean, excluded: r.fexcluded};
-  // like-for-like: numbers over the stations counted in both views; stations joining/leaving a total are separate
+  // Like-for-like numbers use term-specific comparable cohorts; unmatched terms are reported separately.
   if (v === "diff") return {...r, all: deltaOf(r.pair.all.c, r.pair.all.f), cl: deltaOf(r.pair.cl.c, r.pair.cl.f),
     clean: r.clean - r.fclean, excluded: r.excluded - r.fexcluded, nin: r.pair[$("tmode").value].in, nout: -r.pair[$("tmode").value].out};
   return r;

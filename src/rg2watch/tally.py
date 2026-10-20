@@ -545,7 +545,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
     elif diff:
         rows = [{**r, key: _delta(r["pair"][key]["c"], r["pair"][key]["f"])} for r in rows]
     label = {"corrected": "with RG-7 corrections", "filed": "as filed on the RG-2 forms",
-             "diff": "difference (corrected - as filed, over the stations counted in both; . = no change; turnout in percentage points)"}[view]
+             "diff": "difference (corrected - as filed, over term-specific comparable cohorts; . = no change; turnout in percentage points)"}[view]
     out = [f"UNOFFICIAL - numbers read by {t['model']} from the scanned forms, not RIK results",
            f"{t['title']} ({t['parent']}): "
            + ("all counted forms" if all_forms else "clean forms only (leave out flagged)") + "; numbers " + label, ""]

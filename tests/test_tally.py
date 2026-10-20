@@ -489,6 +489,15 @@ def test_page_diff_view_uses_paired_numbers_and_explains_unmatched_terms():
     assert "vote-reconciliation eligibility" in html and "deltaOf(r.all, r.fall)" not in html
     assert "pair_selected" in html and "pair_vote_forms" in html and "pair_not_contributing" in html
     assert "t(r).turnout == null ? null" in html
+    assert "term-specific comparable cohorts" in html
+
+
+def test_cli_diff_heading_describes_term_specific_comparable_cohorts():
+    s = store()
+    form(s, 1, clean_report())
+    text = format_tally(tally(s), view="diff")
+    assert "over term-specific comparable cohorts" in text
+    assert "over the stations counted in both" not in text
 
 
 def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_lists():

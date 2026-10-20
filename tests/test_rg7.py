@@ -40,8 +40,8 @@ def cfg():
     return Config(**PRE_CALIBRATION)
 
 
-def d7(no="1", dt=20, url="/e/r7.pdf", up="2026-10-20T10:00:00Z"):
-    return bdoc(url, no=no, dt=dt, up=up)
+def d7(no="1", dt=20, url="/e/r7.pdf", up="2026-10-20T10:00:00Z", muni="Сечањ"):
+    return bdoc(url, no=no, dt=dt, up=up, muni=muni)
 
 
 def test_schema_small_flat_strict_and_nameless():
@@ -173,14 +173,15 @@ def put(s, d, rep, model=M, version=PROMPT_VERSION):
     s.save_analysis(d.url, AnalysisResult(rep, 0, 0, 0.0, model, "stop"), version, parent="adhoc")
 
 
-def station(s, rep, dt7=(), no="37", **num):
+def station(s, rep, dt7=(), no="37", muni="Сечањ", **num):
     r = copy.deepcopy(rep)
     r["numbers"].update(num)
-    d = bdoc(f"/e/rg2-{no}.pdf", no=no)
+    slug = "" if muni == "Сечањ" else f"{muni}-"
+    d = bdoc(f"/e/rg2-{slug}{no}.pdf", no=no, muni=muni)
     add(s, d)
     put(s, d, r)
     for i, (rep7, up) in enumerate(dt7):
-        x = d7(no, dt=20 + i, url=f"/e/rg7-{no}-{i}.pdf", up=up)  # RG-7-2, RG-7-3: one active per type
+        x = d7(no, dt=20 + i, url=f"/e/rg7-{slug}{no}-{i}.pdf", up=up, muni=muni)  # RG-7-2, RG-7-3: one active per type
         add(s, x)
         put(s, x, rep7, version=RG7_PROMPT_VERSION)
     return d
@@ -768,6 +769,79 @@ def test_paired_invalid_is_omitted_when_unreadable_on_one_side_only():
     assert p["c"]["valid"] == p["f"]["valid"] == 780
     assert p["c"]["lists_valid"] == p["f"]["lists_valid"] == 780
     assert p["c"]["invalid"] == p["f"]["invalid"] == 0
+
+
+def assert_vote_sum(block):
+    assert block["valid"] == block["lists_valid"] == sum(block["lists"])
+
+
+def test_balanced_rg7_list_reallocation_stays_eligible_on_both_sides():
+    s = bstore()
+    station(s, clean_report(), [(rg7([("list:1", 400, 390), ("list:2", 380, 390)]),
+                                 "2026-10-20T10:00:00Z")])
+
+    o = tally(s)["overall"]
+    assert o["all"]["lists"] == [390, 390]
+    assert o["fall"]["lists"] == [400, 380]
+    p = o["pair"]["all"]
+    assert (p["pair_selected"], p["pair_vote_forms"], p["pair_not_contributing"]) == (1, 1, 0)
+    assert p["c"]["lists"] == [390, 390] and p["f"]["lists"] == [400, 380]
+    for block in (o["all"], o["fall"], p["c"], p["f"]):
+        assert_vote_sum(block)
+
+
+def test_municipal_one_sided_eligibility_and_overall_pair_totals_are_component_sums():
+    s = bstore()
+    station(s, clean_report(), [(rg7([("list:2", 370, 380)]), "2026-10-20T10:00:00Z")],
+            no="1", muni="Alpha", list_votes=[{"row": 1, "field": nf(400)},
+                                                {"row": 2, "field": nf(370)}])
+    station(s, clean_report(), [(rg7([("list:1", 100, 90), ("list:2", 680, 690)]),
+                                 "2026-10-20T10:00:00Z")], no="1", muni="Beta",
+            list_votes=[{"row": 1, "field": nf(100)}, {"row": 2, "field": nf(680)}])
+
+    t = build_tally(s, Config(tally_scope={BP: "municipal"}), BP, M)
+    by = {r["m"]: r for r in t["munis"]}
+    alpha, beta, overall = by["Alpha"], by["Beta"], t["overall"]
+    assert (alpha["pair"]["all"]["pair_vote_forms"],
+            alpha["pair"]["all"]["corrected_only_vote_forms"]) == (0, 1)
+    assert beta["pair"]["all"]["pair_vote_forms"] == 1
+
+    for row in (alpha, beta):
+        for key in ("all", "cl", "fall", "fcl"):
+            assert_vote_sum(row[key])
+        for mode in ("all", "cl"):
+            assert_vote_sum(row["pair"][mode]["c"])
+            assert_vote_sum(row["pair"][mode]["f"])
+
+    for key in ("all", "cl", "fall", "fcl"):
+        for scalar in ("valid", "invalid", "vote_forms", "withheld_valid"):
+            assert overall[key][scalar] == sum(row[key][scalar] for row in (alpha, beta))
+    for mode in ("all", "cl"):
+        op = overall["pair"][mode]
+        for scalar in ("valid", "invalid", "vote_forms", "withheld_valid"):
+            for side in ("c", "f"):
+                assert op[side][scalar] == sum(row["pair"][mode][side][scalar]
+                                               for row in (alpha, beta))
+        for counter in ("pair_selected", "pair_vote_forms", "pair_not_contributing",
+                        "corrected_only_vote_forms", "filed_only_vote_forms"):
+            assert op[counter] == sum(row["pair"][mode][counter] for row in (alpha, beta))
+
+
+def test_clean_pair_cohort_is_intersection_and_ignores_one_sided_clean_forms():
+    s = bstore()
+    station(s, clean_report(), no="1")
+    station(s, clean_report(), [(rg7([("10.2", 180, 178), ("10.3", 20, 18), ("10.4", 160, 160)]),
+                                 "2026-10-20T10:00:00Z")], no="2", voted=nf(178),
+            ballots_in_box=nf(180), invalid=nf(20), valid=nf(160),
+            list_votes=[{"row": 1, "field": nf(100)}, {"row": 2, "field": nf(60)}])
+    station(s, clean_report(), [(rg7([("10.2", 999, 800)]), "2026-10-20T10:00:00Z")], no="3")
+
+    o = tally(s)["overall"]
+    assert (o["clean"], o["fclean"]) == (2, 2)
+    assert (o["pair"]["all"]["pair_selected"], o["pair"]["all"]["pair_vote_forms"]) == (3, 3)
+    clean = o["pair"]["cl"]
+    assert (clean["pair_selected"], clean["pair_vote_forms"], clean["pair_not_contributing"]) == (1, 1, 0)
+    assert (clean["corrected_only_vote_forms"], clean["filed_only_vote_forms"]) == (0, 0)
 
 
 def test_repeated_identical_correction_is_agreement_and_applied_once():
