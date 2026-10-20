@@ -227,7 +227,7 @@ def _table(head: list[str], rows: list[list[str]]) -> list[str]:
     return [line(head), *map(line, rows)]
 
 
-def format_tally(t: dict, all_forms: bool = False) -> str:
+def format_tally(t: dict, all_forms: bool = True) -> str:
     """Plain-text report of build_tally(): totals, list votes, excluded forms."""
     key = "all" if all_forms else "cl"
     rows = [*t["munis"], t["overall"]]

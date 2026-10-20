@@ -75,12 +75,12 @@ watching. The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed 
 
 ## Unofficial tally
 
-`rg2watch tally [--parent P] [--municipality NAME,...] [--model M] [--all]` and the "Results
+`rg2watch tally [--parent P] [--municipality NAME,...] [--model M] [--clean]` and the "Results
 (unofficial)" tab of the browse page total what the watch model (`model`, or `--model`) read from the
 first-round RG-2 forms: registered, voted, ballots in box, invalid, valid, outside voted, turnout, and
 votes and share of valid votes per list, per municipality and overall, with coverage (forms counted
 of stations known). RIK's official results are never fetched. Forms are excluded from the "clean
-forms only" totals (shown by default; `--all` / the page switch show every counted form) when the
+forms only" totals (`--clean` / the page switch show only those; every counted form is shown by default) when the
 confidence is low, the page quality is poor or unreadable, a counted number is illegible, another
 stored model read a counted number differently, or an arithmetic rule (A1-A5) fires; the reasons are
 listed, with a link to the form. List names are never read from the scans: set

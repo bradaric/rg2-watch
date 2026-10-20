@@ -183,7 +183,7 @@ def test_page_csv_is_formula_safe_and_labelled():
     assert 'new Intl.NumberFormat("en-GB")' in html
 
 
-def test_cli_tally_prints_clean_then_all(tmp_path, capsys):
+def test_cli_tally_prints_all_then_clean(tmp_path, capsys):
     db = tmp_path / "w.sqlite"
     s = Store(db)
     s.upsert_election(store().get_election(P))
@@ -191,13 +191,13 @@ def test_cli_tally_prints_clean_then_all(tmp_path, capsys):
     form(s, 13, report(ballots_in_box=nf(900)))
     s.close()
     assert main(["tally", "--db", str(db), "--parent", P, "--model", M]) == 0
-    out = capsys.readouterr().out
-    assert "UNOFFICIAL" in out and "clean forms only" in out and "List 1" in out
-    assert "2 form(s) counted, 1 clean, 1 excluded" in out and "BM 13: arithmetic A1" in out
-    assert "1,000" in out and "80.0%" in out
-    assert main(["tally", "--db", str(db), "--parent", P, "--model", M, "--all"]) == 0
     all_out = capsys.readouterr().out
-    assert "all counted forms" in all_out and "2,000" in all_out
+    assert "UNOFFICIAL" in all_out and "all counted forms" in all_out and "List 1" in all_out
+    assert "2 form(s) counted, 1 clean, 1 excluded" in all_out and "BM 13: arithmetic A1" in all_out
+    assert "2,000" in all_out
+    assert main(["tally", "--db", str(db), "--parent", P, "--model", M, "--clean"]) == 0
+    out = capsys.readouterr().out
+    assert "clean forms only" in out and "1,000" in out and "80.0%" in out
     assert main(["tally", "--db", str(db), "--parent", P, "--model", M, "--municipality", "Nowhere"]) == 2
     assert main(["tally", "--db", str(db), "--parent", P, "--model", M, "--municipality", "alp"]) == 0
 

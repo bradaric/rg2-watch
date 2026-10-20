@@ -139,8 +139,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--parent", help="election (default: the newest registered)")
     s.add_argument("--municipality", help="comma-separated municipality names")
     s.add_argument("--model", help="model whose readings are counted (default: config model)")
-    s.add_argument("--all", action="store_true", help="show totals over all counted forms "
-                   "(default: clean forms only)")
+    s.add_argument("--clean", action="store_true", help="show totals over clean forms only "
+                   "(default: all counted forms)")
 
     s = sub.add_parser("serve", parents=[common], help="serve the browse page on 127.0.0.1 (no watching)")
     s.add_argument("--port", type=_port, help="port (config serve_port, default 8770)")
@@ -293,7 +293,7 @@ def _cmd_tally(args) -> int:
         t = build_tally(store, cfg, parent, stored_model(cfg.model), only)
     finally:
         store.close()
-    print(format_tally(t, args.all))
+    print(format_tally(t, not args.clean))
     return 0
 
 
