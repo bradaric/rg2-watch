@@ -273,16 +273,16 @@ body.hero #herochart{margin:var(--s2) 0 0}
 </div>
 <div id="resview" hidden>
 <section id="hero">
-<div id="herobar"><select id="hmuni" aria-label="municipality"></select>
-<select id="hmode" aria-label="forms counted"><option value="cl">clean forms only (leave out flagged)</option><option value="all" selected>all counted forms</option></select>
-<select id="hview" aria-label="numbers"><option value="corrected" selected>with RG-7 corrections</option><option value="filed">as filed on RG-2 forms</option><option value="diff">difference (corrected − as filed)</option></select>
-<button id="herobtn">Presentation mode</button></div>
-<div id="herohead"><span class="kicker">Unofficial</span><div id="herotitle"></div></div>
+<div id="herobar"><select id="hmuni" aria-label="Општина"></select>
+<select id="hmode" aria-label="Обухваћени записници"><option value="cl">само чисти записници (без означених)</option><option value="all" selected>сви обрађени записници</option></select>
+<select id="hview" aria-label="Приказ бројева"><option value="corrected" selected>са исправкама RG-7</option><option value="filed">како је предато на записницима RG-2</option><option value="diff">разлика (исправљено − предато)</option></select>
+<button id="herobtn">Режим презентације</button></div>
+<div id="herohead"><span class="kicker">НЕЗВАНИЧНО</span><div id="herotitle"></div></div>
 <div id="heronums">
-<div class="tile"><div class="k">Turnout</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
-<div class="tile"><div class="k">Stations counted</div><div class="v" id="hv-st">-</div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
-<div class="tile"><div class="k">Forms</div><div class="v" id="hv-forms">-</div><div class="s" id="hs-forms"></div></div>
-<div class="tile"><div class="k">Valid votes</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"></div></div>
+<div class="tile"><div class="k">Излазност</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
+<div class="tile"><div class="k">Обрађена бирачка места</div><div class="v" id="hv-st">-</div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
+<div class="tile"><div class="k">Записници</div><div class="v" id="hv-forms">-</div><div class="s" id="hs-forms"></div></div>
+<div class="tile"><div class="k">Важећи гласови</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"></div></div>
 </div>
 <div id="heronames" class="warnbox" hidden></div>
 <div id="heronote"></div>
@@ -1054,6 +1054,8 @@ function renderTally() {
 // ---- hero display -------------------------------------------------------------------------
 const OKABE = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"];
 const TOP_LISTS = 8;
+const HERO_NV_LABEL = {corrected: "Са исправкама RG-7.", filed: "Како је предато на записницима RG-2 (исправке RG-7 нису примењене).",
+  diff: "Разлика (исправљено − предато, за упоредиве групе по појединачним ставкама)."};
 let heroMuni = "", heroPicked = false, slots = [];
 function put(id, text) {  // set text; flash when it changed
   const el = $(id);
@@ -1064,6 +1066,25 @@ function put(id, text) {  // set text; flash when it changed
   el.classList.remove("flash");
   void el.offsetWidth;
   el.classList.add("flash");
+}
+function heroWarning(note) {
+  const exact = {
+    "unknown election type - set tally_scope": "Непозната врста избора — подесите tally_scope",
+    "municipality unknown - forms may be from different ballots, no list totals": "Општина није позната — записници могу бити са различитих гласачких листића, без збирова по листама",
+    "no expected ballot rows - comparable list totals unavailable": "Нема очекиваних редова на гласачком листићу — упоредиви збирови по листама нису доступни",
+    "list_names must be a plain list for a national election": "list_names мора бити обична листа за републичке изборе",
+    "list_names must map municipality -> names for a municipal election": "list_names мора да пресликава општину у називе за локалне изборе"
+  };
+  return String(note).split("; ").map(part => {
+    if (exact[part]) return exact[part];
+    const m = /^list_names has (\d+) names, forms have (\d+) lists - check config$/.exec(part);
+    return m ? "list_names има " + m[1] + " назива, записници имају " + m[2] + " листе — проверите конфигурацију" : part;
+  }).join("; ");
+}
+function heroMuniName(row) { return row && row.generated_unknown_muni ? "Непозната општина" : row.m; }
+function heroListNames(owner) {
+  const names = owner && owner.names || [], fallback = new Set(owner && owner.fallback_name_indices || []);
+  return names.map((name, i) => fallback.has(i) ? "Листа " + (i + 1) : name);
 }
 function initHero() {
   for (let i = 0; i <= TOP_LISTS; i++) {
@@ -1079,9 +1100,10 @@ function initHero() {
   }
 }
 function heroMunis() {
-  const sel = $("hmuni"), names = T ? T.munis.map(m => m.m) : [];
-  if ([...sel.options].slice(1).map(o => o.value).join("\n") !== names.join("\n") || !sel.options.length)
-    sel.replaceChildren(new Option("All municipalities", ""), ...names.map(n => new Option(n, n)));
+  const sel = $("hmuni"), rows = T ? T.munis : [], names = rows.map(m => m.m);
+  const wanted = rows.map(r => r.m + "\t" + heroMuniName(r)).join("\n");
+  if ([...sel.options].slice(1).map(o => o.value + "\t" + o.textContent).join("\n") !== wanted || !sel.options.length)
+    sel.replaceChildren(new Option("Све општине", ""), ...rows.map(r => new Option(heroMuniName(r), r.m)));
   if (!names.includes(heroMuni)) heroMuni = "";
   if (!heroPicked && !heroMuni && T && T.scope === "municipal") {  // default: most counted forms
     const best = T.munis.reduce((a, m) => m.counted > (a ? a.counted : 0) ? m : a, null);
@@ -1093,33 +1115,33 @@ function renderHero() {
   heroMunis();
   const foot = $("herofoot");
   const stale = S && (!S.watching || Date.now() / 1000 - S.ts > STALE_S);
-  const label = T ? "UNOFFICIAL - numbers read by " + T.model + " from the scanned forms, not RIK results. " +
-    ($("tmode").value === "cl" ? "Clean forms only. " : "All counted forms. ") + NV_LABEL[NV()] + " " +
-    "As of " + epoch(Date.parse(D.built) / 1000).slice(-5) + " (Serbian time)." : "UNOFFICIAL - no results yet.";
-  foot.replaceChildren(label, ...(stale ? [mk("span", " Watcher not running: numbers may be out of date.", "stale")] : []));
-  if (!T) { $("heronames").hidden = true; $("herotitle").textContent = ""; $("heronote").textContent = "No analysed forms yet."; for (const s of slots) s.row.hidden = true; return; }
+  const label = T ? "НЕЗВАНИЧНО — бројеве је модел " + T.model + " прочитао са скенираних записника; ово нису резултати РИК-а. " +
+    ($("tmode").value === "cl" ? "Само чисти записници. " : "Сви обрађени записници. ") + HERO_NV_LABEL[NV()] + " " +
+    "Стање у " + epoch(Date.parse(D.built) / 1000).slice(-5) + " (време у Србији)." : "НЕЗВАНИЧНО — резултати још нису доступни.";
+  foot.replaceChildren(label, ...(stale ? [mk("span", " Праћење није покренуто: бројеви су можда застарели.", "stale")] : []));
+  if (!T) { $("heronames").hidden = true; $("herotitle").textContent = ""; $("heronote").textContent = "Још нема анализираних записника."; for (const s of slots) s.row.hidden = true; return; }
   const raw = (heroMuni && T.munis.find(m => m.m === heroMuni)) || T.overall, r = vrow(raw), t = r[$("tmode").value], none = !r.counted;
   const dg = NV() === "diff", mode = $("tmode").value;
   const cover = r.stations ? r.counted / r.stations : null;
-  const muniScope = T.scope === "municipal", allMunis = raw === T.overall, names = muniScope ? r.names || [] : T.names;
+  const muniScope = T.scope === "municipal", allMunis = raw === T.overall, names = heroListNames(muniScope ? r : T);
   const warn = [T.scope_note, muniScope ? r.names_note : T.names_note].filter(Boolean);
   $("heronames").hidden = !warn.length;
-  $("heronames").textContent = warn.length ? "Warning: " + warn.join(". ") : "";
-  put("herotitle", (allMunis ? "All municipalities" : r.m) + " - " + shortTitle(T.title) + (dg ? " - DIFFERENCE (RG-7 corrected \u2212 as filed)" : NV() === "filed" ? " - as filed" : ""));
+  $("heronames").textContent = warn.length ? "Упозорење: " + warn.map(heroWarning).join(". ") : "";
+  put("herotitle", (allMunis ? "Све општине" : heroMuniName(raw)) + " — " + shortTitle(T.title) + (dg ? " — РАЗЛИКА (исправљено по RG-7 − предато)" : NV() === "filed" ? " — како је предато" : ""));
   put("hv-turn", none ? "-" : dg ? dpp(t.turnout) : pc(t.turnout));
-  put("hs-turn", none ? "" : dg ? "difference in turnout, percentage points" : num(t.voted) + " of " + num(t.registered) + " registered");
+  put("hs-turn", none ? "" : dg ? "разлика у излазности, процентни поени" : num(t.voted) + " од " + num(t.registered) + " уписаних");
   put("hv-st", num(r.counted) + (r.stations ? " / " + num(r.stations) : ""));
-  put("hs-st", cover == null ? "stations known: unknown" : pc(cover) + " of stations");
+  put("hs-st", cover == null ? "број бирачких места није познат" : pc(cover) + " бирачких места");
   $("hp-st").style.width = (cover == null ? 0 : Math.min(100, cover * 100)) + "%";
   if (dg) {
     put("hv-forms", dnum(r.clean) + " / " + dnum(r.excluded));
-    put("hs-forms", "clean / flagged deltas");
+    put("hs-forms", "промене чистих / означених");
   } else if (mode === "cl") {
     put("hv-forms", num(r.clean));
-    put("hs-forms", "clean · " + num(r.excluded) + " flagged excluded");
+    put("hs-forms", "чистих · " + num(r.excluded) + " означених изостављено");
   } else {
     put("hv-forms", num(r.counted));
-    put("hs-forms", num(r.clean) + " clean · " + num(r.excluded) + " flagged");
+    put("hs-forms", num(r.clean) + " чистих · " + num(r.excluded) + " означених");
   }
   put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));
   const gap = t.turnout == null ? null : t.voted - t.valid - t.invalid;
@@ -1127,29 +1149,29 @@ function renderHero() {
   if (none) put("hs-valid", "");
   else if (dg) {
     const p = raw.pair[mode], neither = p.pair_not_contributing - p.corrected_only_vote_forms - p.filed_only_vote_forms;
-    put("hs-valid", "Reported invalid difference: " + dnum(t.invalid) + ". " +
-      p.pair_vote_forms + " of " + p.pair_selected + " selected in both views contributed vote totals; " +
-      p.pair_not_contributing + " not paired (" + p.corrected_only_vote_forms + " corrected-only eligible, " +
-      p.filed_only_vote_forms + " filed-only eligible, " + neither + " neither). Withheld readable valid difference: " +
-      dnum(t.withheld_valid) + ". Unreconciled turnout gap difference: " + dnum(gap) + "." +
-      (noComparableLists ? " Comparable list totals are unavailable for this scope." : ""));
+    put("hs-valid", "Разлика пријављених неважећих: " + dnum(t.invalid) + ". " +
+      p.pair_vote_forms + " од " + p.pair_selected + " изабраних записника у оба приказа допринело је збировима гласова; " +
+      p.pair_not_contributing + " није упарено (" + p.corrected_only_vote_forms + " прихватљиво само са исправкама, " +
+      p.filed_only_vote_forms + " прихватљиво само како је предато, " + neither + " ни у једном). Разлика задржаних читљивих важећих гласова: " +
+      dnum(t.withheld_valid) + ". Разлика неусаглашене разлике излазности: " + dnum(gap) + "." +
+      (noComparableLists ? " Упоредиви збирови по листама нису доступни за овај обухват." : ""));
   } else {
     const selected = mode === "cl" ? r.clean : r.counted;
-    put("hs-valid", "Reported invalid: " + num(t.invalid) + ". " + t.vote_forms + " of " + selected +
-      " selected forms contributed vote totals; " + num(t.withheld_valid) +
-      " readable valid votes withheld (known partial amount). Unreconciled turnout gap: " + snum(gap) + "." +
-      (noComparableLists ? " Comparable list totals are unavailable for this scope." : ""));
+    put("hs-valid", "Пријављени неважећи: " + num(t.invalid) + ". " + t.vote_forms + " од " + selected +
+      " изабраних записника допринело је збировима гласова; задржано је " + num(t.withheld_valid) +
+      " читљивих важећих гласова (познат делимичан износ). Неусаглашена разлика излазности: " + snum(gap) + "." +
+      (noComparableLists ? " Упоредиви збирови по листама нису доступни за овај обухват." : ""));
   }
-  $("heronote").textContent = none ? "No forms counted yet - no results to show."
-    : [dg ? "Forms with terms only in corrected/filed view: " + dnum(r.nin) + " / " + dnum(r.nout) +
-        "; unmatched terms are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)." : "",
-      muniScope && allMunis ? "Local election - lists differ per municipality; pick a municipality for list results." : "",
-      cover != null && cover < 0.1 ? "Very early - few stations counted. Do not read these shares as a result." : ""].filter(Boolean).join(" ");
+  $("heronote").textContent = none ? "Још нема обрађених записника — нема резултата за приказ."
+    : [dg ? "Ставке присутне само у исправљеном/предатом приказу: " + dnum(r.nin) + " / " + dnum(r.nout) +
+        "; неупарене ставке су изостављене (можда се променила читљивост, избор чистих записника или прихватљивост усаглашених гласова)." : "",
+      muniScope && allMunis ? "Локални избори — листе се разликују по општинама; изаберите општину за резултате по листама." : "",
+      cover != null && cover < 0.1 ? "Веома рано — обрађено је мало бирачких места. Ове уделе немојте тумачити као резултат." : ""].filter(Boolean).join(" ");
   const noChartLists = !t.lists || (dg ? !t.sh || t.sh.every(x => x == null) : !t.lists_valid);
   const rows = none || (muniScope && allMunis) || noChartLists ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
     .sort((a, b) => dg ? Math.abs(b.v) - Math.abs(a.v) || a.i - b.i : b.v - a.v || a.i - b.i);
   const shown = rows.slice(0, TOP_LISTS), rest = rows.slice(TOP_LISTS);
-  if (rest.length) shown.push({n: "Others (" + rest.length + " lists)", i: -1, v: rest.reduce((a, x) => a + x.v, 0), s: rest.reduce((a, x) => a + (x.s || 0), 0)});
+  if (rest.length) shown.push({n: "Остале (" + rest.length + " листа)", i: -1, v: rest.reduce((a, x) => a + x.v, 0), s: rest.reduce((a, x) => a + (x.s || 0), 0)});
   const maxAbs = Math.max(1, ...shown.map(x => Math.abs(x.v)));
   slots.forEach((s, k) => {
     const e = shown[k];
@@ -1159,14 +1181,14 @@ function renderHero() {
     s.no.textContent = e.i < 0 ? "" : String(e.i + 1);  // ballot number = the list row on the form
     s.no.hidden = e.i < 0;
     s.nm.textContent = e.n; s.row.title = e.n;
-    s.val.textContent = dg ? dnum(e.v) + "  " + dpp(share) + " pp" : num(e.v) + "  " + pc(share);
+    s.val.textContent = dg ? dnum(e.v) + "  " + dpp(share) + " п. п." : num(e.v) + "  " + pc(share);
     s.fill.style.width = (dg ? Math.abs(e.v) / maxAbs * 100 : Math.min(100, share * 100)) + "%";
     s.fill.style.backgroundColor = e.i < 0 ? "#777" : OKABE[e.i % (OKABE.length - 1)];
   });
 }
 function setHero(on) {
   document.body.classList.toggle("hero", on);
-  $("herobtn").textContent = on ? "Exit (Esc)" : "Presentation mode";
+  $("herobtn").textContent = on ? "Излаз (Esc)" : "Режим презентације";
   if (on) setTab("results");
 }
 $("herobtn").onclick = () => setHero(!document.body.classList.contains("hero"));

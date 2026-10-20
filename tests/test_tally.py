@@ -275,13 +275,46 @@ def test_snapshot_turnout_gap_formats_zero_and_signed_values():
 
 def test_hero_markup_labelled_and_safe():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert 'id="hero"' in html and "UNOFFICIAL - numbers read by" in html and "Very early" in html
+    assert 'id="hero"' in html and "НЕЗВАНИЧНО" in html and "Веома рано" in html
     assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
-    assert "Escape" in html and 'get("hero") === "1"' in html
+    assert "Esc" in html and 'get("hero") === "1"' in html and 'ev.key === "Escape"' in html
     assert 'id="hs-forms"' in html
-    assert "selected forms contributed vote totals" in html
-    assert "Unreconciled turnout gap" in html
-    assert "corrected-only eligible" in html and "filed-only eligible" in html
+    for text in ("Општина", "Обухваћени записници", "Приказ бројева", "Режим презентације",
+                 "Излаз (Esc)", "Излазност", "Обрађена бирачка места", "Записници", "Важећи гласови"):
+        assert text in html
+    assert "изабраних записника" in html and "допринело је збировима гласова" in html
+    assert "Неусаглашена разлика излазности" in html
+    assert "прихватљиво само са исправкама" in html and "прихватљиво само како је предато" in html
+
+
+def test_hero_warning_translates_every_current_tally_warning_and_preserves_unknown_text():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    source = (STATIC.parent / "tally.py").read_text(encoding="utf-8")
+    warnings = [
+        "unknown election type - set tally_scope",
+        "municipality unknown - forms may be from different ballots, no list totals",
+        "no expected ballot rows - comparable list totals unavailable",
+        "list_names must be a plain list for a national election",
+        "list_names must map municipality -> names for a municipal election",
+        "list_names has {len(conf)} names, forms have {nrows} lists - check config",
+    ]
+    assert all(message in source for message in warnings)
+    helper = html[html.index("function heroWarning"):html.index("function initHero")]
+    script = 'const assert = require("assert");\n' + helper + r'''
+const cases = [
+  ["unknown election type - set tally_scope", "Непозната врста избора — подесите tally_scope"],
+  ["municipality unknown - forms may be from different ballots, no list totals", "Општина није позната — записници могу бити са различитих гласачких листића, без збирова по листама"],
+  ["no expected ballot rows - comparable list totals unavailable", "Нема очекиваних редова на гласачком листићу — упоредиви збирови по листама нису доступни"],
+  ["list_names must be a plain list for a national election", "list_names мора бити обична листа за републичке изборе"],
+  ["list_names must map municipality -> names for a municipal election", "list_names мора да пресликава општину у називе за локалне изборе"],
+  ["list_names has 3 names, forms have 2 lists - check config", "list_names има 3 назива, записници имају 2 листе — проверите конфигурацију"],
+];
+for (const [input, expected] of cases) assert.equal(heroWarning(input), expected);
+assert.equal(heroWarning(cases[0][0] + "; " + cases[2][0]), cases[0][1] + "; " + cases[2][1]);
+assert.equal(heroWarning("future <opaque> warning"), "future <opaque> warning");
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_unreadable_by_other_model_is_a_note_not_an_exclusion():
@@ -492,7 +525,7 @@ def test_cli_tally_municipal_prints_list_table_per_municipality(tmp_path, capsys
 
 def test_page_handles_municipal_scope():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert 'T.scope === "municipal"' in html and "pick a municipality for list results" in html
+    assert 'T.scope === "municipal"' in html and "изаберите општину за резултате по листама" in html
     assert '"Share %"' in html and "listsOf(" in html and 'id="tscope"' in html
 
 
@@ -571,24 +604,27 @@ def test_cli_diff_heading_describes_term_specific_comparable_cohorts():
 def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_lists():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
-    hero = html[html.index("function renderHero()") : html.index("function setHero")]
+    hero = html[html.index("const OKABE") : html.index('$("herobtn").onclick')]
     script = r'''
 const assert = require("assert");
 const els = {};
-function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "", style: {}, replaceChildren(...x) { this.children = x; }}; }
+function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "", style: {}, children: [],
+  classList: {remove() {}, add() {}, toggle() {}}, append(...x) { this.children.push(...x); },
+  replaceChildren(...x) { this.children = x; }, get options() { return this.children; }}; }
 const $ = el;
 function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}}; }
-function put(id, text) { $(id).textContent = text; }
 function epoch() { return "20:00"; }
 function shortTitle(x) { return x; }
-function heroMunis() {}
+function Option(text, value) { this.textContent = text; this.value = value; }
 const STALE_S = 999999;
-const TOP_LISTS = 8, OKABE = ["#E69F00", "#56B4E9"];
-let S = null, D = {built: "2026-10-20T18:00:00Z"}, heroMuni = "", slots = [];
-for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, nm: {}, fill: {style: {}}, val: {}});
+let S = null, D = {built: "2026-10-20T18:00:00Z"};
+let bodyHero = false, selectedTab = "";
+const document = {body: {classList: {toggle(name, on) { if (name === "hero") bodyHero = on; }, contains() { return bodyHero; }}}};
+function setTab(name) { selectedTab = name; }
 els.tview = {value: "corrected"};
 els.tmode = {value: "all"};
 ''' + helpers + hero + r'''
+for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, nm: {}, fill: {style: {}}, val: {}});
 function totals(valid, lists) {
   const o = {registered: 1000, voted: 100, turnout: .1, ballots_in_box: 100, invalid: 0,
     valid, outside_voted: 0, vote_forms: lists ? 1 : 0, withheld_valid: lists ? 0 : 100,
@@ -606,7 +642,8 @@ function row(correctedLists, filedLists) {
     names: ["A", "B"], nlists: 2, all: c, cl: c, fall: f, fcl: f, pair: {all: cohort, cl: cohort}};
 }
 function setData(r, scope="national") {
-  T = {model: "test", title: "Election", scope, scope_note: null, names: scope === "national" ? ["A", "B"] : [],
+  T = {model: "opaque-model-v1", title: "Избори Ћирилица", scope, scope_note: null,
+    names: scope === "national" ? ["Листа А", "List 2"] : [], fallback_name_indices: scope === "national" ? [1] : [],
     names_note: null, munis: [r], overall: r};
 }
 function csvValue(csv, title) {
@@ -619,10 +656,15 @@ setData(r);
 assert.equal(vrow(r).all.valid, 100);
 let csv = tallyCsv();
 assert.equal(csvValue(csv, "Reconciled valid"), "100");
-assert.equal(csvValue(csv, "1 · A votes"), "60");
+assert.equal(csvValue(csv, "1 · Листа А votes"), "60");
 assert.equal(csvValue(csv, "Unreconciled turnout gap (signed)"), "0");
 renderHero();
-assert(els["hs-valid"].textContent.includes("Unreconciled turnout gap: 0."));
+assert(els["hs-valid"].textContent.includes("Неусаглашена разлика излазности: 0."));
+assert(els.herofoot.children[0].includes("opaque-model-v1"));
+assert(els.herotitle.textContent.includes("Избори Ћирилица"));
+assert.equal(slots[0].nm.textContent, "Листа А");
+assert.equal(slots[1].nm.textContent, "Листа 2");
+els.tmode.value = "cl"; renderHero(); assert(els["hs-forms"].textContent.includes("чистих")); els.tmode.value = "all";
 let gapCol = resultCols("all").find(x => x.t === "Unreconciled turnout gap (signed)");
 assert.equal(gapCol.f(gapCol.v(vrow(r))), "0");
 r.all.voted = r.cl.voted = 101;
@@ -634,7 +676,7 @@ els.tview.value = "filed";
 assert.equal(vrow(r).all.valid, 0);
 csv = tallyCsv();
 assert.equal(csvValue(csv, "Reconciled valid"), "0");
-assert.equal(csvValue(csv, "1 · A votes"), "0");
+assert.equal(csvValue(csv, "1 · Листа А votes"), "0");
 renderHero();
 assert(slots.every(x => x.row.hidden), "filed-ineligible selected view must hide the chart");
 assert(!els["hs-valid"].textContent.includes("NaN"));
@@ -649,14 +691,15 @@ els.tview.value = "diff";
 r = row([60, 40], [55, 45]);
 setData(r);
 renderHero();
-assert(els["hs-valid"].textContent.includes("selected in both views contributed"));
+assert(els["hs-valid"].textContent.includes("изабраних записника у оба приказа допринело"));
+assert(slots[0].val.textContent.includes("п. п."));
 const diffCols = resultCols("all");
 const selected = diffCols.find(x => x.t === "Selected in both views");
 assert.equal(selected.f(selected.v(vrow(r))), "1");
 gapCol = diffCols.find(x => x.t === "Unreconciled turnout gap (difference)");
 assert.equal(gapCol.f(gapCol.v(vrow(r))), "·");
 csv = tallyCsv();
-assert.equal(csvValue(csv, "1 · A votes"), "5");
+assert.equal(csvValue(csv, "1 · Листа А votes"), "5");
 assert(csv.includes("Paired cohort columns are unsigned actual sizes"));
 
 els.tview.value = "corrected";
@@ -687,7 +730,7 @@ for (const k of ["all", "cl", "fall", "fcl"]) { emptyNational[k].lists = []; emp
 setData(emptyNational);
 T.names = []; T.names_note = emptyNational.names_note;
 renderHero();
-assert(els["hs-valid"].textContent.includes("Comparable list totals are unavailable for this scope."));
+assert(els["hs-valid"].textContent.includes("Упоредиви збирови по листама нису доступни за овај обухват."));
 let availability = resultCols("all").find(x => x.t === "List totals availability");
 assert(availability, "national empty ballot needs an explicit results column");
 assert(availability.f(availability.v(vrow(emptyNational))).includes("Unavailable - no expected ballot rows"));
@@ -705,6 +748,10 @@ availability = resultCols("all").find(x => x.t === "List totals availability");
 assert(availability.f(availability.v(vrow(emptyMunicipal))).includes("Unavailable - no expected ballot rows"));
 csv = tallyCsv();
 assert(csv.includes("Unavailable - no expected ballot rows"));
+setHero(true);
+assert(bodyHero && selectedTab === "results" && els.herobtn.textContent === "Излаз (Esc)");
+setHero(false);
+assert(!bodyHero && els.herobtn.textContent === "Режим презентације");
 console.log(JSON.stringify({ok: true}));
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
