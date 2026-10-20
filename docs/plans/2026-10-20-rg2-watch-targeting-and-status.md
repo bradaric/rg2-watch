@@ -110,3 +110,22 @@ From the review of 09d953d:
 
 A, then B, then C + D (C and D both touch browse.py; one agent). Each task: tests, full suite
 green (`uv run pytest -q -W error`), one commit, then review.
+
+## Task E: unofficial count from the forms (decided 20/10/2026)
+
+No fetching of RIK's official results (operator decision). Tally only what the analyses read.
+
+- Per form, use the latest successful analysis of the watch model for the active version
+  (second-opinion models do not feed the totals, but disagreement on any counted number marks
+  the form).
+- Totals overall and per municipality: registered, voted, ballots in box, invalid, valid,
+  outside voted, turnout; votes per list row (10.5) and share of valid votes.
+- Coverage: forms counted / stations known (stations table), per municipality.
+- Excluded and listed separately: forms with confidence low, page quality poor/unreadable, any
+  illegible counted number, a model disagreement on a counted number, or arithmetic findings
+  (A1-A5). Totals are shown both "clean forms only" and "all forms".
+- List names: optional per-election mapping `list_names = {"<parent>" = ["...", ...]}` in the
+  config, filled by hand; default "List 1..N". Never read names from the scans.
+- Page: a "Results" tab (DataTables) next to the forms table, labelled "unofficial - numbers read
+  by a model from the scanned forms"; CSV download of the per-municipality table.
+- `rg2watch tally [--parent P] [--municipality ...]` prints the same totals in the terminal.
