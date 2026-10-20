@@ -929,8 +929,9 @@ function tallyCsv() {
     for (const r of rows) {
       const t = r[mode], tot = shared.map(c => csvCell(c.c(r)));
       const sh = i => NV() === "diff" ? t.sh[i] : ratio(t.lists[i], t.lists_valid);
+      const unavailable = r.m === T.overall.m ? "Unavailable - no universal ballot" : "Unavailable - no comparable ballot";
       const ls = r.names && r.names.length ? r.names.map((n, i) => [i + 1, n, t.lists[i],
-        sh(i) == null ? "" : (100 * sh(i)).toFixed(1)]) : [["", "", "", ""]];
+        sh(i) == null ? "" : (100 * sh(i)).toFixed(1)]) : [["", unavailable, "", ""]];
       for (const l of ls) out.push([csvCell(r.m), ...l.map(csvCell), ...tot, out.length ? "" : csvCell(note)].join(","));
     }
     const head = ["Municipality", "No.", "List", "Votes", NV() === "diff" ? "Share (pp)" : "Share %", ...shared.map(c => c.t), "Note"].map(csvCell).join(",");
@@ -1113,12 +1114,12 @@ function renderHero() {
   }
   put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));
   const gap = t.turnout == null ? null : t.voted - t.valid - t.invalid;
-  const noComparableLists = (muniScope && allMunis) || !raw[mode].lists;
+  const noComparableLists = (muniScope && allMunis) || !t.lists;
   if (none) put("hs-valid", "");
   else if (dg) {
     const p = raw.pair[mode], neither = p.pair_not_contributing - p.corrected_only_vote_forms - p.filed_only_vote_forms;
     put("hs-valid", "Reported invalid difference: " + dnum(t.invalid) + ". " +
-      p.pair_vote_forms + " of " + p.pair_selected + " selected forms contributed vote totals; " +
+      p.pair_vote_forms + " of " + p.pair_selected + " selected in both views contributed vote totals; " +
       p.pair_not_contributing + " not paired (" + p.corrected_only_vote_forms + " corrected-only eligible, " +
       p.filed_only_vote_forms + " filed-only eligible, " + neither + " neither). Withheld readable valid difference: " +
       dnum(t.withheld_valid) + ". Unreconciled turnout gap difference: " + dnum(gap) + "." +
@@ -1135,7 +1136,8 @@ function renderHero() {
         "; unmatched terms are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)." : "",
       muniScope && allMunis ? "Local election - lists differ per municipality; pick a municipality for list results." : "",
       cover != null && cover < 0.1 ? "Very early - few stations counted. Do not read these shares as a result." : ""].filter(Boolean).join(" ");
-  const rows = none || (muniScope && allMunis) || !raw[mode].lists_valid ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
+  const noChartLists = !t.lists || (dg ? !t.sh || t.sh.every(x => x == null) : !t.lists_valid);
+  const rows = none || (muniScope && allMunis) || noChartLists ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
     .sort((a, b) => dg ? Math.abs(b.v) - Math.abs(a.v) || a.i - b.i : b.v - a.v || a.i - b.i);
   const shown = rows.slice(0, TOP_LISTS), rest = rows.slice(TOP_LISTS);
   if (rest.length) shown.push({n: "Others (" + rest.length + " lists)", i: -1, v: rest.reduce((a, x) => a + x.v, 0), s: rest.reduce((a, x) => a + (x.s || 0), 0)});

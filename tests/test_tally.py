@@ -1,4 +1,6 @@
 import copy
+import json
+import subprocess
 
 import pytest
 
@@ -189,6 +191,14 @@ def test_tally_in_page_data_and_error_does_not_break_build(tmp_path, monkeypatch
     form(s, 12, clean_report())
     data = build_data(s, tmp_path, P, Config(model=M))
     assert data["tally"]["overall"]["counted"] == 1
+    overall = data["tally"]["overall"]
+    municipality = data["tally"]["munis"][0]
+    assert municipality["all"]["valid"] == municipality["all"]["lists_valid"] == sum(municipality["all"]["lists"])
+    assert overall["all"]["vote_forms"] == 1
+    assert overall["all"]["withheld_valid"] == 0
+    assert overall["fall"]["vote_forms"] == 1
+    assert overall["pair"]["all"]["pair_selected"] == 1
+    assert overall["pair"]["all"]["pair_vote_forms"] == 1
     import rg2watch.browse as br
     monkeypatch.setattr(br, "build_tally", lambda *a, **k: 1 / 0)
     assert build_data(s, tmp_path, P, Config())["tally"] is None
@@ -479,3 +489,108 @@ def test_page_diff_view_uses_paired_numbers_and_explains_unmatched_terms():
     assert "vote-reconciliation eligibility" in html and "deltaOf(r.all, r.fall)" not in html
     assert "pair_selected" in html and "pair_vote_forms" in html and "pair_not_contributing" in html
     assert "t(r).turnout == null ? null" in html
+
+
+def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_lists():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
+    hero = html[html.index("function renderHero()") : html.index("function setHero")]
+    script = r'''
+const assert = require("assert");
+const els = {};
+function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "", style: {}, replaceChildren(...x) { this.children = x; }}; }
+const $ = el;
+function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}}; }
+function put(id, text) { $(id).textContent = text; }
+function epoch() { return "20:00"; }
+function shortTitle(x) { return x; }
+function heroMunis() {}
+const STALE_S = 999999;
+const TOP_LISTS = 8, OKABE = ["#E69F00", "#56B4E9"];
+let S = null, D = {built: "2026-10-20T18:00:00Z"}, heroMuni = "", slots = [];
+for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, nm: {}, fill: {style: {}}, val: {}});
+els.tview = {value: "corrected"};
+els.tmode = {value: "all"};
+''' + helpers + hero + r'''
+function totals(valid, lists) {
+  const o = {registered: 1000, voted: 100, turnout: .1, ballots_in_box: 100, invalid: 0,
+    valid, outside_voted: 0, vote_forms: lists ? 1 : 0, withheld_valid: lists ? 0 : 100,
+    lists: lists || [0, 0], lists_valid: valid};
+  return o;
+}
+function row(correctedLists, filedLists) {
+  const c = totals(correctedLists ? 100 : 0, correctedLists);
+  const f = totals(filedLists ? 100 : 0, filedLists);
+  const cohort = {c, f, in: 0, out: 0, pair_selected: 1, pair_vote_forms: correctedLists && filedLists ? 1 : 0,
+    pair_not_contributing: correctedLists && filedLists ? 0 : 1,
+    corrected_only_vote_forms: correctedLists && !filedLists ? 1 : 0,
+    filed_only_vote_forms: filedLists && !correctedLists ? 1 : 0};
+  return {m: "Alpha", stations: 1, counted: 1, clean: 1, excluded: 0, fclean: 1, fexcluded: 0,
+    names: ["A", "B"], nlists: 2, all: c, cl: c, fall: f, fcl: f, pair: {all: cohort, cl: cohort}};
+}
+function setData(r, scope="national") {
+  T = {model: "test", title: "Election", scope, scope_note: null, names: scope === "national" ? ["A", "B"] : [],
+    names_note: null, munis: [r], overall: r};
+}
+function csvValue(csv, title) {
+  const lines = csv.trim().split("\r\n"), headings = lines[0].split(","), cells = lines[1].split(",");
+  return cells[headings.indexOf(title)];
+}
+
+let r = row([60, 40], null);
+setData(r);
+assert.equal(vrow(r).all.valid, 100);
+let csv = tallyCsv();
+assert.equal(csvValue(csv, "Reconciled valid"), "100");
+assert.equal(csvValue(csv, "1 · A votes"), "60");
+els.tview.value = "filed";
+assert.equal(vrow(r).all.valid, 0);
+csv = tallyCsv();
+assert.equal(csvValue(csv, "Reconciled valid"), "0");
+assert.equal(csvValue(csv, "1 · A votes"), "0");
+renderHero();
+assert(slots.every(x => x.row.hidden), "filed-ineligible selected view must hide the chart");
+assert(!els["hs-valid"].textContent.includes("NaN"));
+
+r = row(null, [55, 45]);
+setData(r);
+renderHero();
+assert.equal(slots[0].row.hidden, false, "filed-only eligible selected view must show the chart");
+assert(!slots[0].val.textContent.includes("NaN"));
+
+els.tview.value = "diff";
+r = row([60, 40], [55, 45]);
+setData(r);
+renderHero();
+assert(els["hs-valid"].textContent.includes("selected in both views contributed"));
+const diffCols = resultCols("all");
+const selected = diffCols.find(x => x.t === "Selected in both views");
+assert.equal(selected.f(selected.v(vrow(r))), "1");
+csv = tallyCsv();
+assert.equal(csvValue(csv, "1 · A votes"), "5");
+assert(csv.includes("Paired cohort columns are unsigned actual sizes"));
+
+els.tview.value = "corrected";
+r = row(null, null);
+setData(r);
+renderHero();
+assert(slots.every(x => x.row.hidden), "zero eligible forms must hide the chart");
+assert(!els["hs-valid"].textContent.includes("NaN"));
+
+const alpha = row([60, 40], [60, 40]);
+const unknown = row(null, null); unknown.m = "(unknown)"; unknown.names = []; unknown.nlists = 0;
+const overall = row(null, null); overall.m = "(all)"; overall.names = []; overall.nlists = 0;
+for (const r of [unknown, overall]) for (const k of ["all", "cl", "fall", "fcl"]) {
+  delete r[k].lists; delete r[k].lists_valid;
+}
+T = {model: "test", title: "Local", scope: "municipal", scope_note: null, names: [], names_note: null,
+  munis: [alpha, unknown], overall};
+csv = tallyCsv();
+assert(csv.includes("Alpha,1,A,60,60.0"), "municipal list rows must be long format");
+assert(csv.includes("Unavailable - no comparable ballot"), "unknown ballot must be explicit");
+assert(csv.includes("Unavailable - no universal ballot"), "municipal overall list fields must be explicit");
+console.log(JSON.stringify({ok: true}));
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"ok": True}
