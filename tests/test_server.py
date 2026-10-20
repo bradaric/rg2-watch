@@ -49,7 +49,7 @@ def test_serves_allow_listed_files(srv):
     assert req(srv, "/data.json")[:2] == (200, "application/json")
     s, ct, body, r = req(srv, f"/pdfs/{H}.pdf")
     assert (s, ct, body) == (200, "application/pdf", b"%PDF-1.4 body")
-    assert r.getheader("Content-Security-Policy") == "sandbox"
+    assert r.getheader("Content-Security-Policy") is None  # sandbox breaks Chrome's PDF viewer
     csp = req(srv, "/")[3].getheader("Content-Security-Policy")
     assert all(x in csp for x in ("frame-ancestors 'none'", "base-uri 'none'", "form-action 'none'"))
 

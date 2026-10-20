@@ -64,8 +64,6 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("X-Content-Type-Options", "nosniff")
             if t[1].startswith("text/html"):
                 self.send_header("Content-Security-Policy", CSP)
-            elif t[1] == "application/pdf":
-                self.send_header("Content-Security-Policy", "sandbox")
             self.end_headers()
             if body:
                 shutil.copyfileobj(f, self.wfile)
