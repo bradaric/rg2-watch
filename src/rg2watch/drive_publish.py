@@ -74,12 +74,6 @@ class GoogleDriveAdapter:
             raise DriveError("Google Drive did not provide an authorized account identity")
         return permission_id
 
-    def get_my_drive_root_id(self) -> str:
-        root = self.get_file("root")
-        if root is None or not root.get("id"):
-            raise DriveError("Google Drive My Drive root could not be inspected")
-        return root["id"]
-
     def get_file(self, file_id: str):
         try:
             return self.service.files().get(
@@ -89,6 +83,15 @@ class GoogleDriveAdapter:
             if getattr(getattr(exc, "resp", None), "status", None) == 404:
                 return None
             raise DriveError("Drive file metadata could not be inspected") from exc
+
+    def create_root_folder(self, file_id: str, name: str):
+        """Create the private app root using Drive's default My Drive placement."""
+        try:
+            return self.service.files().create(
+                body={"id": file_id, "name": name, "mimeType": FOLDER_MIME},
+                fields="id,parents").execute()
+        except Exception as exc:
+            raise DriveError("Drive root folder creation did not complete; retry to reconcile it") from exc
 
     def create_folder(self, file_id: str, name: str, parent: str):
         try:

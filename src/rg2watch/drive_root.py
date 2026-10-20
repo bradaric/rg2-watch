@@ -10,7 +10,7 @@ from .drive_publish import DriveError, FOLDER_MIME
 
 
 ROOT_NAME = "RG2 Watch"
-STATE_VERSION = 1
+STATE_VERSION = 2
 
 
 class DriveRoot:
@@ -38,13 +38,25 @@ class DriveRoot:
             return None
         except (OSError, ValueError) as exc:
             raise DriveError("Google Drive root state is invalid; investigate it manually") from exc
-        expected = {"format_version", "root_id", "account_permission_id", "phase"}
-        if (not isinstance(value, dict) or set(value) != expected
-                or value.get("format_version") != STATE_VERSION
-                or not isinstance(value.get("root_id"), str) or not value["root_id"]
-                or not isinstance(value.get("account_permission_id"), str)
-                or not value["account_permission_id"]
-                or value.get("phase") not in ("reserved", "created")):
+        base = {"format_version", "root_id", "account_permission_id", "phase"}
+        valid_base = (isinstance(value, dict)
+                      and isinstance(value.get("root_id"), str) and bool(value["root_id"])
+                      and isinstance(value.get("account_permission_id"), str)
+                      and bool(value["account_permission_id"])
+                      and value.get("phase") in ("reserved", "created"))
+        if not valid_base:
+            raise DriveError("Google Drive root state is invalid; investigate it manually")
+        if value.get("format_version") == 1 and set(value) == base:
+            if value["phase"] == "reserved":
+                return value
+            raise DriveError("Google Drive root state has no verified parent; investigate it manually")
+        expected = base | {"my_drive_parent_id"}
+        parent = value.get("my_drive_parent_id")
+        valid_parent = (value["phase"] == "reserved" and parent is None
+                        or value["phase"] == "created"
+                        and isinstance(parent, str) and bool(parent))
+        if (value.get("format_version") != STATE_VERSION or set(value) != expected
+                or not valid_parent):
             raise DriveError("Google Drive root state is invalid; investigate it manually")
         return value
 
@@ -76,22 +88,32 @@ class DriveRoot:
             raise DriveError("Google Drive did not provide an authorized account identity")
         return account
 
-    def _verify(self, state: dict, account: str) -> str:
+    def _verify_observed(self, state: dict, account: str,
+                         expected_parent: str | None = None) -> str:
         if state["account_permission_id"] != account:
             raise DriveError("the authorized Google account differs from the registered Drive root account")
         root = self.drive.get_file(state["root_id"])
         if root is None:
             raise DriveError("the registered Google Drive root is missing or inaccessible; investigate manually")
-        my_drive = self.drive.get_my_drive_root_id()
         owners = root.get("owners") or []
+        parents = root.get("parents") or []
         valid = (root.get("id") == state["root_id"] and root.get("name") == ROOT_NAME
-                 and root.get("mimeType") == FOLDER_MIME and root.get("parents") == [my_drive]
-                 and not root.get("trashed") and len(owners) == 1
+                 and root.get("mimeType") == FOLDER_MIME
+                 and isinstance(parents, list)
+                 and len(parents) == 1 and isinstance(parents[0], str) and bool(parents[0])
+                 and not root.get("trashed") and isinstance(owners, list) and len(owners) == 1
+                 and isinstance(owners[0], dict)
                  and owners[0].get("permissionId") == account)
+        if expected_parent is not None:
+            valid = valid and parents == [expected_parent]
         if not valid:
             raise DriveError("the registered Google Drive root metadata or ownership has changed")
         if self.drive.folder_is_public(state["root_id"]):
             raise DriveError("the RG2 Watch root must remain private; remove public access before retrying")
+        return parents[0]
+
+    def _verify(self, state: dict, account: str) -> str:
+        self._verify_observed(state, account, state["my_drive_parent_id"])
         return state["root_id"]
 
     def setup(self) -> str:
@@ -105,19 +127,23 @@ class DriveRoot:
                 if len(ids) != 1:
                     raise DriveError("Drive did not preallocate the root folder ID")
                 state = {"format_version": STATE_VERSION, "root_id": ids[0],
-                         "account_permission_id": account, "phase": "reserved"}
+                         "account_permission_id": account, "phase": "reserved",
+                         "my_drive_parent_id": None}
                 self._write(state)
             if state["phase"] == "reserved":
                 found = self.drive.get_file(state["root_id"])
                 if found is None:
                     try:
-                        self.drive.create_folder(state["root_id"], ROOT_NAME,
-                                                 self.drive.get_my_drive_root_id())
+                        self.drive.create_root_folder(state["root_id"], ROOT_NAME)
                     except Exception:
                         if self.drive.get_file(state["root_id"]) is None:
                             raise
-                self._verify(state, account)
-                state = {**state, "phase": "created"}
+                # This binds the app-created folder's observed sole parent. It does
+                # not require inspecting Google's built-in My Drive root item.
+                parent = self._verify_observed(state, account)
+                state = {"format_version": STATE_VERSION, "root_id": state["root_id"],
+                         "account_permission_id": account, "phase": "created",
+                         "my_drive_parent_id": parent}
                 self._write(state)
             return self._verify(state, account)
 

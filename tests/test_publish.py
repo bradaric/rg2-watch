@@ -629,11 +629,17 @@ class _ProcessDrive:
     def account_permission_id(self):
         return "process-account"
 
-    def get_my_drive_root_id(self):
-        return "my-drive-root"
-
     def get_file(self, file_id):
         return self.state["files"].get(file_id)
+
+    def create_root_folder(self, file_id, name):
+        files = dict(self.state["files"])
+        files[file_id] = {"id": file_id, "name": name,
+                          "mimeType": "application/vnd.google-apps.folder",
+                          "parents": ["my-drive-root"],
+                          "owners": [{"permissionId": "process-account"}], "trashed": False}
+        self.state["files"] = files
+        return files[file_id]
 
     def create_folder(self, file_id, name, parent):
         files = dict(self.state["files"])
