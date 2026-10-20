@@ -279,9 +279,11 @@ def test_hero_markup_labelled_and_safe():
     assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
     assert "Esc" in html and 'get("hero") === "1"' in html and 'ev.key === "Escape"' in html
     assert 'id="hs-forms"' in html
-    for text in ("Општина", "Обухваћени записници", "Приказ бројева", "Режим презентације",
+    for text in ("Општина", "Обухваћени записници", "Приказ бројева", "Цео екран",
                  "Излаз (Esc)", "Излазност", "Обрађена бирачка места", "Записници", "Важећи гласови"):
         assert text in html
+    assert "Режим презентације" not in html
+    assert "помоћу АИ" not in html
     assert "само записници без уочених проблема (без оних за проверу)" in html
     assert "са исправкама (RG-7)" in html
     assert "оригинални бројеви (RG-2)" in html
@@ -740,9 +742,9 @@ assert.deepEqual(els["hs-valid"].textContent.split("\n"), [
   "Неусаглашена разлика излазности: +11",
   "У збиру: 6 од 15 записника",
 ]);
-assert(els.herofoot.children[0].includes("НЕЗВАНИЧНО — Скенирани записници обрађени помоћу АИ; ово нису резултати РИК-а. Стање у "));
+assert(els.herofoot.children[0].includes("НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а. Стање у "));
 assert(els.herofoot.children[0].includes("20:00"));
-for (const absent of ["opaque-model-v1", "Сви обрађени записници.", "Са исправкама RG-7.", "(време у Србији)", "можда застарели"])
+for (const absent of ["opaque-model-v1", "Сви обрађени записници.", "Са исправкама RG-7.", "(време у Србији)", "можда застарели", "АИ"])
   assert(!els.herofoot.children[0].includes(absent));
 els.tmode.value = "cl";
 renderHero();
@@ -1052,7 +1054,7 @@ assert(csv.includes("Unavailable - no expected ballot rows"));
 setHero(true);
 assert(bodyHero && selectedTab === "results" && els.herobtn.textContent === "Излаз (Esc)");
 setHero(false);
-assert(!bodyHero && els.herobtn.textContent === "Режим презентације");
+assert(!bodyHero && els.herobtn.textContent === "Цео екран");
 
 async function flushTurns() {
   for (let i = 0; i < 4; i++) await Promise.resolve();
