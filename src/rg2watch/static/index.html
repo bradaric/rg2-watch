@@ -238,7 +238,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 </style></head><body>
-<h1>rg2-watch <span class="mut" id="built"></span></h1>
+<h1>rg2-watch <span class="mut" id="ele"></span> <span class="mut" id="built"></span></h1>
 <div id="banner"></div>
 <div id="status"></div>
 <div id="tabs"><button id="tabforms" class="on">Forms</button><button id="tabres">Results (unofficial)</button></div>
@@ -345,7 +345,26 @@ function card(title, pairs, cls) {
   c.append(dl);
   return c;
 }
+// tab title "[N] <election> - <id> | rg2-watch"; N = forms to review; pause-sign prefix when the watcher is down
+// one shared shortener: drops the " - Записници" / " - Zapisnici" segment wherever it sits
+const shortTitle = t => (t || "").split(" - ").filter(s => !/^(записници|zapisnici)$/i.test(s.trim())).join(" - ");
+const cutTitle = s => {  // tab title only: at most ~50 chars, cut at a word boundary
+  if (s.length <= 50) return s;
+  const cut = s.slice(0, 50), sp = cut.lastIndexOf(" ");
+  return (sp > 0 ? cut.slice(0, sp) : cut) + "\u2026";
+};
+function setTitle() {
+  const el = (S && S.parent) || Object.keys(D.elections || {}).sort().pop() || "";
+  if (!el) { document.title = "rg2watch"; $("ele").textContent = ""; return; }
+  const title = (D.elections || {})[el] || (S && S.parent === el && S.title) || el;
+  const todo = rows.filter(r => r.el === el && isTodo(r)).length;
+  const label = cutTitle(shortTitle(title)), id = label === el ? "" : " · " + el;
+  const down = !S || !S.watching || Date.now() / 1000 - S.ts > STALE_S;
+  document.title = (down ? "⏸ " : "") + (todo ? "[" + todo + "] " : "") + label + id + " | rg2-watch";
+  $("ele").textContent = title === el ? el : shortTitle(title) + " · " + el;
+}
 function renderStatus() {
+  setTitle();
   const box = $("status"), ban = $("banner");
   if (!S) { box.replaceChildren(); ban.style.display = "block"; ban.textContent = "no status yet"; return; }
   const age = Date.now() / 1000 - S.ts;
@@ -637,7 +656,7 @@ function initTable() {
     columns: [
       {data: null, orderable: false, className: "dt-control", defaultContent: "",
        createdCell: td => td.setAttribute("aria-label", "details and review")},
-      {data: "el", title: "Election", visible: false, render: {_: d => d, display: d => esc(D.elections[d] || d)}},
+      {data: "el", title: "Election", visible: false, render: {_: d => d, display: d => esc(shortTitle(D.elections[d] || d))}},
       {data: "_stn", title: "Station", className: "scol", render: {_: d => d, display: (d, t, r) => esc(r.muni) + "<br>" +
         esc((r.no ? "BM " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""))}},
       {data: "label", title: "Document", render: txt(), defaultContent: ""},
@@ -684,9 +703,10 @@ function applyData(data) {
   renderLegend();
   if (S) renderStatus();  // alert rule codes get their descriptions
   rows = D.rows.map(prep);
+  setTitle();
   optsOf($("m"), "all municipalities", [...new Set(rows.map(r => r.muni))].sort().map(m => [m, m]));
   const parents = [...new Set(rows.map(r => r.el))].sort();
-  optsOf($("e"), "all elections", parents.map(p => [p, D.elections[p] || p]));
+  optsOf($("e"), "all elections", parents.map(p => [p, shortTitle(D.elections[p] || p)]));
   $("e").hidden = parents.length < 2;
   optsOf($("mod"), "all models", [...new Set(rows.flatMap(r => [...r._models]))].sort().map(m => [m, m]));
   $("mod").hidden = $("mod").options.length < 2;
@@ -796,7 +816,7 @@ function renderTally() {
     renderHero();
     return;
   }
-  $("tmeta").textContent = "Model: " + T.model + ". " + T.title + ". Repeat-vote forms are not included.";
+  $("tmeta").textContent = "Model: " + T.model + ". " + shortTitle(T.title) + ". Repeat-vote forms are not included.";
   const muniScope = T.scope === "municipal";
   const sw = [T.scope_note, ...T.munis.filter(m => !m.nlists && m.names_note).map(m => m.m + ": " + m.names_note)].filter(Boolean);
   $("tscope").hidden = !sw.length;
@@ -896,7 +916,7 @@ function renderHero() {
   const warn = [T.scope_note, muniScope ? r.names_note : T.names_note].filter(Boolean);
   $("heronames").hidden = !warn.length;
   $("heronames").textContent = warn.length ? "Warning: " + warn.join(". ") : "";
-  put("herotitle", (r === T.overall ? "All municipalities" : r.m) + " - " + T.title);
+  put("herotitle", (r === T.overall ? "All municipalities" : r.m) + " - " + shortTitle(T.title));
   put("hv-turn", none ? "-" : pc(t.turnout));
   put("hs-turn", none ? "" : num(t.voted) + " of " + num(t.registered) + " registered");
   put("hv-st", num(r.counted) + (r.stations ? " / " + num(r.stations) : ""));

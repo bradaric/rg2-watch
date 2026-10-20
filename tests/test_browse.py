@@ -278,6 +278,13 @@ def test_page_marks_stale_status():
     assert "STALE_S = 60" in html and "watcher not running / stalled since" in html
 
 
+def test_page_sets_tab_title_from_status_and_data():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "function setTitle()" in html and "document.title = " in html and " | rg2-watch" in html
+    assert html.count("setTitle();") == 2  # renderStatus and applyData
+    assert "shortTitle(T.title)" in html and "shortTitle(D.elections" in html
+
+
 def test_status_with_live_snapshots(tmp_path):
     from rg2watch.status import build_status
     s = store()
