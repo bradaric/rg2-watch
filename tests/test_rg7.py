@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from rg2watch.analyze import RG7_SCHEMA, AnalysisResult, _normalise_rg7, analyze_document
-from rg2watch.browse import build_data
+from rg2watch.browse import build_data, build_page
 from rg2watch.config import Config
 from rg2watch.models import Finding
 from rg2watch.models import Event
@@ -308,6 +308,7 @@ def test_rg7_alert_links_nested_orphan_and_other_types(tmp_path):
     decision = next(x for x in nested_row["r7"] if x["u"] == nested_url)
     assert decision["rik"] == "https://rik.example/e/rg7-1-0.pdf"
     assert decision["pdf"] == cached[nested_url]
+    assert not any(r["no"] in ("98", "99") for r in data["rows"])
     assert not any(x["u"] in (orphan_url, unsafe.url) for r in data["rows"] for x in r["r7"])
 
     alerts = {x[5]: x for x in build_status(s, BP, cache_dir=tmp_path)["alerts"]}
@@ -316,6 +317,11 @@ def test_rg7_alert_links_nested_orphan_and_other_types(tmp_path):
     assert alerts["unsafe"][8:] == [None, None]
     assert alerts["rg8"][8:] == [None, None]
     assert alerts["rg2"][8:] == [None, None] and len(alerts["rg2"]) == 10
+
+    out = tmp_path / "web" / "index.html"
+    build_page(s, out, tmp_path)
+    written = {x[5]: x for x in json.loads((out.parent / "status.json").read_text())["alerts"]}
+    assert written["orphan"][8] == cached[orphan_url]
 
     (tmp_path / (cached[orphan_url] + ".pdf")).unlink()
     alerts = {x[5]: x for x in build_status(s, BP, cache_dir=tmp_path)["alerts"]}
