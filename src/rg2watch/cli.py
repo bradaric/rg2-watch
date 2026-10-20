@@ -89,6 +89,8 @@ def _parser() -> argparse.ArgumentParser:
                    "only these (config only_municipalities)")
     s.add_argument("--baseline", action="store_true",
                    help="record what is already published silently on each lane's first full pass")
+    s.add_argument("--force-baseline", action="store_true",
+                   help="allow --baseline on a database that already holds documents of this election")
     s.add_argument("--serve-port", type=_port, help="port of the local web server (config serve_port, "
                    "default 8770; 0 = off)")
     mode = s.add_mutually_exclusive_group()
@@ -642,6 +644,12 @@ def _run_watch(args, cfg: Config) -> int:
             print("watch needs a zapisnici URL or --parent", file=sys.stderr)
             return 2
         parent = client.election.parent
+        if args.baseline and store.has_documents(parent) and not args.force_baseline:
+            print(f"refusing --baseline: {cfg.db_path} already has documents of election {parent}, "
+                  "so documents published since the last run would be recorded silently, without "
+                  "alerts. Drop --baseline, or add --force-baseline if that is what you want",
+                  file=sys.stderr)
+            return 2
         only = None
         wanted = args.only.split(",") if args.only is not None else cfg.only_municipalities
         if args.only is not None and not any(n.strip() for n in wanted):

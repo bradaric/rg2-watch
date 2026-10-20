@@ -268,3 +268,24 @@ def test_blocked_tick_does_not_delay_delivery(tmp_path, monkeypatch):
     monkeypatch.setattr(Watcher, "run_once", blocked)
     assert main(argv) == 0
     assert seen == [True]
+
+
+def test_baseline_refused_on_database_with_documents(tmp_path, capsys):
+    root = make_fixture_dir(tmp_path)
+    server = make_replay_server(root, port=0, speed=1e9, faults=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        cfg = tmp_path / "rg2watch.toml"
+        cfg.write_text("max_rps = 1000.0\ntick_request_budget = 5\n")
+        common = ["--db", str(tmp_path / "w.sqlite"), "--config", str(cfg)]
+        watch = ["watch", "--parent", "662405", "--once", "--base-url", base, *common]
+        assert main(["add", f"{base}/zapisnici/662405", *common]) == 0
+        assert main([*watch, "--baseline"]) == 0  # empty database: fine
+        capsys.readouterr()
+        assert main([*watch, "--baseline"]) == 2
+        assert "refusing --baseline" in capsys.readouterr().err
+        assert main([*watch, "--baseline", "--force-baseline"]) == 0
+    finally:
+        server.shutdown()
+        server.server_close()

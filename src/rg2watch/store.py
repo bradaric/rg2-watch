@@ -260,6 +260,11 @@ class Store:
                 "INSERT OR REPLACE INTO stations(parent, municipality_id, station_id, station_no) "
                 "VALUES(?,?,?,?)", [(parent, municipality_id, sid, no) for no, sid in items.items()])
 
+    def has_documents(self, parent: str) -> bool:
+        with self._lock:
+            return self._db.execute("SELECT 1 FROM documents WHERE parent=? LIMIT 1",
+                                    (parent,)).fetchone() is not None
+
     def municipality_ids(self, parent: str) -> dict[str, str]:
         """name -> id."""
         with self._lock:

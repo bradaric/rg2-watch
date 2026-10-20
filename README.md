@@ -75,6 +75,8 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
    Starting mid-night on an empty DB? Add `--baseline`: each lane's first full pass records what is
    already published without alerting, prints one `[baseline] <type>: N document(s) recorded` line
    per document type, and later changes alert normally.
+   On a DB that already holds documents of the election `--baseline` is refused (exit 2) unless
+   `--force-baseline` is given; `scripts/rehearse.sh` only passes it on an empty DB.
    Only care about some places? `--only "Beograd,Нови Сад"` (or `only_municipalities` in the config;
    Cyrillic or Latin, case-insensitive, exact name beats substring) limits every lane to those
    municipalities: no global listings are requested, other documents are not recorded, and an
