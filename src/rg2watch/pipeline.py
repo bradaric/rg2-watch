@@ -17,7 +17,7 @@ from .models import Doc, Event, Finding
 from .notify import Notifier
 from .render import RenderError, render_tiles
 from .rik_client import RikBlocked, RikClient, RikError, RikUnavailable
-from .rules import evaluate_report, evaluate_rg7
+from .rules import decision_sort_key, evaluate_report, evaluate_rg7
 from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, RG7_TYPES, Store, _doc
 
 log = logging.getLogger("rg2watch.pipeline")
@@ -127,7 +127,8 @@ class AnalysisPipeline:
         log.info("analysis on for election %s: spend cap $%.2f, $%.2f spent so far on this election, "
                  "%d form(s) queued, %d form(s) seen before analysis was enabled not analysed "
                  "(--analyze-backlog to include)", self.parent, self.cfg.max_spend_usd,
-                 self.store.total_spend(self.parent), self.store.queued_for_analysis(self.parent, self.municipalities),
+                 self.store.total_spend(self.parent),
+                 self.store.queued_for_analysis(self.parent, self.municipalities),
                  self.store.analysis_backlog(self.parent, self.municipalities))
         for i in range(max(1, self.cfg.analysis_workers)):
             t = threading.Thread(target=self._loop, name=f"analysis-{i}", daemon=True)
@@ -313,30 +314,49 @@ class AnalysisPipeline:
             if rg7:
                 rg2 = self.store.station_rg2_report(self.parent, doc.station_key, RG2_OF_RG7[doc.doc_type],
                                                     stored_model(self.cfg.model), PROMPT_VERSION)
-                found = evaluate_rg7(result.report, doc, self.cfg, rg2)
+                found = evaluate_rg7(result.report, doc, self.cfg, rg2, self._prior_decisions(doc))
             else:
                 found = evaluate_report(result.report, doc, self.cfg)
-                found += self._rg7_rechecks(doc, result.report)
         except Exception as exc:  # malformed report: retrying would bill again
             log.exception("rules failed for %s", doc.url)
             self._permanent(doc, "X1", f"analysis output could not be evaluated: {_short(exc)}", exc)
             return "api"
+        if not rg7:  # a failure here never touches the RG-2's own outcome
+            try:
+                found += self._rg7_rechecks(doc, result.report)
+            except Exception:
+                log.exception("RG-7 cross-check after %s failed", doc.url)
         self._emit(found)
         self.store.mark_analysis(doc.url, "done")
         log.info("analysed %s BM %s: %d finding(s), $%.3f", doc.municipality, doc.station_no,
                  len(found), result.cost_usd)
         return "api"
 
+    def _station_decisions(self, doc: Doc, types: tuple[int, ...]) -> list[tuple[dict, dict]]:
+        """(row, report) of the station's analysed RG-7 decisions of `types`, in decision order."""
+        if doc.station_key is None:
+            return []
+        rows = [(r, rep) for r, rep in self.store.rg7_reports(
+            self.parent, stored_model(self.cfg.model), RG7_PROMPT_VERSION, station_key=doc.station_key)
+            if r["doc_type"] in types]
+        return sorted(rows, key=lambda x: decision_sort_key(x[0]["uploaded_at"], x[0]["id"], x[1]))
+
+    def _prior_decisions(self, doc: Doc) -> list[dict]:
+        """Reports of the station's decisions that come before this RG-7 (same RG-2 group)."""
+        types = tuple(t for t in RG7_TYPES if RG2_OF_RG7[t] == RG2_OF_RG7[doc.doc_type])
+        reps = self._station_decisions(doc, types)
+        i = next((i for i, (r, _) in enumerate(reps) if r["url"] == doc.url), len(reps))
+        return [rep for _, rep in reps[:i]]
+
     def _rg7_rechecks(self, doc: Doc, rg2_report: dict) -> list[Finding]:
-        """R2 for the station's RG-7 decisions analysed before this RG-2 was (the finding table
-        dedupes, so a pair already checked at RG-7 time is not alerted twice)."""
+        """R2 for the station's RG-7 decisions analysed before this RG-2 was (the findings table
+        keeps one R2 per decision, so a pair already flagged at RG-7 time is not alerted twice)."""
+        types = tuple(t for t in RG7_TYPES if doc.doc_type in RG2_OF_RG7[t])
         out: list[Finding] = []
-        for t, rg7_types in (((6,), (19, 20, 21, 22)), ((10, 15, 16), (23, 24, 25, 26))):
-            if doc.doc_type not in t:
-                continue
-            for row, rep in self.store.rg7_reports(self.parent, stored_model(self.cfg.model), RG7_PROMPT_VERSION):
-                if row["doc_type"] in rg7_types and row["station_key"] == doc.station_key:
-                    out += [f for f in evaluate_rg7(rep, _doc(row), self.cfg, rg2_report) if f.rule == "R2"]
+        reps = self._station_decisions(doc, types)
+        for i, (row, rep) in enumerate(reps):
+            out += [f for f in evaluate_rg7(rep, _doc(row), self.cfg, rg2_report, [p for _, p in reps[:i]])
+                    if f.rule == "R2"]
         return out
 
     # global pause -----------------------------------------------------------

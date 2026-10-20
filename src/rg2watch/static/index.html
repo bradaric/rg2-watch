@@ -256,7 +256,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
 <label><input type="checkbox" id="fa"> analysis failed</label>
-<label><input type="checkbox" id="c7"> corrected by RG-7</label>
+<label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by RG-7</label>
 <label><input type="checkbox" id="loc"> has local copy</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
 <details id="colbox"><summary>columns</summary><div id="cols"></div></details>
@@ -397,6 +397,7 @@ function renderStatus() {
   cards.push(card("Documents", [
     ["RG-2 seen", d.rg2_seen + " of " + (d.stations || "?") + " stations" + (d.rg2_rik != null ? " (RIK lists " + d.rg2_rik + ")" : "")],
     ["new, last 10 / 60 min", d.new10 + " / " + d.new60], ["replaced", d.replaced], ["removed", d.removed],
+    ["RG-7 decisions", d.rg7 ? "read " + d.rg7.read + " / pending " + d.rg7.pending : "-"],
     ["rare types", Object.entries(d.rare).map(([k, v]) => k + ": " + v).join(", ") || "none"]]));
   const p = a.paused;
   cards.push(card("Analysis", a.on ? [
@@ -608,7 +609,9 @@ function download(name, text) {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
-function rg7Text(x) { return "RG-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : "not read yet"); }
+function rg7Text(x) {  // x.ch: read by the watch model; x.by: read by other models only
+  return "RG-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : x.by.length ? "read by " + x.by.join(", ") + " (not the watch model)" : "not read yet");
+}
 function rg7Badges(r) {
   const td = document.createDocumentFragment();
   for (const x of r.r7) td.append(mk("div", rg7Text(x), "f rg7"));

@@ -51,7 +51,9 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
    forms remain. Without the flag nothing changes: the loop runs until Ctrl-C.
 
    HIGH findings (RG-8/RG-9 published, RG-2 replaced, with the old URL as "was: ...") are pushed
-   immediately, MEDIUM in digests, LOW only printed. Every finding is also printed (and flushed) to
+   immediately, MEDIUM in digests, LOW only printed. A digest is compact (under 3.5 KB): counts by rule, up
+   to 10 detail lines without URLs, and "+K more - open the page, filter MEDIUM" with the page URL when
+   serving (a single-finding digest keeps its RIK URL). Every finding is also printed (and flushed) to
    stdout. If ntfy is unreachable, findings stay un-alerted and pushes back off (5 s doubling to
    60 s) before being retried. Ctrl-C or SIGTERM stops cleanly; state is kept in the SQLite DB
    (`data/rg2watch.sqlite` by default, `--db` to change), so a restart resumes without re-alerting.
@@ -180,6 +182,17 @@ the corrections of each counted RG-2 in decision order (latest wins, a decision'
 re-runs A1-A5 on the corrected numbers and keeps the RG-2's visual alerts; the CLI marks corrected
 municipalities with `*` and lists them, the page lists them too. Station rows show "RG-7 dd/mm:
 10.2 180->178, ..." (links in the child row) and have the filter "corrected by RG-7".
+Decisions are ordered by their parsed decision date (14.10.2026 or "9. јуна 2025."), else by upload
+time, then id; the page shows that date as dd/mm/yyyy. A correction is applied only when the
+decision was read with confidence above low and its old numbers agree with the RG-2 reading (or
+with the previous decision's new value); otherwise the form keeps its RG-2 numbers and is flagged
+"unverified RG-7 correction". A correction never fills an RG-2 field that was unreadable unless the
+decision's own table gives it, and a null new number changes nothing. R2 is stored once per decision
+(the findings table keeps one row per document and rule): it is not retracted or updated when the
+RG-2 is later re-read. Other models' tallies apply the watch model's corrections. The page filter
+"corrected by RG-7" and the badges show decisions read by the watch model; others show "read by
+<model>" or "not read yet". RG-7 decisions are kept out of the RG-2 backlog, skipped and analysis
+counts; the status panel has its own line "RG-7 decisions: read N / pending M".
 Single file: `rg2watch analyze <rg7.pdf> --doc-type rg7` prints the changes.
 
 ## Visual analysis of RG-2 forms

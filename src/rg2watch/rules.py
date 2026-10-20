@@ -1,4 +1,5 @@
 import re
+from datetime import date
 
 from rg2watch.config import Config
 from rg2watch.models import Doc, Finding
@@ -291,18 +292,79 @@ def rg2_value(rg2: dict, item: str) -> int | None:
     return f["value"] if f is not None and _ok(f) else None
 
 
-def rg7_mismatch(report: dict, rg2: dict) -> list[str]:
-    """Changes whose `old` differs from the RG-2 reading, as "item: decision says X, RG-2 read Y"."""
-    out = []
-    for c in report["changes"]:
-        read = rg2_value(rg2, c["item"])
-        if c["old"] is not None and read is not None and read != c["old"]:
-            out.append(f"{c['item']}: decision old {c['old']}, RG-2 read {read}")
+def _prior_new(item: str, prior: list[dict]) -> int | None:
+    """The value earlier decisions left for an item: their latest non-null new (a table is final)."""
+    out = None
+    for rep in prior:
+        for c in rep["changes"]:
+            if c["item"] == item and c["new"] is not None:
+                out = c["new"]
+        for e in rep["table"]:
+            if e["item"] == item and e["value"] is not None:
+                out = e["value"]
     return out
 
 
-def evaluate_rg7(report: dict, doc: Doc, cfg: Config, rg2: dict | None = None) -> list[Finding]:
-    """R1-R3 of an RG-7 report; `rg2` (the station's RG-2 report) enables the R2 cross-check."""
+def rg7_mismatch(report: dict, rg2: dict | None, prior: list[dict] | None = None) -> list[str]:
+    """Changes whose `old` differs from what is already established: the previous decisions' value
+    for that item when there is one, else the RG-2 reading (when there is an RG-2 report)."""
+    out = []
+    for c in report["changes"]:
+        before = _prior_new(c["item"], prior or [])
+        if before is not None:
+            src, read = "previous decision new", before
+        else:
+            src, read = "RG-2 read", rg2_value(rg2, c["item"]) if rg2 is not None else None
+        if c["old"] is not None and read is not None and read != c["old"]:
+            out.append(f"{c['item']}: decision old {c['old']}, {src} {read}")
+    return out
+
+
+_MONTHS = {m: i for i, names in enumerate((
+    "јануара januara", "фебруара februara", "марта marta", "априла aprila", "маја maja", "јуна juna",
+    "јула jula", "августа avgusta", "септембра septembra", "октобра oktobra", "новембра novembra",
+    "децембра decembra"), 1) for m in names.split()}
+
+
+def parse_decision_date(text) -> date | None:
+    """"14.10.2026", "14.10.2026. године" or "9. јуна 2025." (Cyrillic or Latin month) -> date."""
+    t = str(text or "").lower()
+    m = re.search(r"(\d{1,2})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{4})", t)
+    if m:
+        d, mo, y = (int(x) for x in m.groups())
+    elif m := re.search(r"(\d{1,2})\s*\.?\s*([^\W\d_]+)\s*(\d{4})", t):
+        d, mo, y = int(m.group(1)), _MONTHS.get(m.group(2)), int(m.group(3))
+    else:
+        return None
+    try:
+        return date(y, mo, d)
+    except (TypeError, ValueError):
+        return None
+
+
+def decision_sort_key(uploaded_at: str | None, doc_id: int, report: dict | None) -> tuple:
+    """Decision order: parsed decision date, else upload date; then upload time, then id (an unknown
+    upload time sorts last)."""
+    parsed = parse_decision_date(report.get("decision_date") if report else None)
+    up = uploaded_at or ""
+    return ((parsed.isoformat() if parsed else up[:10]) or "9999", up or "9999", doc_id)
+
+
+def decision_label(uploaded_at: str | None, report: dict | None) -> str:
+    """dd/mm/yyyy of the decision (parsed) or, failing that, of its upload ("?" when neither)."""
+    d = parse_decision_date(report.get("decision_date") if report else None)
+    if d is None:
+        try:
+            d = date.fromisoformat((uploaded_at or "")[:10])
+        except ValueError:
+            return "?"
+    return d.strftime("%d/%m/%Y")
+
+
+def evaluate_rg7(report: dict, doc: Doc, cfg: Config, rg2: dict | None = None,
+                 prior: list[dict] | None = None) -> list[Finding]:
+    """R1-R3 of an RG-7 report; `rg2` (the station's RG-2 report) and `prior` (earlier decisions of
+    the station, oldest first) enable the R2 cross-check."""
     changes = report["changes"]
     if not changes:
         return [Finding("R3", "LOW", doc, "RG-7 decision: no changes could be read")]
@@ -310,8 +372,9 @@ def evaluate_rg7(report: dict, doc: Doc, cfg: Config, rg2: dict | None = None) -
     sev = "HIGH" if any(_is_result(c["item"]) for c in changes) and not low else "MEDIUM"
     text = "RG-7 corrected " + "; ".join(change_text(c) for c in changes)
     suffix = " (low-confidence read)" if low else ""
-    out = [Finding("R1", sev, doc, text[:_MAX_SUMMARY - len(suffix) - 3] + "..." + suffix
-                   if len(text) + len(suffix) > _MAX_SUMMARY else text + suffix)]
-    if rg2 is not None and (bad := rg7_mismatch(report, rg2)):
+    if len(text) + len(suffix) > _MAX_SUMMARY:
+        text = text[:_MAX_SUMMARY - len(suffix) - 3] + "..."
+    out = [Finding("R1", sev, doc, text + suffix)]
+    if bad := rg7_mismatch(report, rg2, prior):
         out.append(Finding("R2", "MEDIUM", doc, ("RG-7 vs RG-2 - " + "; ".join(bad))[:_MAX_SUMMARY]))
     return out

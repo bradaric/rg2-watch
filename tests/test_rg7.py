@@ -21,13 +21,16 @@ from test_rules import clean_report, nf
 M = "claude-sonnet-5-5"
 
 
-def rg7(changes=(), table=(), conf="high", date="14.10.2026", station="37"):
+def rg7(changes=(), table=(), conf="high", date=None, station="37"):
     return {"decision_date": date, "station_no": station, "reason": "arithmetic error", "confidence": conf,
             "changes": [{"item": i, "old": o, "new": n} for i, o, n in changes],
             "table": [{"item": i, "value": v} for i, v in table]}
 
 
-NEGOTIN = rg7([("10.2", 180, 178), ("10.4", 177, 175), ("list:1", 146, 144)])  # from the RG-7-2 of BM 37
+NEGOTIN = rg7([("10.2", 180, 178), ("10.4", 177, 175), ("list:1", 146, 144)], date="14.10.2026")  # BM 37, RG-7-2
+# the RG-2 it corrects, as filed
+NEG_RG2 = dict(voted=nf(180), ballots_in_box=nf(180), invalid=nf(3), valid=nf(177),
+               list_votes=[{"row": 1, "field": nf(146)}, {"row": 2, "field": nf(31)}])
 ZAJECAR = rg7([("3", 1704, 1703), ("10.3", 17, 16)])
 
 
@@ -164,7 +167,7 @@ def test_tally_applies_corrections_and_rechecks_arithmetic():
     assert o["clean"] == 1 and t["excluded"] == []  # 18 + 160 = 178: arithmetic ok after correction
     assert o["all"]["ballots_in_box"] == 178 and o["all"]["invalid"] == 18
     assert t["corrected"] == [{"id": t["corrected"][0]["id"], "m": "Сечањ", "no": "37", "rg7": [
-        {"d": "20/10", "ch": ["10.2 180->178", "10.3 20->18", "10.4 160->160"]}]}]
+        {"d": "20/10/2026", "ch": ["10.2 180->178", "10.3 20->18", "10.4 160->160"]}]}]
     assert o["corrected"] == 1
 
 
@@ -176,7 +179,7 @@ def test_tally_latest_decision_wins_and_table_is_final():
         invalid=nf(20), valid=nf(780), ballots_in_box=nf(800))
     t = tally(s)
     assert (t["overall"]["all"]["invalid"], t["overall"]["all"]["valid"]) == (18, 782)
-    assert [d["d"] for d in t["corrected"][0]["rg7"]] == ["20/10", "27/10"]
+    assert [d["d"] for d in t["corrected"][0]["rg7"]] == ["20/10/2026", "27/10/2026"]
 
 
 def test_tally_keeps_visual_alerts_but_not_corrected_arithmetic():
@@ -214,16 +217,16 @@ def test_cli_format_marks_corrected_with_star():
     from rg2watch.tally import format_tally
 
     s = bstore()
-    station(s, clean_report(), [(NEGOTIN, "2026-10-20T10:00:00Z")], no="1")
+    station(s, clean_report(), [(NEGOTIN, "2026-10-20T10:00:00Z")], no="1", **NEG_RG2)
     text = format_tally(tally(s))
-    assert "1*" in text and "* corrected by RG-7" in text and "RG-7 20/10: 10.2 180->178" in text
+    assert "1*" in text and "* corrected by RG-7" in text and "RG-7 14/10/2026: 10.2 180->178" in text
 
 
 # page -------------------------------------------------------------------------------------
 
 def test_page_data_marks_corrections(tmp_path):
     s = bstore()
-    station(s, clean_report(), [(NEGOTIN, "2026-10-20T10:00:00Z")], no="1")
+    station(s, clean_report(), [(NEGOTIN, "2026-10-20T10:00:00Z")], no="1", **NEG_RG2)
     x = d7("1", dt=21, url="/e/pending.pdf", up="2026-10-21T10:00:00Z")
     add(s, x)  # not read yet
     s.add_finding(BP, Finding("R1", "HIGH", d7("1", url="/e/rg7-1-0.pdf"), "RG-7 corrected x"), "/e/rg7-1-0.pdf")
@@ -231,7 +234,7 @@ def test_page_data_marks_corrections(tmp_path):
     assert [r["no"] for r in data["rows"]] == ["1"]  # decisions are badges, not rows
     r7 = data["rows"][0]["r7"]
     assert [(x["d"], x["ch"]) for x in r7] == [
-        ("20/10", ["10.2 180->178", "10.4 177->175", "list:1 146->144"]), ("21/10", None)]
+        ("14/10/2026", ["10.2 180->178", "10.4 177->175", "list:1 146->144"]), ("21/10/2026", None)]
     assert r7[0]["f"] == [["R1", "HIGH", "RG-7 corrected x"]] and r7[0]["rik"].endswith("rg7-1-0.pdf")
     assert "R1" in data["rules"]
 
@@ -324,3 +327,159 @@ def test_cli_analyze_doc_type_rg7_prints_changes(tmp_path, monkeypatch, capsys):
     s = Store(tmp_path / "d.sqlite")
     assert s._db.execute("SELECT prompt_version FROM analyses").fetchone()[0] == "r1"
     s.close()
+
+
+# review fixes -------------------------------------------------------------------------------
+
+def test_parse_decision_date_and_ordering_keys():
+    from datetime import date
+
+    from rg2watch.rules import decision_label, decision_sort_key, parse_decision_date as p
+
+    assert p("14.10.2026") == p("14.10.2026. године") == p(" 14. 10. 2026.") == date(2026, 10, 14)
+    assert p("9. јуна 2025. године") == p("9 juna 2025") == p("9. Јуна 2025") == date(2025, 6, 9)
+    assert p("31.02.2026") is None and p("sometime") is None and p(None) is None and p("5. foo 2025") is None
+    assert decision_label("2026-10-20T10:00:00Z", rg7(date="9. јуна 2025.")) == "09/06/2025"
+    assert decision_label("2026-10-20T10:00:00Z", rg7()) == "20/10/2026"
+    assert decision_label(None, rg7()) == "?"
+    keys = [decision_sort_key(None, 1, rg7()), decision_sort_key("2026-10-20", 3, rg7()),
+            decision_sort_key("2026-10-21", 2, rg7(date="01.10.2026")), decision_sort_key("2026-10-20", 2, rg7())]
+    assert sorted(range(4), key=keys.__getitem__) == [2, 3, 1, 0]  # parsed date, upload, id; NULL upload last
+
+
+def test_normalise_restricts_items_and_cleans_text():
+    n = _normalise_rg7(rg7([("10.5 row 2", 1, 2), ("10.5.3", 1, 2), ("10.5/4", 1, 2), ("10.5", 1, 2),
+                            ("11", 5, 4), ("X" * 100, 1, 2), ("3", 1, 2)])
+                       | {"reason": "a\x00b\nc " + "z" * 300, "station_no": "3\t7"})
+    assert [c["item"] for c in n["changes"]] == ["list:2", "list:3", "list:4", "other: 10.5", "other: 11",
+                                                  "other: " + "x" * 40, "3"]
+    assert len(n["reason"]) == 200 and "\x00" not in n["reason"] and "\n" not in n["reason"]
+    assert n["station_no"] == "3 7"
+
+
+def test_low_confidence_decision_is_not_applied_and_flags_the_form():
+    s = bstore()
+    station(s, clean_report(), [(rg7([("10.4", 780, 700)], conf="low"), "2026-10-20T10:00:00Z")])
+    t = tally(s)
+    assert t["overall"]["all"]["valid"] == 780 and t["corrected"] == [] and t["overall"]["clean"] == 0
+    assert t["excluded"][0]["why"] == ["unverified RG-7 correction, RG-2 numbers kept (20/10/2026: low-confidence read)"]
+
+
+def test_decision_contradicting_the_rg2_is_not_applied_and_flags_the_form():
+    s = bstore()
+    station(s, clean_report(), [(rg7([("10.4", 900, 700)]), "2026-10-20T10:00:00Z")])
+    t = tally(s)
+    assert t["overall"]["all"]["valid"] == 780 and t["corrected"] == []
+    assert "unverified RG-7 correction" in t["excluded"][0]["why"][0] and "old 900, RG-2 read 780" in t["excluded"][0]["why"][0]
+
+
+def test_null_new_number_is_not_a_correction():
+    s = bstore()
+    station(s, clean_report(), [(rg7([("10.4", 780, None)]), "2026-10-20T10:00:00Z")])
+    t = tally(s)
+    assert t["corrected"] == [] and t["overall"]["all"]["valid"] == 780 and t["overall"]["clean"] == 1
+
+
+def test_correction_does_not_rescue_an_illegible_field_unless_the_table_gives_it():
+    s = bstore()
+    station(s, clean_report(), [(rg7([("10.4", None, 700)]), "2026-10-20T10:00:00Z")],
+            valid=nf(None, legible=False))
+    t = tally(s)
+    assert t["corrected"] == [] and "illegible or empty: valid illegible" in t["excluded"][0]["why"][0]
+    s2 = bstore()
+    station(s2, clean_report(), [(rg7([("10.4", None, 700)], [("10.4", 700)]), "2026-10-20T10:00:00Z")],
+            valid=nf(None, legible=False))
+    t2 = tally(s2)
+    assert t2["overall"]["all"]["valid"] == 700 and [c["rg7"][0]["ch"] for c in t2["corrected"]] == [["10.4 table 700"]]
+
+
+def test_decisions_are_ordered_by_decision_date_not_upload_order():
+    s = bstore()
+    # uploaded first but dated later; by upload order its old (19) would contradict the RG-2 (20)
+    later = rg7([("10.3", 19, 18)], date="05.10.2026")
+    earlier = rg7([("10.3", 20, 19)], date="01.10.2026")
+    station(s, clean_report(), [(later, "2026-10-20T10:00:00Z"), (earlier, "2026-10-21T10:00:00Z")], invalid=nf(20))
+    t = tally(s)
+    assert t["overall"]["all"]["invalid"] == 18 and t["excluded"][0]["why"] == ["arithmetic A2"]  # applied, 18 + 780 != 800
+    assert [d["d"] for d in t["corrected"][0]["rg7"]] == ["01/10/2026", "05/10/2026"]
+
+
+def test_failure_while_applying_falls_back_to_the_rg2_numbers(monkeypatch, caplog):
+    import rg2watch.tally as tl
+
+    monkeypatch.setattr(tl, "apply_rg7", lambda *a: 1 / 0)
+    s = bstore()
+    station(s, clean_report(), [(rg7([("10.4", 780, 700)]), "2026-10-20T10:00:00Z")])
+    with caplog.at_level("WARNING", logger="rg2watch.tally"):
+        t = tally(s)
+    assert t["overall"]["counted"] == 1 and t["overall"]["all"]["valid"] == 780 and t["corrected"] == []
+    assert "could not be applied" in caplog.text
+
+
+def test_r2_compares_with_the_previous_decision_when_there_is_one():
+    rg2 = clean_report()  # ballots in box 800
+    first = rg7([("10.2", 800, 790)])
+    second = rg7([("10.2", 790, 780)])
+    assert [f.rule for f in evaluate_rg7(second, d7(), cfg(), rg2, [first])] == ["R1"]  # agrees with 790
+    bad = rg7([("10.2", 800, 780)])  # agrees with the RG-2 but not with the previous decision
+    f = evaluate_rg7(bad, d7(), cfg(), rg2, [first])
+    assert [x.rule for x in f] == ["R1", "R2"] and "previous decision new 790" in f[1].summary
+    assert [x.rule for x in evaluate_rg7(bad, d7(), cfg(), rg2)] == ["R1"]
+    assert [x.rule for x in evaluate_rg7(bad, d7(), cfg(), None, [first])] == ["R1", "R2"]  # no RG-2 yet
+
+
+def test_pipeline_recheck_failure_never_touches_the_rg2_outcome(tmp_path, monkeypatch):
+    e = Env(tmp_path, _rg2_reply())
+    monkeypatch.setattr(e.pipe, "_rg7_rechecks", lambda *a: 1 / 0)
+    d = pdoc("a.pdf", dt=6)
+    e.publish(d)
+    assert e.drain() == 1 and e.status(d.url) == ("done", 1)
+
+
+def test_pipeline_queries_only_the_stations_decisions(tmp_path, monkeypatch):
+    e = Env(tmp_path, rg7_reply(NEGOTIN))
+    seen = []
+    orig = e.store.rg7_reports
+    monkeypatch.setattr(e.store, "rg7_reports", lambda *a, **kw: seen.append(kw) or orig(*a, **kw))
+    e.publish(pdoc("b.pdf", dt=20))
+    e.drain()
+    e.ai.reply = _rg2_reply()
+    e.publish(pdoc("a.pdf", dt=6))
+    e.drain()
+    assert seen and all(kw.get("station_key") == "Alpha|1" for kw in seen)
+
+
+def test_pipeline_prior_decision_feeds_r2(tmp_path):
+    e = Env(tmp_path, rg7_reply(rg7([("10.2", 800, 790)], date="01.10.2026")))
+    e.publish(pdoc("a.pdf", dt=20))
+    e.drain()
+    e.ai.reply = rg7_reply(rg7([("10.2", 800, 780)], date="05.10.2026"))  # contradicts the previous new 790
+    e.publish(pdoc("b.pdf", dt=21))
+    e.drain()
+    assert e.rules() == ["R1", "R1", "R2"]
+
+
+def test_rg7_stays_out_of_rg2_backlog_and_counts_separately(tmp_path):
+    s = bstore()
+    r2, x = bdoc("/e/a.pdf", no="1"), d7("1", url="/e/x.pdf")
+    add(s, r2)
+    add(s, x)
+    s._db.execute("UPDATE documents SET analysis_status='skipped'")
+    assert s.analysis_backlog(BP) == 1 and s.queued_for_analysis(BP) == 0
+    assert s.status_counts(BP)["rg7"] == {"read": 0, "pending": 0}
+    assert s.requeue_skipped(BP) == 1  # the RG-7 is not part of the RG-2 backlog
+    s.requeue_rg7(BP)
+    assert s.status_counts(BP)["rg7"] == {"read": 0, "pending": 1}
+    s.mark_analysis(x.url, "done")
+    assert s.status_counts(BP)["rg7"] == {"read": 1, "pending": 0}
+    assert s.run_summary(BP)["skipped"] == 0
+
+
+def test_page_shows_which_model_read_a_decision(tmp_path):
+    s = bstore()
+    station(s, clean_report(), [], no="1")
+    x = d7("1", url="/e/other.pdf")
+    add(s, x)
+    put(s, x, NEGOTIN, model="some-other-model", version=RG7_PROMPT_VERSION)
+    r7 = build_data(s, tmp_path, cfg=Config(model=M))["rows"][0]["r7"]
+    assert r7[0]["ch"] is None and r7[0]["by"] == ["some-other-model"]

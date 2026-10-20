@@ -12,10 +12,10 @@ from .analyze import stored_model
 from .config import Config
 from .models import Doc
 from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
-from .rules import RULE_INFO, change_text, evaluate_report
+from .rules import RULE_INFO, change_text, decision_label, decision_sort_key, evaluate_report
 from .status import build_status, to_belgrade
 from .store import Store, _doc
-from .tally import build_tally, ddmm
+from .tally import build_tally
 
 log = logging.getLogger("rg2watch.browse")
 SEV_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
@@ -123,10 +123,13 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     r7_found: dict[int, list] = {}
     for f in store.rg7_findings(parent):
         r7_found.setdefault(f["document_id"], []).append([f["rule"], f["severity"], f["summary"]])
-    for d, rep in r7_docs:
+    readers = store.rg7_readers(parent, RG7_PROMPT_VERSION)
+    for d, rep in sorted(r7_docs, key=lambda x: decision_sort_key(x[0]["uploaded_at"], x[0]["id"], x[1])):
         base = elections[d["parent"]].base_url if d["parent"] in elections else None
         x = _version(d, {}, {}, cache_dir, base)
-        x.update(d=ddmm(d["uploaded_at"]), ch=[change_text(c) for c in rep["changes"]] if rep else None,
+        x.update(d=decision_label(d["uploaded_at"], rep),
+                 ch=[change_text(c) for c in rep["changes"]] if rep else None,
+                 by=[m for m in readers.get(d["id"], []) if m != model],  # read by other models only
                  f=sorted(r7_found.get(d["id"], []), key=lambda f: -SEV_RANK.get(f[1], 0)))
         for t in RG2_OF_RG7.get(d["doc_type"], ()):
             r7.setdefault((d["parent"], d["station_key"], t), []).append(x)

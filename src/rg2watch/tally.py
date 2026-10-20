@@ -9,7 +9,8 @@ from .config import Config
 from .models import Doc
 from .names import to_cyrillic
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
-from .rules import RG7_ITEMS, _dash_zero, _ok, change_text, evaluate_report
+from .rules import (RG7_ITEMS, _dash_zero, _ok, change_text, decision_label, decision_sort_key, evaluate_report,
+                    rg2_value, rg7_mismatch)
 from .store import Store, _doc
 
 log = logging.getLogger("rg2watch.tally")
@@ -52,41 +53,62 @@ def list_name(names: list[str], row: int) -> str:
     return names[row - 1] if 1 <= row <= len(names) and names[row - 1].strip() else f"List {row}"
 
 
-def ddmm(uploaded_at: str | None) -> str:
-    """dd/mm of an ISO upload time ("?" when unknown)."""
-    m = (uploaded_at or "")[:10].split("-")
-    return f"{m[2]}/{m[1]}" if len(m) == 3 and all(m) else "?"
-
-
-def apply_rg7(report: dict, decisions: list[dict]) -> dict:
-    """Copy of an RG-2 report with RG-7 corrections applied in decision order: latest wins per item,
-    and a decision's corrected table (when present) is final for the items it lists. Corrected
-    values read as clean and legible; items an RG-2 report does not carry are ignored."""
+def apply_rg7(report: dict, decisions: list[dict]) -> tuple[dict, list[dict], list[str]]:
+    """(corrected copy of an RG-2 report, applied [{d, ch}], unverified reasons). Decisions come in
+    decision order ({d: label, rep: RG-7 report}); latest wins per item and a decision's corrected
+    table is final for the items it lists. A decision that is a low-confidence read, or whose old
+    numbers contradict the RG-2 reading (or the previous decision), is not applied. A correction
+    never fills an RG-2 field that was unreadable, unless the decision's table gives the value; a
+    null new number changes nothing. Corrected values read as clean and legible."""
     out = copy.deepcopy(report)
     nums = out["numbers"]
+    applied: list[dict] = []
+    unverified: list[str] = []
+    used: list[dict] = []
 
-    def put(item: str, value: int | None) -> None:
+    def put(item: str, value: int | None, table: bool) -> bool:
         if value is None:
-            return
+            return False
         done = {"value": value, "legible": True, "mark": "clean", "note": "corrected by RG-7",
                 "original_value": None}
         if item in RG7_ITEMS:
+            f = _dash_zero(nums[RG7_ITEMS[item]])
+            if not table and not _ok(f):
+                return False
             nums[RG7_ITEMS[item]] = done
-        elif item.startswith("list:") and item[5:].isdigit():
+            return True
+        if item.startswith("list:") and item[5:].isdigit():
             row = int(item[5:])
             old = next((r for r in nums["list_votes"] if r["row"] == row), None)
             if old is not None:
+                if not table and not _ok(_dash_zero(old["field"])):
+                    return False
                 old["field"] = done
-            else:
+            elif table:
                 nums["list_votes"] = sorted([*nums["list_votes"], {"row": row, "field": done}],
                                             key=lambda r: r["row"])
+            else:
+                return False
+            return True
+        return False
 
     for dec in decisions:
-        for c in dec["changes"]:
-            put(c["item"], c["new"])
-        for e in dec["table"]:
-            put(e["item"], e["value"])
-    return out
+        rep = dec["rep"]
+        if rep["confidence"] == "low":
+            unverified.append(f"{dec['d']}: low-confidence read")
+            continue
+        if bad := rg7_mismatch(rep, report, used):
+            unverified.append(f"{dec['d']}: " + "; ".join(bad))
+            continue
+        used.append(rep)
+        ch = [change_text(c) for c in rep["changes"] if put(c["item"], c["new"], False)]
+        for e in rep["table"]:
+            before = rg2_value(out, e["item"])
+            if put(e["item"], e["value"], True) and before != e["value"]:
+                ch.append(f"{e['item']} table {e['value']}")
+        if ch:
+            applied.append({"d": dec["d"], "ch": ch})
+    return out, applied, unverified
 
 
 def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None) -> dict:
@@ -94,8 +116,14 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None) 
     With `rg7` decisions the corrected numbers are counted and the arithmetic rules re-run on them;
     the physical alerts (V, P) of the original RG-2 stay."""
     original = report
+    applied, unverified = [], []
     if rg7:
-        report = apply_rg7(report, rg7)
+        try:
+            report, applied, unverified = apply_rg7(report, rg7)
+        except Exception:  # the form stays counted on its RG-2 numbers
+            log.warning("RG-7 corrections of %s %s could not be applied", doc.municipality,
+                        doc.station_no, exc_info=True)
+            report, applied, unverified = original, [], []
     nums = {k: _dash_zero(f) for k, f in report["numbers"].items() if k != "list_votes"}
     n: dict[str, int | None] = {}
     bad: list[str] = []
@@ -116,14 +144,14 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None) 
     found = evaluate_report(report, doc, cfg)  # the rules re-applied to the stored report (no D-rules)
     arith = sorted({f.rule for f in found if f.rule in ARITHMETIC})
     high = {f.rule for f in found if f.severity == "HIGH"}
-    if rg7:  # arithmetic from the corrected numbers, everything else from the RG-2 as filed
+    if applied:  # arithmetic from the corrected numbers, everything else from the RG-2 as filed
         high = {r for r in high if r in ARITHMETIC} | {
             f.rule for f in evaluate_report(original, doc, cfg)
             if f.severity == "HIGH" and f.rule not in ARITHMETIC}
     high = sorted(high)
     return {"n": n, "l": lists, "bad": bad, "conf": report["confidence"],
             "pq": report["visual"]["page_quality"], "arith": arith, "high": high,
-            "rg7": [{"d": d["d"], "ch": [change_text(c) for c in d["changes"]]} for d in rg7] if rg7 else []}
+            "rg7": applied, "rg7_bad": unverified}
 
 
 def disagreements(mine: dict, others: dict[str, dict], model: str) -> tuple[list[dict], list[str]]:
@@ -153,6 +181,8 @@ def reasons(ex: dict, dis: list[dict], rows: list[int]) -> list[str]:
         out.append("illegible or empty: " + ", ".join(ex["bad"]))
     for d in dis:
         out.append(f"models disagree on {d['f']}: " + " vs ".join(f"{v} ({m})" for m, v in d["v"].items()))
+    if ex["rg7_bad"]:
+        out.append("unverified RG-7 correction, RG-2 numbers kept (" + "; ".join(ex["rg7_bad"]) + ")")
     if ex["arith"]:
         out.append("arithmetic " + ", ".join(ex["arith"]))
     if ex["high"]:
@@ -227,7 +257,9 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION):
         if row["doc_type"] in RG7_FIRST_ROUND and row["station_key"] is not None:
             corr.setdefault(row["station_key"], []).append(
-                {"d": ddmm(row["uploaded_at"]), "changes": rep["changes"], "table": rep["table"]})
+                ({"d": decision_label(row["uploaded_at"], rep), "rep": rep},
+                 decision_sort_key(row["uploaded_at"], row["id"], rep)))
+    corr = {k: [d for d, _ in sorted(v, key=lambda x: x[1])] for k, v in corr.items()}
     sigs = {k: hash(json.dumps(v, sort_keys=True)) for k, v in corr.items()}
 
     def key_of(a) -> object:

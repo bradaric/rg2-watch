@@ -74,6 +74,8 @@ def format_status(store: Store, parent: str, status_file, cfg_cap: float, now: f
     return "\n".join([
         f"election {parent}: {st['title']}",
         f"RG-2 seen {d['rg2_seen']}{expected}, stations {d['stations']}",
+        *([f"RG-7 decisions: read {d['rg7']['read']} / pending {d['rg7']['pending']}"]
+          if d["rg7"]["read"] or d["rg7"]["pending"] else []),
         f"analysis done {a['done']}, failed {a['failed']}, queued {a['queued']}",
         f"spend ${a['spend']:.2f} of ${cfg_cap:.2f} cap",
         f"to review {len(store.review_todo(parent))}, escalated {verdicts.get('escalate', 0)}, "
