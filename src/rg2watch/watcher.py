@@ -72,6 +72,7 @@ class Watcher:
         self.on_events, self.clock, self.sleep = on_events, clock, sleep
         self.on_status = on_status
         self.on_mass = on_mass  # urls of the documents replaced so far in a mass-replacement sweep
+        self._health_lock = threading.Lock()
         self._lane_replaced: list[str] = []
         self._mass_fired = False
         self.parent = client.election.parent
@@ -138,7 +139,7 @@ class Watcher:
         if self.clock() >= self._paused_until:
             self._tick()
             self._tick_used, self._tick_wall = self._tick_budget - self._budget, time.time()
-        self._check_health()
+        self.check_health()
 
     @property
     def first_pass_left(self) -> list[str]:
@@ -264,6 +265,11 @@ class Watcher:
                  self.clock() - start, s["added"] + s["replaced"] + s["removed"], self._budget)
 
     # health -----------------------------------------------------------------
+    def check_health(self) -> None:
+        """Also called from the delivery thread, so a slow tick cannot hold the alerts back."""
+        with self._health_lock:
+            self._check_health()
+
     def _check_health(self) -> None:
         now, c = self.clock(), self.client
         if c.blocked_streak >= BLOCKED_STREAK:

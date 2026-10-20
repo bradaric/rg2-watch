@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 from rg2watch.cli import main
@@ -98,11 +99,15 @@ def test_watch_loop_survives_tick_failure(tmp_path, monkeypatch, capsys):
             raise RuntimeError("database is locked")
         return real(self, *a, **k)
 
+    real_sleep = time.sleep
+
     def fake_sleep(s):
         sleeps.append(s)
+        real_sleep(0.3)  # the delivery thread runs on its own clock
         if len(sleeps) >= 2:
             raise KeyboardInterrupt
 
+    monkeypatch.setattr(cli, "DELIVER_EVERY_S", 0.05)
     monkeypatch.setattr(Store, "unalerted", flaky)
     monkeypatch.setattr(cli.time, "sleep", fake_sleep)
     try:
@@ -140,7 +145,6 @@ def test_watch_sigterm_flushes_stdout_and_exits_0(tmp_path):
     import signal
     import subprocess
     import sys
-    import time
 
     root = make_fixture_dir(tmp_path)
     server = make_replay_server(root, port=0, speed=1e9, faults=True)
@@ -208,33 +212,59 @@ def test_watch_once_baseline_records_silently(tmp_path, capsys):
     assert con.execute("SELECT COUNT(*) FROM documents WHERE doc_type=9").fetchone()[0] == 1
 
 
-def test_deliver_runs_when_run_once_raises(tmp_path, monkeypatch):
+def _delivery_env(tmp_path, monkeypatch, delivered):
     import rg2watch.cli as cli
     from rg2watch.models import Election
     from rg2watch.store import Store
-    from rg2watch.watcher import Watcher
 
     db = tmp_path / "w.sqlite"
     s = Store(db)
     s.upsert_election(Election("662405", "660578", "3", "Test", "http://127.0.0.1:9"))
     s.close()
-    delivered, sleeps = [], []
     real = cli._handlers
 
     def handlers(*a):
         on_events, _ = real(*a)
-        return on_events, lambda: delivered.append(1)
-
-    def boom(self):
-        raise RuntimeError("tick blew up")
-
-    def fake_sleep(s):
-        sleeps.append(s)
-        if len(sleeps) >= 2:
-            raise KeyboardInterrupt
+        return on_events, lambda flush=False: delivered.append(flush)
 
     monkeypatch.setattr(cli, "_handlers", handlers)
+    monkeypatch.setattr(cli, "DELIVER_EVERY_S", 0.01)
+    return ["watch", "--parent", "662405", "--db", str(db), "--serve-port", "0"]
+
+
+def test_deliver_runs_when_run_once_raises(tmp_path, monkeypatch):
+    import rg2watch.cli as cli
+    from rg2watch.watcher import Watcher
+
+    delivered, ticks = [], []
+    argv = _delivery_env(tmp_path, monkeypatch, delivered)
+
+    def boom(self):
+        ticks.append(1)
+        if len(ticks) >= 3:
+            raise KeyboardInterrupt
+        raise RuntimeError("tick blew up")
+
     monkeypatch.setattr(Watcher, "run_once", boom)
-    monkeypatch.setattr(cli.time, "sleep", fake_sleep)
-    assert main(["watch", "--parent", "662405", "--db", str(db)]) == 0
-    assert len(delivered) == 2
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    assert main(argv) == 0
+    assert delivered
+
+
+def test_blocked_tick_does_not_delay_delivery(tmp_path, monkeypatch):
+
+    from rg2watch.watcher import Watcher
+
+    delivered, seen = [], []
+    argv = _delivery_env(tmp_path, monkeypatch, delivered)
+
+    def blocked(self):  # a slow RIK tick: delivery must happen while it is still running
+        deadline = time.monotonic() + 5
+        while not delivered and time.monotonic() < deadline:
+            time.sleep(0.01)
+        seen.append(bool(delivered))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Watcher, "run_once", blocked)
+    assert main(argv) == 0
+    assert seen == [True]

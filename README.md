@@ -58,7 +58,9 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
    limits. Status alerts (RIK unreachable, analysis paused, spend cap) are separate, go first and are
    never held back by the finding backlog. If one sweep replaces more than `mass_replace_threshold`
    (20) documents, ONE "[rg2-watch] mass replacement: N documents replaced in one sweep (RIK
-   re-upload?)" alert is pushed and those D2 findings go to the digest. A digest is compact (under 3.5 KB): counts by rule, up
+   re-upload?)" alert is pushed and those D2 findings go to the digest.
+   Alerts are delivered, and RIK reachability checked, by their own thread every 5 s, so a slow
+   RIK tick (10 minutes at a throttled rate) never holds them back. A digest is compact (under 3.5 KB): counts by rule, up
    to 10 detail lines without URLs, and "+K more - open the page, filter MEDIUM" with the page URL when
    serving (a single-finding digest keeps its RIK URL). Every finding is also printed (and flushed) to
    stdout. If ntfy is unreachable, findings stay un-alerted and pushes back off (5 s doubling to

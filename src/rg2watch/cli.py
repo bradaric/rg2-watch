@@ -292,6 +292,7 @@ def _cmd_browse(args) -> int:
 
 
 STATUS_EVERY_S = 10
+DELIVER_EVERY_S = 5  # alert delivery and RIK health check run on their own clock, not per tick
 
 
 def _live(watcher: Watcher, pipeline, notifier: Notifier, url: str | None):
@@ -665,6 +666,8 @@ def _cmd_watch(args) -> int:
                           on_status=notifier.status, baseline=args.baseline, only=only,
                           on_mass=notifier.digest_only)
         stop = threading.Event()
+        stop_delivery = threading.Event()  # set after the pipeline stopped: its last findings still go out
+        delivery = None
         server, threads = None, []
         code, finished, reached, started = 0, None, False, time.monotonic()
         if args.until_done:
@@ -673,7 +676,9 @@ def _cmd_watch(args) -> int:
         try:  # everything after pipeline.start() is inside the try: the pipeline cannot leak
             if pipeline is not None:
                 pipeline.start()
-            if not args.once:  # `--once` is a diff check: no page build, no server
+            if not args.once:  # `--once` is a diff check: no page build, no server, no delivery thread
+                delivery = _background("deliver", stop_delivery, DELIVER_EVERY_S,
+                                       lambda: (deliver(), watcher.check_health()))
                 port = cfg.serve_port if args.serve_port is None else args.serve_port
                 if port:
                     server = _start_web(_browse_path(cfg).parent, _cache_dir(cfg), port, store)
@@ -695,11 +700,11 @@ def _cmd_watch(args) -> int:
                     watcher.run_once()
                 except Exception:
                     log.exception("tick failed; retrying next tick")
-                try:
-                    deliver()
-                except Exception:
-                    log.exception("delivery failed; retrying next tick")
-                if args.once:
+                if args.once:  # a one-shot check delivers by itself; the loop has the delivery thread
+                    try:
+                        deliver()
+                    except Exception:
+                        log.exception("delivery failed")
                     break
                 if finished is not None:
                     try:
@@ -722,6 +727,9 @@ def _cmd_watch(args) -> int:
                 t.join(10)
             if pipeline is not None:
                 pipeline.stop()
+            stop_delivery.set()
+            if delivery is not None:
+                delivery.join(10)
             if reached:  # --until-done verdict: last alerts, last page, then the summary
                 try:
                     try:
