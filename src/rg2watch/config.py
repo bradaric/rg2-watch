@@ -31,6 +31,9 @@ class Config:
     ntfy_url: str = "https://ntfy.sh"
     ntfy_topic: str | None = None
     medium_digest_s: int = 600
+    high_push_max: int = 10  # individual HIGH pushes per window; the rest roll into a digest
+    high_push_window_s: int = 300
+    mass_replace_threshold: int = 20  # replaced documents in one sweep that trip the circuit breaker
     request_timeout_s: float = 20.0
     max_pdf_bytes: int = 50_000_000
     model: str = "claude-haiku-5-5"
@@ -99,6 +102,8 @@ def load_config(path: Path | None) -> Config:
     if not (isinstance(cfg.tally_scope, dict) and all(
             isinstance(k, str) and v in ("national", "municipal") for k, v in cfg.tally_scope.items())):
         raise ValueError('tally_scope must map an election id to "national" or "municipal"')
+    if cfg.high_push_max < 1 or cfg.high_push_window_s < 1 or cfg.mass_replace_threshold < 1:
+        raise ValueError("high_push_max, high_push_window_s and mass_replace_threshold must be >= 1")
     if cfg.browse_interval_s < 0:
         raise ValueError(f"browse_interval_s must be >= 0: {cfg.browse_interval_s}")
     if not 0 <= cfg.serve_port <= 65535:

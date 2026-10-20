@@ -302,3 +302,61 @@ def test_digest_cap_never_splits_characters():
     big = Finding("P3", "MEDIUM", Doc("Ш" * 3000, "1", "s", "x", 6, "https://x/a.pdf", "2025-11-02T21:05"), "s")
     out = digest_body([big, f])
     assert len(out.encode("utf-8")) <= 3500
+
+
+def _high(i: int, rule="V1") -> Finding:
+    d = Doc("Град Зајечар", str(i), "ОШ", "x", 6, f"https://x/{i}.pdf", "2025-11-02T21:05")
+    return Finding(rule, "HIGH", d, "crossed out")
+
+
+def test_high_pushes_are_rate_limited_and_roll_into_a_digest():
+    reqs = []
+    clock = Clock()
+    n, _ = make(lambda r: reqs.append(r) or httpx.Response(200), clock=clock)
+    n.cfg.high_push_max, n.cfg.high_push_window_s = 3, 300
+    fs = [(i, _high(i)) for i in range(1, 8)]
+    assert n.send(fs) == [1, 2, 3]
+    assert len(reqs) == 3 and n.status_snapshot()["queued"] == 4
+    assert n.send(fs[3:]) == []  # window full: nothing more goes out, nothing is lost
+    assert len(reqs) == 3
+    clock.t = 301
+    assert sorted(n.send(fs[3:])) == [4, 5, 6, 7]
+    assert len(reqs) == 4
+    r = reqs[-1]
+    assert r.headers["Title"] == "[HIGH] 4 findings" and r.headers["Priority"] == "high"
+    assert r.content.decode().split("\n")[0] == "V1 4"
+    assert n.status_snapshot()["queued"] == 0
+
+
+def test_status_alert_goes_out_while_high_backlog_is_held():
+    reqs = []
+    n, _ = make(lambda r: reqs.append(r) or httpx.Response(200))
+    n.cfg.high_push_max = 1
+    n.send([(i, _high(i)) for i in range(1, 5)])
+    n.status("[rg2-watch] RIK unreachable")
+    assert [r.headers["Title"] for r in reqs][-1] == "[rg2-watch] RIK unreachable"
+    assert len(reqs) == 2
+
+
+def test_status_retries_before_findings_after_ntfy_failure():
+    reqs, ok = [], [False]
+    clock = Clock()
+
+    def handler(r):
+        reqs.append(r.headers["Title"])
+        return httpx.Response(200 if ok[0] else 503)
+
+    n, _ = make(handler, clock=clock)
+    n.status("[rg2-watch] spend cap reached")
+    ok[0], clock.t = True, 10
+    assert n.send([(1, _high(1))]) == [1]
+    assert reqs[-2:] == ["[rg2-watch] spend cap reached", "[HIGH] V1 Grad Zajecar BM 1"]
+
+
+def test_mass_replacement_findings_go_to_the_digest_only():
+    reqs = []
+    n, _ = make(lambda r: reqs.append(r) or httpx.Response(200))
+    fs = [(i, _high(i, "D2")) for i in range(1, 6)]
+    n.digest_only([f.doc.url for _, f in fs])
+    assert sorted(n.send(fs)) == [1, 2, 3, 4, 5]
+    assert len(reqs) == 1 and reqs[0].headers["Title"] == "[HIGH] 5 findings"

@@ -662,7 +662,8 @@ def _cmd_watch(args) -> int:
         on_events, deliver = _handlers(store, notifier, parent, pipeline)
         watcher = Watcher(client, store, cfg, on_events,
                           initial_safety=args.once or args.until_done,
-                          on_status=notifier.status, baseline=args.baseline, only=only)
+                          on_status=notifier.status, baseline=args.baseline, only=only,
+                          on_mass=notifier.digest_only)
         stop = threading.Event()
         server, threads = None, []
         code, finished, reached, started = 0, None, False, time.monotonic()

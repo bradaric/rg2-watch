@@ -66,10 +66,14 @@ class Watcher:
     def __init__(self, client: RikClient, store: Store, cfg: Config,
                  on_events: Callable[[list[Event]], None], clock=time.monotonic, sleep=time.sleep,
                  initial_safety: bool = False, on_status: Callable[[str], None] | None = None,
-                 baseline: bool = False, only: dict[str, str] | None = None):
+                 baseline: bool = False, only: dict[str, str] | None = None,
+                 on_mass: Callable[[list[str]], None] | None = None):
         self.client, self.store, self.cfg = client, store, cfg
         self.on_events, self.clock, self.sleep = on_events, clock, sleep
         self.on_status = on_status
+        self.on_mass = on_mass  # urls of the documents replaced so far in a mass-replacement sweep
+        self._lane_replaced: list[str] = []
+        self._mass_fired = False
         self.parent = client.election.parent
         self._only_ids = set(only.values()) if only is not None else None
         self._only = dict(only) if only is not None else None  # name -> id; None = every municipality
@@ -244,6 +248,7 @@ class Watcher:
     def _run_lane(self, name: str, fn) -> None:
         self._lane = name
         self._stats = {"pages": 0, "records": 0, "added": 0, "replaced": 0, "removed": 0}
+        self._lane_replaced, self._mass_fired = [], False
         sweep_id = self.store.start_sweep(self.parent, name)
         start = self.clock()
         try:
@@ -407,7 +412,24 @@ class Watcher:
         if self._lane in self._baseline or (self._lane == "recheck" and self._baseline):
             self._baseline_counts.update(_type_name(ev.doc) for ev in events if ev.kind != "removed")
             return
+        self._mass_check(events)
         self.on_events(events)
+
+    def _mass_check(self, events: list[Event]) -> None:
+        """Circuit breaker: a sweep that replaces many documents is probably a RIK re-upload. One
+        status alert; the replaced documents (also those already seen in this sweep) go to the digest."""
+        self._lane_replaced.extend(e.doc.url for e in events if e.kind == "replaced")
+        if len(self._lane_replaced) <= self.cfg.mass_replace_threshold:
+            return
+        if self.on_mass is not None:
+            try:
+                self.on_mass(list(self._lane_replaced))
+            except Exception:
+                log.exception("mass-replacement handler failed")
+        if not self._mass_fired:
+            self._mass_fired = True
+            self._status(f"[rg2-watch] mass replacement: {len(self._lane_replaced)} documents replaced "
+                         "in one sweep (RIK re-upload?)")
 
     # lanes ----------------------------------------------------------------
     def _rare_wants(self, now: float) -> bool:

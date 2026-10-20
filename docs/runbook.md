@@ -65,7 +65,11 @@ fit: `mv data/rehearsal-677087.sqlite data/election-677087.sqlite`.
    busy; `rg2watch serve` prints it too when not watching): a live status panel, then every RG-2 with its alerts, second opinions, filters and
    PDF links. The table refreshes every 2 minutes and the panel every 10 s, without a reload.
 4. What arrives on the phone:
-   - HIGH, immediately: corrected numbers, more ballots than voters, very high outside voting (15%+),
+   - HIGH, immediately (at most 10 individual pushes per 5 minutes; beyond that one "[HIGH] N
+     findings" digest when the window allows, same compact format; status alerts such as RIK
+     blind, analysis paused or spend cap are never held back by that backlog; more than 20
+     replaced documents in one sweep give ONE "mass replacement" alert and a digest, not 20
+     pushes; `high_push_max`, `high_push_window_s`, `mass_replace_threshold`): corrected numbers, more ballots than voters, very high outside voting (15%+),
      RG-8/RG-9 published, an RG-2 replaced or removed, the watcher itself blind or blocked.
    - MEDIUM, every 10 minutes as one digest: missing signatures, outside voting 10-15%, committee
      remarks, unreadable fields, arithmetic mismatches.

@@ -38,6 +38,14 @@ ntfy_url = "https://ntfy.sh"
 # ntfy_topic = "my-topic"
 # Seconds between MEDIUM-severity digests
 medium_digest_s = 600
+# HIGH findings are pushed one by one, at most high_push_max per high_push_window_s seconds; the
+# rest roll into one "[HIGH] N findings" digest (same compact format), sent when the window allows.
+# Status alerts (RIK unreachable, analysis paused, spend cap) are never held back by that backlog.
+high_push_max = 10
+high_push_window_s = 300
+# More than this many replaced documents in one sweep: ONE "[rg2-watch] mass replacement" alert,
+# and those D2 findings go to the digest instead of individual pushes (RIK re-upload?)
+mass_replace_threshold = 20
 # Per-request timeout in seconds
 request_timeout_s = 20.0
 # Max size of a downloaded PDF in bytes

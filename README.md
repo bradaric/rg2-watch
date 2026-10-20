@@ -52,7 +52,13 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
    forms remain. Without the flag nothing changes: the loop runs until Ctrl-C.
 
    HIGH findings (RG-8/RG-9 published, RG-2 replaced, with the old URL as "was: ...") are pushed
-   immediately, MEDIUM in digests, LOW only printed. A digest is compact (under 3.5 KB): counts by rule, up
+   immediately, MEDIUM in digests, LOW only printed. Individual HIGH pushes are capped at
+   `high_push_max` (10) per `high_push_window_s` (300 s); the rest roll into one "[HIGH] N findings"
+   digest (same compact format) sent when the window allows, so a busy night cannot trip ntfy's rate
+   limits. Status alerts (RIK unreachable, analysis paused, spend cap) are separate, go first and are
+   never held back by the finding backlog. If one sweep replaces more than `mass_replace_threshold`
+   (20) documents, ONE "[rg2-watch] mass replacement: N documents replaced in one sweep (RIK
+   re-upload?)" alert is pushed and those D2 findings go to the digest. A digest is compact (under 3.5 KB): counts by rule, up
    to 10 detail lines without URLs, and "+K more - open the page, filter MEDIUM" with the page URL when
    serving (a single-finding digest keeps its RIK URL). Every finding is also printed (and flushed) to
    stdout. If ntfy is unreachable, findings stay un-alerted and pushes back off (5 s doubling to

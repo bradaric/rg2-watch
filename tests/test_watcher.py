@@ -988,3 +988,26 @@ def test_status_snapshot_reports_tick_lanes_and_health():
     assert w.status_snapshot()["health"] == "slow"
     w._paused_until = t.now + 100
     assert w.status_snapshot()["health"] == "blocked" and w.status_snapshot()["paused_until"]
+
+
+def _replaced(i):
+    from rg2watch.models import Doc, Event
+    return Event("replaced", Doc("Alpha", str(i), "S", "x", 6, f"{BASE}/extfile/{i}.pdf", "2026-10-19 20:00:00"),
+                 previous_url=f"{BASE}/extfile/old{i}.pdf")
+
+
+def test_mass_replacement_alerts_once_and_marks_documents():
+    statuses, marked = [], []
+    w, fake, store, t, batches, _ = env(mass_replace_threshold=5, watcher_kw={
+        "on_status": statuses.append, "on_mass": marked.append})
+    store.upsert_election(ELECTION)
+
+    def run(sweep_id):
+        for i in range(8):
+            w._emit(sweep_id, [_replaced(i)])
+
+    w._run_lane("safety", run)
+    assert statuses == ["[rg2-watch] mass replacement: 6 documents replaced in one sweep (RIK re-upload?)"]
+    assert len(marked[-1]) == 8 and len(marked) == 3  # called from the 6th event on
+    w._run_lane("safety", lambda sid: w._emit(sid, [_replaced(1)]))
+    assert len(statuses) == 1  # a small sweep afterwards does not alert

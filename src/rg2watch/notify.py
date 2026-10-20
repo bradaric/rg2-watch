@@ -2,7 +2,7 @@ import re
 import sys
 import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 from datetime import datetime
 from urllib.parse import quote
 
@@ -53,8 +53,8 @@ DIGEST_SUMMARY_CHARS = 80
 _DIGEST_PRIORITY = ["A9", "A5", "V2", "V8", "R1", "D1", "D2", "D4"]
 
 
-def digest_body(findings: list[Finding], page_url: str | None = None) -> str:
-    """Compact MEDIUM digest: counts by rule, a few detail lines, no URLs (except for a single finding)."""
+def digest_body(findings: list[Finding], page_url: str | None = None, severity: str = "MEDIUM") -> str:
+    """Compact digest (MEDIUM, or HIGH when rate-limited): counts by rule, a few detail lines, no URLs (except for a single finding)."""
     counts = Counter(f.rule for f in findings)
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     parts = [f"{r} {c}" for r, c in ranked[:DIGEST_CODES]]
@@ -70,7 +70,7 @@ def digest_body(findings: list[Finding], page_url: str | None = None) -> str:
             line += f" {f.doc.url}"
         lines.append(line)
     if len(findings) > len(shown):
-        more = f"+{len(findings) - len(shown)} more - open the page, filter MEDIUM"
+        more = f"+{len(findings) - len(shown)} more - open the page, filter {severity}"
         lines.append(f"{more} {page_url}" if page_url else more)
     body = "\n".join(lines)
     while len(body.encode("utf-8")) > DIGEST_MAX_BYTES and len(lines) > 1:
@@ -92,6 +92,9 @@ class Notifier:
         self._printed: set[int] = set()
         self._pending: dict[int, Finding] = {}
         self._pending_since: float | None = None
+        self._high_times: deque[float] = deque()  # clock of each HIGH push (single or digest) in the window
+        self._high_held: dict[int, Finding] = {}  # HIGH findings rolled into a digest, not yet sent
+        self._digest_urls: set[str] = set()  # D2 replacements of a mass replacement: digest only
         self._status: list[str] = []
         self.page_url: str | None = None  # set by the CLI once the web page is serving
         self._backoff = 0.0
@@ -127,7 +130,7 @@ class Notifier:
         """ntfy delivery state for the status panel: in-memory only."""
         failing = self._backoff > 0
         return {"enabled": bool(self.cfg.ntfy_topic), "failing": failing, "last_ok": self.last_ok,
-                "last_fail": self.last_fail, "queued": len(self._status) + len(self._pending)}
+                "last_fail": self.last_fail, "queued": len(self._status) + len(self._pending) + len(self._high_held)}
 
     def _print(self, fid: int, f: Finding) -> None:
         if fid in self._printed:
@@ -148,6 +151,17 @@ class Notifier:
         while self._status and self._post(self._status[0], self._status[0], "high", "warning"):
             self._status.pop(0)
 
+    def digest_only(self, urls: list[str]) -> None:
+        """Route the D2 findings of these documents to the HIGH digest (mass replacement)."""
+        with self._lock:
+            self._digest_urls.update(urls)
+
+    def _high_slot(self) -> bool:
+        now = self.clock()
+        while self._high_times and now - self._high_times[0] >= self.cfg.high_push_window_s:
+            self._high_times.popleft()
+        return len(self._high_times) < self.cfg.high_push_max
+
     def send(self, findings_with_ids: list[tuple[int, Finding]], flush: bool = False) -> list[int]:
         """`flush` pushes the MEDIUM digest now instead of waiting for medium_digest_s."""
         with self._lock:
@@ -162,13 +176,27 @@ class Notifier:
             if f.severity == "LOW" or not push:
                 delivered.append(fid)
             elif f.severity == "HIGH":
+                if fid in self._high_held:
+                    continue
+                if (f.rule == "D2" and f.doc.url in self._digest_urls) or self._high_held \
+                        or not self._high_slot():
+                    self._high_held[fid] = f  # over the rate limit, or a backlog is waiting: digest
+                    continue
                 title, body = format_alert(f)
                 if self._post(title, body, "high", "rotating_light", f.doc.url):
+                    self._high_times.append(self.clock())
                     delivered.append(fid)
             elif fid not in self._pending:
                 self._pending[fid] = f
                 if self._pending_since is None:
                     self._pending_since = self.clock()
+        if self._high_held and push and self._high_slot():
+            n = len(self._high_held)
+            body = digest_body(list(self._high_held.values()), self.page_url, "HIGH")
+            if self._post(f"[HIGH] {n} finding{'s' if n != 1 else ''}", body, "high", "rotating_light"):
+                self._high_times.append(self.clock())
+                delivered.extend(self._high_held)
+                self._high_held.clear()
         if (
             self._pending
             and self._pending_since is not None
