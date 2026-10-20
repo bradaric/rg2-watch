@@ -98,3 +98,11 @@ def test_list_names_and_tally_scope_shapes(tmp_path):
         f.write_text(f"tally_scope = {bad}\n")
         with pytest.raises(ValueError, match="tally_scope"):
             load_config(f)
+
+
+def test_list_names_municipalities_folding_together_are_rejected(tmp_path):
+    import pytest
+    f = tmp_path / "c.toml"
+    f.write_text('[list_names]\n"2" = {"Novi Sad" = ["A"], "Нови Сад" = ["B"]}\n')
+    with pytest.raises(ValueError, match='"Novi Sad" and "Нови Сад" name the same municipality'):
+        load_config(f)

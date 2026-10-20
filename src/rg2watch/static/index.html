@@ -581,8 +581,9 @@ function renderTally() {
   }
   $("tmeta").textContent = "Model: " + T.model + ". " + T.title + ". Repeat-vote forms are not included.";
   const muniScope = T.scope === "municipal";
-  $("tscope").hidden = !T.scope_note;
-  $("tscope").textContent = T.scope_note ? "Warning: " + T.scope_note : "";
+  const sw = [T.scope_note, ...T.munis.filter(m => !m.nlists && m.names_note).map(m => m.m + ": " + m.names_note)].filter(Boolean);
+  $("tscope").hidden = !sw.length;
+  $("tscope").textContent = sw.length ? "Warning: " + sw.join(". ") : "";
   $("tmhint").hidden = !muniScope;
   renderHero();
   const key = $("tmode").value + JSON.stringify(T);

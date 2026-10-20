@@ -4,6 +4,8 @@ import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from .names import to_cyrillic
+
 
 @dataclass
 class Config:
@@ -88,6 +90,12 @@ def load_config(path: Path | None) -> Config:
             for k, v in cfg.list_names.items())):
         raise ValueError("list_names must map an election id to a list of strings "
                          "or to {municipality = list of strings}")
+    for k, v in cfg.list_names.items():  # municipal keys match as Latin or Cyrillic: no two may fold together
+        seen: dict[str, str] = {}
+        for m in v if isinstance(v, dict) else ():
+            if (f := to_cyrillic(m)) in seen:
+                raise ValueError(f'list_names "{k}": "{seen[f]}" and "{m}" name the same municipality')
+            seen[f] = m
     if not (isinstance(cfg.tally_scope, dict) and all(
             isinstance(k, str) and v in ("national", "municipal") for k, v in cfg.tally_scope.items())):
         raise ValueError('tally_scope must map an election id to "national" or "municipal"')

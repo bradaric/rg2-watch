@@ -85,14 +85,20 @@ confidence is low, the page quality is poor or unreadable, a counted number is i
 stored model read a counted number differently, or an arithmetic rule (A1-A5) fires; the reasons are
 listed, with a link to the form. List names are never read from the scans: set
 `[list_names]` in the config, default "List N". The page offers a
-CSV download of the per-municipality table (cells starting with = + - @ are escaped).
+CSV download of the per-municipality table (cells starting with = + - @ are escaped); in municipal
+scope it is long format, one row per municipality and list with that municipality's totals.
 
 Scope: list totals only make sense where one ballot is used everywhere. RIK's election type 2
 (parliamentary) is `national`: list votes overall and per municipality, `"<parent>" = ["Name 1", ...]`.
 Type 3 (local) is `municipal`: every municipality has its own ballot, so the modal list-row set, names
 (`"<parent>" = {"Municipality" = ["Name 1", ...]}`, Latin or Cyrillic) and list votes are per
 municipality, and the overall row has no list columns; `tally` prints one list table per
-municipality. Any other or unknown type (also an election without a stored type) is treated as
+municipality. The page follows the same rule: list votes open per municipality in the results table,
+the CSV and the presentation view never total lists across municipalities (the hero starts on the
+municipality with most counted forms; "All municipalities" shows turnout, stations, forms and valid
+votes only). Forms without a municipality ("(unknown)") get shared totals only, no list totals, as
+they may come from different ballots. Two `list_names` keys naming the same municipality (Latin and
+Cyrillic) are a config error. Any other or unknown type (also an election without a stored type) is treated as
 municipal with the warning "unknown election type - set tally_scope"; override with
 `tally_scope = {"<parent>" = "national"}` (top-level key, before any `[table]`).
 

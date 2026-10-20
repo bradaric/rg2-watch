@@ -18,6 +18,8 @@ FIRST_ROUND = 6  # repeat-vote forms (10, 15, 16) are another round: never mixed
 
 
 UNKNOWN_TYPE_NOTE = "unknown election type - set tally_scope"
+UNKNOWN_MUNI = "(unknown)"
+UNKNOWN_MUNI_NOTE = "municipality unknown - forms may be from different ballots, no list totals"
 
 
 def scope_of(store: Store, cfg: Config, parent: str) -> tuple[str, str | None]:
@@ -185,7 +187,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         del cache[gone]
     forms, unanalysed = [], {}
     for d in mains:
-        muni = d["municipality"] or "(unknown)"
+        muni = d["municipality"] or UNKNOWN_MUNI
         if municipalities is not None and muni not in municipalities:
             continue
         got = by_doc.get(d["id"], {})
@@ -237,7 +239,9 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     munis = []
     for name in names:
         mine = by_muni.get(name, [])
-        mrows = rows if national else rows_of.get(name, [])
+        # "(unknown)" in municipal scope may mix ballots: shared totals only, no list totals
+        mixed = not national and name == UNKNOWN_MUNI
+        mrows = rows if national else [] if mixed else rows_of.get(name, [])
         acc = {"all": _acc(len(mrows)), "cl": _acc(len(mrows))}
         for f in mine:
             for key, take in (("all", True), ("cl", not f["why"])):
@@ -247,7 +251,11 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         row = {"m": name, "stations": stations.get(name, 0), "counted": len(mine),
                "clean": sum(1 for f in mine if not f["why"]), "unanalysed": unanalysed.get(name, 0),
                "all": _tot(acc["all"]), "cl": _tot(acc["cl"])}
-        if not national:
+        if mixed:
+            row.update({"nlists": 0, "names": [], "names_note": UNKNOWN_MUNI_NOTE})
+            for key in ("all", "cl"):
+                del row[key]["lists"], row[key]["lists_valid"]
+        elif not national:
             row.update(ballot(name, len(mrows)) if mine else {"nlists": 0, "names": [], "names_note": None})
         row["excluded"] = row["counted"] - row["clean"]
         for k in counts:
@@ -259,6 +267,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             del total[key]["lists"], total[key]["lists_valid"]
     total["excluded"] = total["counted"] - total["clean"]
     e = store.get_election(parent)
+    # top-level nlists/names/names_note describe the national ballot; in municipal scope they are
+    # empty and each municipality row carries its own
     top = ballot("", len(rows)) if national else {"nlists": 0, "names": [], "names_note": None}
     return {"model": model, "parent": parent, "title": e.title if e else parent, "scope": scope,
             "scope_note": scope_note, **top, "munis": munis, "overall": total, "notes": notes,
@@ -311,6 +321,8 @@ def format_tally(t: dict, all_forms: bool = True) -> str:
                 out += _list_table(r["names"], [r], key)
                 if r["names_note"]:
                     out += ["warning: " + r["names_note"]]
+            elif r["names_note"]:
+                out += ["", f"{r['m']}: warning: {r['names_note']}"]
     pending = t["overall"]["unanalysed"]
     out += ["", f"{t['overall']['counted']} form(s) counted, {t['overall']['clean']} clean, "
             f"{t['overall']['excluded']} excluded, {pending} not analysed by {t['model']}"]

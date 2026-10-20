@@ -385,3 +385,16 @@ def test_page_handles_municipal_scope():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'T.scope === "municipal"' in html and "pick a municipality for list results" in html
     assert '"Share %"' in html and "listsOf(" in html and 'id="tscope"' in html
+
+
+def test_municipal_unknown_municipality_gets_no_list_totals():
+    s = store()
+    two_ballots(s)
+    form(s, 9, clean_report(), muni=None)
+    t = tally(s, cfg=muni_cfg())
+    u = next(m for m in t["munis"] if m["m"] == "(unknown)")
+    assert u["nlists"] == 0 and u["names"] == [] and "different ballots" in u["names_note"]
+    assert u["counted"] == 1 and u["all"]["valid"] and "lists" not in u["all"] and "lists" not in u["cl"]
+    assert "(unknown): warning: municipality unknown" in format_tally(t)
+    nat = next(m for m in tally(s)["munis"] if m["m"] == "(unknown)")
+    assert "lists" in nat["all"]  # national scope: one ballot, lists kept
