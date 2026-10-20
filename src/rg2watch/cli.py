@@ -31,7 +31,7 @@ from .replay import fetch_fixtures, make_replay_server
 from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, download_limiter_for
 from .rules import evaluate_report
 from .server import start_server
-from .status import to_belgrade
+from .status import format_status, to_belgrade
 from .store import NOTE_MAX, VERDICTS, Store
 from .tally import build_tally, format_tally
 from .watcher import Watcher, filter_request_rate
@@ -163,6 +163,9 @@ def _parser() -> argparse.ArgumentParser:
                    "escalate -> fired rules true")
     s.add_argument("--out", type=Path, required=True, help="new JSONL file (never overwritten)")
     s.add_argument("--parent", help="only this election")
+
+    s = sub.add_parser("status", parents=[common], help="compact text status of an election from the DB")
+    s.add_argument("--parent", help="election (default: the newest registered)")
 
     s = sub.add_parser("serve", parents=[common], help="serve the browse page on 127.0.0.1 (no watching)")
     s.add_argument("--port", type=_port, help="port (config serve_port, default 8770)")
@@ -316,6 +319,20 @@ def _cmd_tally(args) -> int:
     finally:
         store.close()
     print(format_tally(t, not args.clean))
+    return 0
+
+
+def _cmd_status(args) -> int:
+    cfg = _config(args)
+    store = _open_store(cfg)
+    try:
+        parent = default_parent(store, args.parent)
+        if store.get_election(parent) is None:
+            print(f"election {parent or '?'} is not registered in {cfg.db_path}", file=sys.stderr)
+            return 1
+        print(format_status(store, parent, _browse_path(cfg).parent / "status.json", cfg.max_spend_usd))
+    finally:
+        store.close()
     return 0
 
 
@@ -949,7 +966,7 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO if args.cmd in ("watch", "serve") else logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
-               "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "tally": _cmd_tally,
+               "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "status": _cmd_status, "tally": _cmd_tally,
                "review": _cmd_review, "labels": _cmd_labels}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay", "serve"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)

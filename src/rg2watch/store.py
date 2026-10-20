@@ -576,6 +576,11 @@ class Store:
                 "SELECT created_at, severity, rule, municipality, station_no, summary, alerted_at "
                 "FROM findings WHERE parent=? ORDER BY id DESC LIMIT ?", (parent, limit)).fetchall()
 
+    def last_alert_at(self, parent: str) -> str | None:
+        with self._lock:
+            return self._db.execute("SELECT MAX(alerted_at) FROM findings WHERE parent=?",
+                                    (parent,)).fetchone()[0]
+
     def status_counts(self, parent: str) -> dict:
         """Cheap counts for the live status panel."""
         def since(minutes: int) -> str:

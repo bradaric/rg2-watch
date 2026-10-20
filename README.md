@@ -10,6 +10,21 @@ and removed polling-station documents (RG-2, RG-9, RG-7, ...) and pushes alerts 
 Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2watch.toml` and pass
 `--config rg2watch.toml`. `RG2W_NTFY_TOPIC` overrides `ntfy_topic`.
 
+## Scripts
+
+`scripts/*.sh` wrap the commands above for one election: the only required argument is the election ID
+(digits); further arguments pass through to the main command. The DB is `data/election-<id>.sqlite`
+(rename an older one: `mv data/rehearsal-677087.sqlite data/election-677087.sqlite`), the config is
+`rg2watch.toml` if it exists, and `.env` is loaded only for commands that call Claude.
+
+    scripts/night.sh <id> [--watch-only]   register if needed, watch --analyze (add --baseline if late)
+    scripts/rehearse.sh <id>               watch --analyze --baseline --until-done
+    scripts/view.sh <id> [serve args]      browse + serve, no RIK, no API
+    scripts/second-opinion.sh <id> [args]  analyze --parent with ollama:bonsai-2:27b (or your --model)
+    scripts/tally.sh <id> [args]           tally --parent
+    scripts/status.sh <id>                 rg2watch status: counts, spend, review state, watcher running
+    scripts/escalated.sh <id>              review --list escalated
+
 ## Election-night runbook
 
 1. Before the polls close, register the election and bootstrap (municipality and station lists):

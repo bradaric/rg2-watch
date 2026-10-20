@@ -6,6 +6,21 @@ option is in README.md.
 All commands run from the repo root. `--env-file .env` loads the Anthropic key (and the ntfy topic,
 if you put it there); commands that never call Claude do not need it.
 
+## Quick start
+
+One argument: the election ID (digits). Databases are `data/election-<id>.sqlite`.
+
+- `scripts/night.sh <id>` - election night: register if needed, watch with analysis (`--watch-only`, `--baseline` if starting late)
+- `scripts/rehearse.sh <id>` - rehearsal on a past election, runs until done
+- `scripts/view.sh <id>` - rebuild the page and serve it (no RIK, no API)
+- `scripts/status.sh <id>` - compact status: counts, spend, review state, watcher running or not
+- `scripts/escalated.sh <id>` - forms marked ESCALATE
+- `scripts/tally.sh <id>` - unofficial totals
+- `scripts/second-opinion.sh <id>` - re-analyse with local `ollama:bonsai-2:27b` (Ollama must be running)
+
+Extra arguments are passed through to the underlying command. An older rehearsal DB can be renamed to
+fit: `mv data/rehearsal-677087.sqlite data/election-677087.sqlite`.
+
 ## 1. Days before
 
 - [ ] `uv sync`, then `uv run pytest -q` - all pass.
@@ -40,6 +55,8 @@ if you put it there); commands that never call Claude do not need it.
 2. Start the live loop in a terminal that survives a closed laptop lid / SSH drop (`tmux new -s rg2`):
 
        uv run --env-file .env rg2watch watch --parent <parent> --config rg2watch.toml --analyze
+
+   (or `scripts/night.sh <parent>`)
 
    - Leave out `--analyze` to only watch for new/replaced/removed documents (free).
    - Started late, with forms already published? Add `--baseline`: what is already there is
@@ -92,6 +109,8 @@ from the database without re-alerting.
   restarts; a replaced form comes back as "to review". Hand over with "Escalated CSV", or:
 
       uv run rg2watch review --list escalated --config rg2watch.toml
+
+   (or `scripts/escalated.sh <id>`)
       uv run rg2watch review <RIK PDF URL> escalate --note "10.1 corrected, call RIK" --config rg2watch.toml
 
   Afterwards, turn the verdicts into eval label suggestions (a new file; merge by hand):
@@ -112,6 +131,8 @@ election-night data.
        uv run rg2watch add https://www.rik.parlament.gov.rs/zapisnici/662405 --config rg2watch.toml --db data/rehearsal-662405.sqlite
        uv run --env-file .env rg2watch watch --parent 662405 --config rg2watch.toml --db data/rehearsal-662405.sqlite --analyze --baseline --until-done
 
+   (or `scripts/rehearse.sh <id>`, which uses `data/election-<id>.sqlite`)
+
    `--baseline` records what is already published without "new document" alerts; every RG-2 is
    still downloaded and analysed, and its findings alert as on the night. `--until-done` makes
    the watcher exit by itself (exit 0) once every lane has completed a full pass and the analysis
@@ -128,9 +149,13 @@ election-night data.
 
        uv run rg2watch serve --config rg2watch.toml --db data/rehearsal-662405.sqlite
 
+   (or `scripts/view.sh <id>`)
+
 5. Optional free second opinion with a local model, then filter "models disagree":
 
        uv run rg2watch analyze --parent 662405 --model ollama:bonsai-2:27b --config rg2watch.toml --db data/rehearsal-662405.sqlite
+
+   (or `scripts/second-opinion.sh <id>`)
 
 Expect ~100-150 RG-2s for 662405: well under $1 on Haiku, about 5-10 minutes (PDF downloads run
 at 0.5/s). This does load RIK lightly (listing sweeps at up to 2 requests/s while it runs), so do
