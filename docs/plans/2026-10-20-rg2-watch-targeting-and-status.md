@@ -136,3 +136,24 @@ No fetching of RIK's official results (operator decision). Tally only what the a
   finite); warn at the gate when the estimate exceeds `--max-usd`.
 - pipeline.py: store analyses under `stored_model(cfg.model)` with `responding_model` in the
   report (as batch.py/evaluate.py do since 706ccdf).
+
+## Task F: tally scope by election type (operator, 20/10/2026)
+
+Local elections have different lists in every municipality, so cross-municipality list totals are
+meaningless; they only make sense for parliamentary and presidential elections.
+
+- Scope per election: `national` (one ballot everywhere: list totals overall and per
+  municipality) or `municipal` (each municipality its own ballot: list rows, modal row set and
+  list names per municipality; no overall list totals).
+- Auto from RIK's `property_election_type`: 2 = parliamentary -> national, 3 = local -> municipal
+  (both seen in listings 779676 / 662405). Any other or unknown type -> municipal (never
+  aggregate lists wrongly) with a note "unknown election type - set tally_scope". Config override
+  `tally_scope = {"<parent>" = "national" | "municipal"}` (presidential type id not yet seen).
+- `list_names`: `{"<parent>" = [...]}` for national, `{"<parent>" = {"<municipality>" = [...]}}`
+  for municipal (validated; mismatch note per municipality).
+- Overall row in municipal scope: turnout, coverage, forms, valid - no list columns.
+- Page: municipal scope -> results table shows each municipality with its own list columns
+  (per-municipality child table or a municipality picker for the list table); hero defaults to
+  the municipality with most counted forms, "All municipalities" shows only turnout/coverage/
+  forms/valid without bars. National scope unchanged.
+- CLI `tally`: municipal scope prints a list table per municipality.
