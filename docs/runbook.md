@@ -85,6 +85,19 @@ from the database without re-alerting.
 
   Prints the findings and the cost. The URL must be on the RIK host of a registered election.
 - **A local PDF:** `uv run --env-file .env rg2watch analyze path/to/form.pdf`.
+- **Review the alerts on the night:** in the page choose review "to review" (forms with findings and
+  no verdict yet; the status panel counts them). For each: open the row (arrow), open the PDF,
+  then OK (false alarm or legitimate correction), ESCALATE (send to the desk) or UNSURE, with a
+  short note. Verdicts are saved at once (only over http, not from an opened file) and survive
+  restarts; a replaced form comes back as "to review". Hand over with "Escalated CSV", or:
+
+      uv run rg2watch review --list escalated --config rg2watch.toml
+      uv run rg2watch review <RIK PDF URL> escalate --note "10.1 corrected, call RIK" --config rg2watch.toml
+
+  Afterwards, turn the verdicts into eval label suggestions (a new file; merge by hand):
+
+      uv run rg2watch labels --from-reviews --out data/review-labels.jsonl --config rg2watch.toml
+
 - **Free re-score after changing a threshold** (e.g. outside voting): `eval --cached` on the
   golden set re-applies the rules to stored analyses without calling any model.
 

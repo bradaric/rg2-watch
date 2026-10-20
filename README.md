@@ -50,8 +50,14 @@ Requires Python 3.12+. Config is optional: copy `rg2watch.example.toml` to `rg2w
 `watch` serves the page at `http://127.0.0.1:8770` (the URL is logged at start; `serve_port` in the
 config or `--serve-port`, `0` = off). `rg2watch serve [--port N]` serves the same files without
 watching. The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed allow-list
-(`index.html`, `status.json`, `data.json`, the vendored libraries, `pdfs/<sha256>.pdf`; the `.js` twins are not served, and cross-site requests are refused); the DB,
-`.env` and everything else are 404. Port taken: a warning, and the watcher carries on.
+(`index.html`, `status.json`, `data.json`, `reviews.json` (live verdicts), the vendored libraries, `pdfs/<sha256>.pdf`; the `.js` twins are not served, and cross-site requests are refused); the DB,
+`.env` and everything else are 404. Port taken: a warning, and the watcher carries on. The only write
+is `POST /review` (operator verdicts, below): accepted only from the page itself - Host
+127.0.0.1/localhost on the server's port, `Sec-Fetch-Site: same-origin` (or no such header and an
+`Origin` equal to the server's), `Content-Type: application/json`, header `X-RG2W: 1` (a cross-site
+form or fetch cannot send it without a preflight, which is never answered), body at most 4 KB, a
+stored document URL, verdict `ok`/`escalate`/`unsure`, note at most 500 characters; anything else is
+403/400 and nothing is written.
 
 - **Forms table** (DataTables + jQuery, vendored in `src/rg2watch/static/`, versions and sha256 in
   `VERSIONS.txt`; no CDN, no external requests): one row per form, sortable, paged (50-500 rows),
@@ -72,6 +78,28 @@ watching. The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed 
   the watch loop. `watch --once` builds nothing. Over http the page polls the `.json` files; opened as
   a file it re-injects the `.js` files. `rg2watch browse` writes everything once with the status
   "watcher not running".
+
+## Operator review verdicts
+
+Each version (URL) of a form can be marked `ok` (false alarm, or a legitimate correction),
+`escalate` or `unsure`, with an optional note (at most 500 characters). The history is kept in the
+`reviews` table and the newest verdict counts; a replaced form's new version starts unreviewed. No
+ntfy message is sent for a verdict.
+
+- **Page** (served over http by `watch` or `serve`): open a row with the arrow, then OK / ESCALATE /
+  UNSURE (the typed note goes with it). The verdict shows at once and is confirmed by the server
+  (a refusal reverts it with the reason). The "Review" column shows the verdict, the "review" filter
+  shows to review (findings, no verdict on the current version), escalated, unsure or ok, the status
+  panel counts them, and "Escalated CSV" downloads the escalated forms (station, RIK link, findings,
+  note, time; formula cells escaped). Opened as a file the page shows the verdicts of the last build,
+  read-only.
+- **CLI:** `rg2watch review <url> ok|escalate|unsure [--note TEXT]`, and
+  `rg2watch review --list escalated|ok|unsure|todo [--parent P]`.
+- **Eval labels:** `rg2watch labels --from-reviews --out <new.jsonl> [--parent P]` writes label
+  suggestions in the `tests/golden/labels.jsonl` format: `ok` -> the rules that fired are `false`,
+  `escalate` -> `true`, `"verified": false`, the verdict and note in `note`, plus the document `url`.
+  The file must not exist yet (nothing is overwritten); check the suggestions (a legitimate
+  correction marked `ok` may still be a wanted alert) and merge them by hand.
 
 ## Unofficial tally
 

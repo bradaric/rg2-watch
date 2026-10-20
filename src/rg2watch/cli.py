@@ -8,13 +8,14 @@ import sys
 import threading
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
 from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
 from .batch import ADHOC, describe_estimate, run_batch, select_forms
-from .browse import build_page, copy_static, default_parent, write_status
+from .browse import (build_page, copy_static, default_parent, record_review, review_record,
+                     reviews_payload, write_status)
 from .config import Config, load_config
 from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
 from .evaluate import PARENT as EVAL_PARENT
@@ -30,7 +31,8 @@ from .replay import fetch_fixtures, make_replay_server
 from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, download_limiter_for
 from .rules import evaluate_report
 from .server import start_server
-from .store import Store
+from .status import to_belgrade
+from .store import NOTE_MAX, VERDICTS, Store
 from .tally import build_tally, format_tally
 from .watcher import Watcher, filter_request_rate
 
@@ -141,6 +143,20 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--model", help="model whose readings are counted (default: config model)")
     s.add_argument("--clean", action="store_true", help="show totals over clean forms only "
                    "(default: all counted forms)")
+
+    s = sub.add_parser("review", parents=[common], help="record or list operator verdicts on forms")
+    s.add_argument("url", nargs="?", help="document URL (one version of a form)")
+    s.add_argument("verdict", nargs="?", choices=VERDICTS)
+    s.add_argument("--note", help=f"optional note (at most {NOTE_MAX} characters)")
+    s.add_argument("--list", choices=("escalated", "ok", "unsure", "todo"),
+                   help="list forms by newest verdict, or todo: findings and no verdict")
+    s.add_argument("--parent", help="only this election (with --list)")
+
+    s = sub.add_parser("labels", parents=[common], help="eval label suggestions from verdicts")
+    s.add_argument("--from-reviews", action="store_true", required=True,
+                   help="ok -> fired rules false, escalate -> fired rules true")
+    s.add_argument("--out", type=Path, required=True, help="new JSONL file (never overwritten)")
+    s.add_argument("--parent", help="only this election")
 
     s = sub.add_parser("serve", parents=[common], help="serve the browse page on 127.0.0.1 (no watching)")
     s.add_argument("--port", type=_port, help="port (config serve_port, default 8770)")
@@ -305,23 +321,94 @@ def _cmd_serve(args) -> int:
         return 2
     out = _browse_path(cfg)
     copy_static(out.parent)
-    store = _open_store(cfg)
+    store = _open_store(cfg)  # stays open: POST /review writes verdicts
     try:
         if not (out.parent / "data.json").is_file():
             build_page(store, out, _cache_dir(cfg), cfg=cfg)
+        server = start_server(out.parent, _cache_dir(cfg), port, *_review_api(store))
+        if server is None:
+            return 1
+        try:
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            log.info("interrupted, shutting down")
+        finally:
+            server.shutdown()
+            server.server_close()
+        return 0
     finally:
         store.close()
-    server = start_server(out.parent, _cache_dir(cfg), port)
-    if server is None:
-        return 1
+
+
+def _cmd_review(args) -> int:
+    if args.list is None and (args.url is None or args.verdict is None):
+        print("review needs <url> ok|escalate|unsure, or --list escalated|ok|unsure|todo", file=sys.stderr)
+        return 2
+    if args.list is not None and args.url is not None:
+        print("review: give either <url> <verdict> or --list, not both", file=sys.stderr)
+        return 2
+    if args.note is not None and len(args.note.strip()) > NOTE_MAX:
+        print(f"review: note longer than {NOTE_MAX} characters", file=sys.stderr)
+        return 2
+    store = _open_store(_config(args))
     try:
-        threading.Event().wait()
-    except KeyboardInterrupt:
-        log.info("interrupted, shutting down")
+        if args.list is None:
+            rec = record_review(store, args.url, args.verdict, args.note)
+            if rec is None:
+                print(f"not a stored document: {args.url}", file=sys.stderr)
+                return 1
+            print(f"{rec['v']} recorded {rec['at']} for {args.url}")
+            return 0
+        if args.list == "todo":
+            rows = [(to_belgrade(r["first_seen_at"]), "todo", r) for r in store.review_todo(args.parent)]
+        else:
+            want = {"escalated": "escalate"}.get(args.list, args.list)
+            rows = [(review_record(r)["at"], r["verdict"], r) for r in store.latest_reviews(args.parent)
+                    if r["verdict"] == want]
+        for at, verdict, r in rows:
+            note = r["note"] if "note" in r.keys() and r["note"] else ""
+            print("  ".join(x for x in ((at or "-").replace("T", " "), verdict,
+                                        f"{r['municipality'] or '(unknown)'} BM {r['station_no'] or '?'}",
+                                        r["url"], note) if x))
+        print(f"{len(rows)} form(s)")
+        return 0
     finally:
-        server.shutdown()
-        server.server_close()
+        store.close()
+
+
+def _cmd_labels(args) -> int:
+    """Label suggestions in tests/golden/labels.jsonl format, for the operator to check and merge."""
+    if args.out.exists():
+        print(f"{args.out} exists: choose a new file (it is never overwritten)", file=sys.stderr)
+        return 2
+    store = _open_store(_config(args))
+    try:
+        reviews = [r for r in store.latest_reviews(args.parent) if r["verdict"] in ("ok", "escalate")]
+        rules = store.finding_rules([r["document_id"] for r in reviews])
+    finally:
+        store.close()
+    lines = []
+    for r in reversed(reviews):  # oldest first
+        fired = rules.get(r["document_id"], [])
+        if not fired:
+            continue
+        note = f"from review: {r['verdict']} {review_record(r)['at']}" + (f"; {r['note']}" if r["note"] else "")
+        lines.append(json.dumps({
+            "file": unquote(urlsplit(r["url"]).path.rsplit("/", 1)[-1]),
+            "municipality": r["municipality"] or "", "station_no": r["station_no"] or "",
+            "expect": {rule: r["verdict"] == "escalate" for rule in fired},
+            "verified": False, "note": note, "url": r["url"]}, ensure_ascii=False))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with args.out.open("x", encoding="utf-8") as fh:  # "x": never replaces a file
+        fh.write("".join(line + "\n" for line in lines))
+    print(f"{len(lines)} label suggestion(s) written to {args.out} (verified: false - check, then merge)")
     return 0
+
+
+def _review_api(store: Store) -> tuple:
+    """(get_reviews, put_review) for the web server: the server module holds no SQL."""
+    return (lambda: reviews_payload(store),
+            lambda url, verdict, note: record_review(store, url, verdict, note))
 
 
 def _handlers(store: Store, notifier: Notifier, parent: str, pipeline=None):
@@ -450,7 +537,8 @@ def _cmd_watch(args) -> int:
             if not args.once:  # `--once` is a diff check: no page build, no server
                 port = cfg.serve_port if args.serve_port is None else args.serve_port
                 if port:
-                    server = start_server(_browse_path(cfg).parent, _cache_dir(cfg), port)
+                    server = start_server(_browse_path(cfg).parent, _cache_dir(cfg), port,
+                                          *_review_api(store))
                 url = f"http://127.0.0.1:{server.server_port}" if server else None
                 live = _live(watcher, pipeline, notifier, url)
                 threads.append(_background("status", stop, STATUS_EVERY_S, lambda: write_status(
@@ -762,7 +850,8 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO if args.cmd in ("watch", "serve") else logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
-               "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "tally": _cmd_tally}[args.cmd]
+               "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "tally": _cmd_tally,
+               "review": _cmd_review, "labels": _cmd_labels}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay", "serve"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
         previous = signal.signal(signal.SIGTERM, _sigterm)

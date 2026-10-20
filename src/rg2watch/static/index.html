@@ -117,6 +117,22 @@ td.disagree{color:var(--hi);font-weight:700}
 .sub{margin:var(--s1) 0 var(--s1) var(--s5);padding-left:var(--s3);border-left:2px solid var(--line2)}
 .sub strong{margin-right:var(--s1)}
 .sub .f{margin-top:var(--s1)}
+/* review verdicts: pill shape (severity badges are square), word always shown */
+.rv{display:inline-block;padding:0 8px;border:1.5px solid transparent;border-radius:999px;font-size:11px;line-height:17px;font-weight:750;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+.rv-escalate{background:var(--fg);border-color:var(--fg);color:var(--panel)}
+.rv-ok{border-color:var(--good);color:var(--good)}
+.rv-unsure{border-style:dashed;border-color:var(--mut);color:var(--mut)}
+.rv.pending{opacity:.55}
+.review{margin:var(--s1) 0 var(--s2);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+.rvhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s2);margin-bottom:var(--s2)}
+.rvnote{overflow-wrap:anywhere}
+.rvctl{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
+.rvctl input{flex:1 1 16em;max-width:34em}
+.vb{min-width:6.5em;text-transform:uppercase;font-size:12px;letter-spacing:.04em;font-weight:700}
+.vb[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.vb-escalate[aria-pressed=true]{background:var(--fg);border-color:var(--fg);color:var(--panel);box-shadow:none}
+button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
+.rvmsg{color:var(--hi);font-weight:700}
 #texcl td button{white-space:nowrap;min-height:26px;padding:1px 10px;font-size:13px}
 /* results */
 #tctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;margin:0 0 var(--s3)}
@@ -188,6 +204,8 @@ body.hero .hrow{font-size:clamp(1.1rem,2vw,2.4rem);padding:.2em 0}
   input[type=search]{width:100%;flex:1 1 100%}
   table.dataTable td.fcol{min-width:16em}
   #rules,#cols{grid-template-columns:repeat(2,auto)}
+  .review{position:sticky;left:0;max-width:calc(100vw - 64px)}
+  .rvctl input{flex-basis:100%}
   #hero{padding:var(--s3)}
   .tile{border-left:0;padding:var(--s2) 0;border-top:1px solid var(--line)}
   .tile:first-child{border-top:0}
@@ -206,6 +224,7 @@ body.hero .hrow{font-size:clamp(1.1rem,2vw,2.4rem);padding:.2em 0}
 <select id="m"></select><select id="e"></select><select id="mod"></select>
 <label>min severity <select id="sev"><option value="0">any</option><option value="1">LOW</option><option value="2">MEDIUM</option><option value="3">HIGH</option></select></label>
 <details id="rulesbox"><summary id="rulessum">rules: any</summary><div id="rules"></div></details>
+<label>review <select id="rv"><option value="">any</option><option value="todo">to review</option><option value="escalate">escalated</option><option value="unsure">unsure</option><option value="ok">ok</option></select></label>
 <label><input type="checkbox" id="fl"> with findings</label>
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
@@ -214,6 +233,7 @@ body.hero .hrow{font-size:clamp(1.1rem,2vw,2.4rem);padding:.2em 0}
 <label><input type="checkbox" id="dis"> models disagree</label>
 <details id="colbox"><summary>columns</summary><div id="cols"></div></details>
 <label><input type="checkbox" id="auto" checked> auto-refresh</label>
+<button id="esccsv" type="button">Escalated CSV</button>
 </div>
 <div id="onlyid" class="warnbox" hidden><span id="onlytxt"></span> <button id="onlyclear">show all forms</button></div>
 <div id="wrap"><table id="forms" class="display" style="width:100%"></table></div>
@@ -331,6 +351,11 @@ function renderStatus() {
     ["avg per form", a.avg_s == null ? "-" : a.avg_s + " s"], ["time to clear queue", dur(a.eta_s)]]
     : [["state", "off"], ["done / failed", a.done + " / " + a.failed], ["spend", "$" + a.spend.toFixed(2)]]));
   const n = S.ntfy;
+  if (rows.length) {
+    const c = reviewCounts();
+    cards.push(card("Review", [["to review", String(c.todo), c.todo ? "warn" : "good"],
+      ["escalated", String(c.escalate), c.escalate ? "bad" : ""], ["unsure", String(c.unsure)], ["ok", String(c.ok)]]));
+  }
   cards.push(card("Alerts", n ? [["ntfy", !n.enabled ? "not configured (terminal only)" : n.failing ? "failing, last ok " + ago(n.last_ok) : "delivering, last ok " + ago(n.last_ok), n.failing ? "bad" : ""],
     ["waiting to send", n.queued]] : [["ntfy", "-"]]));
   const al = mk("div", null, "card wide");
@@ -351,7 +376,7 @@ function renderStatus() {
 // ---- table --------------------------------------------------------------------------------
 let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
-const FILTERS = ["q", "m", "e", "mod", "sev", "fl", "rp", "rm", "fa", "loc", "dis", "auto"];
+const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "fl", "rp", "rm", "fa", "loc", "dis", "auto"];
 
 function badges(list, dis) {
   const td = document.createDocumentFragment();
@@ -368,16 +393,126 @@ function linksOf(v) {
   if (r) sp.append(link("RIK", r));
   return sp;
 }
+// ---- operator verdicts: per document version (URL); recorded over http only ---------------
+const VERDICTS = ["ok", "escalate", "unsure"];
+const VLABEL = {ok: "ok", escalate: "escalate", unsure: "unsure"};
+let REV = null, revKey = "";  // REV: live reviews.json (url -> {v, n, at}); null = use the data's
+const LOCAL = {};  // verdicts set on this page: win until reviews.json has caught up
+const rvOf = v => v.u in LOCAL ? LOCAL[v.u] : REV ? REV[v.u] || null : v.rv || null;
+function reviewCounts() {
+  const c = {todo: 0, ok: 0, escalate: 0, unsure: 0};
+  for (const r of rows) { const x = rvOf(r); if (x && x.v in c) c[x.v]++; else if (!x && r._fl) c.todo++; }
+  return c;
+}
+function verdictHtml(x) {  // fixed class names; the label goes through esc
+  if (!x) return "";
+  const k = VERDICTS.includes(x.v) ? x.v : "";
+  return '<span class="rv rv-' + k + (x.pending ? " pending" : "") + '">' + esc(VLABEL[k] || String(x.v)) + "</span>";
+}
+function verdictEl(x) {
+  const k = VERDICTS.includes(x.v) ? x.v : "";
+  return mk("span", (VLABEL[k] || String(x.v)) + (x.pending ? " (saving)" : ""), "rv rv-" + k);
+}
+function reviewBox(r) {
+  const box = mk("div", null, "review"), cur = rvOf(r), head = mk("div", null, "rvhead");
+  head.append(mk("strong", "Review "), cur ? verdictEl(cur) : mk("span", r._fl ? "to review" : "not reviewed", "mut"));
+  if (cur && cur.at) head.append(mk("span", " " + when(cur.at), "mut"));
+  if (cur && cur.n) head.append(mk("span", " - " + cur.n, "rvnote"));
+  const ctl = mk("div", null, "rvctl"), note = mk("input"), msg = mk("span", null, "rvmsg");
+  note.type = "text"; note.maxLength = 500; note.placeholder = "note (optional)"; note.value = cur && cur.n || "";
+  note.setAttribute("aria-label", "review note");
+  const btns = VERDICTS.map(v => {
+    const b = mk("button", VLABEL[v], "vb vb-" + v);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(!!cur && cur.v === v));
+    b.onclick = () => submitReview(r, v, note.value, msg);
+    return b;
+  });
+  if (!HTTP) for (const el of [...btns, note]) {
+    el.disabled = true;
+    el.title = "read-only: open the page from rg2watch serve or watch to record verdicts";
+  }
+  ctl.append(...btns, note, msg);
+  box.append(head, ctl);
+  return box;
+}
+function rowOf(id) {
+  let found = null;
+  table.rows().every(function () { if (this.data().id === id) found = this; });
+  return found;
+}
+function refreshRow(id) {
+  const row = rowOf(id);
+  if (!row) return;
+  table.cell(row.index(), "review:name").invalidate();  // only this cell: others hold DOM-built content
+  if (row.child.isShown()) row.child(child(row.data())).show();
+  table.draw(false);
+  renderStatus();
+}
+function submitReview(r, verdict, note, msg) {
+  if (!HTTP) return;
+  const url = r.u, prev = LOCAL[url];
+  LOCAL[url] = {v: verdict, n: note.trim() || null, at: null, pending: true};
+  refreshRow(r.id);
+  fetch("review", {method: "POST", cache: "no-store", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
+    body: JSON.stringify({url, verdict, note: note.trim() || null})})
+    .then(res => res.json().catch(() => ({})).then(j => res.ok && j.review ? j.review : Promise.reject(new Error(j.error || "HTTP " + res.status))))
+    .then(rec => { LOCAL[url] = {v: rec.v, n: rec.n, at: rec.at, t: Date.now()}; refreshRow(r.id); },
+      e => {
+        if (prev) LOCAL[url] = prev; else delete LOCAL[url];
+        refreshRow(r.id);
+        const row = rowOf(r.id), m = row && row.child.isShown() && row.child()[0].querySelector(".rvmsg");
+        if (m) m.textContent = "not saved: " + e.message;
+        console.error("review not saved", e);
+      });
+}
+function loadReviews() {
+  if (!HTTP) return;
+  const started = Date.now();
+  fetch("reviews.json?t=" + started, {cache: "no-store"})
+    .then(res => res.ok ? res.json() : Promise.reject(new Error("HTTP " + res.status)))
+    .then(d => {
+      REV = d;
+      for (const [u, x] of Object.entries(LOCAL)) if (!x.pending && x.t < started) delete LOCAL[u];
+      const key = JSON.stringify([REV, LOCAL]);
+      if (key === revKey || !table) return;
+      revKey = key;
+      table.cells(null, "review:name").invalidate();
+      table.rows().every(function () {  // never replace a panel the operator is typing in
+        if (this.child.isShown() && !this.child()[0].contains(document.activeElement)) this.child(child(this.data())).show();
+      });
+      table.draw(false);
+      renderStatus();
+    }, e => console.error("fetching reviews.json failed", e));
+}
+function escalatedCsv() {
+  const head = ["Municipality", "BM", "Station", "Document", "RIK link", "Findings", "Note", "Verdict time (RS)"];
+  const out = rows.filter(r => (rvOf(r) || {}).v === "escalate").map(r => {
+    const x = rvOf(r);
+    return [r.muni, r.no, r.name, r.label, r.rik || "", r.f.map(f => f[0] + " " + f[1] + ": " + f[2]).join("; "),
+      x.n || "", when(x.at)].map(csvCell).join(",");
+  });
+  return [head.map(csvCell).join(","), ...out].join("\r\n") + "\r\n";
+}
+function download(name, text) {
+  const a = mk("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + text], {type: "text/csv;charset=utf-8"}));
+  a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 function child(r) {
   const box = mk("div");
+  box.append(reviewBox(r));
   for (const o of r.ops) {
     const d = mk("div", null, "sub");
     d.append(mk("strong", o.m), mk("span", " (" + when(o.at) + ") ", "mut"), o.f.length ? badges(o.f, r.dis) : mk("span", "no findings", "mut"));
     box.append(d);
   }
   for (const v of r.v) {
-    const d = mk("div", null, "sub mut");
+    const d = mk("div", null, "sub mut"), x = rvOf(v);
     d.append("older version: uploaded " + when(v.up) + ", first seen " + when(v.seen) + ", analysis " + v.ast + " ", linksOf(v));
+    if (x) d.append(" ", verdictEl(x), x.n ? " " + x.n : "");
     d.append(badges(v.f));
     for (const o of v.ops) d.append(mk("div", o.m + ": " + (o.f.map(f => f[0] + " " + f[1]).join(", ") || "no findings"), "sub"));
     box.append(d);
@@ -410,6 +545,8 @@ function keep(r) {
   if (onlyId != null && r.id !== onlyId) return false;
   const q = $("q").value.trim().toLowerCase();
   const rs = chosenRules();
+  const rf = sel("rv"), x = rvOf(r);
+  if (rf && (rf === "todo" ? !r._fl || x : !x || x.v !== rf)) return false;
   return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
     && (!rs.length || rs.some(x => r._rules.has(x))) && (!$("fl").checked || r._fl)
@@ -426,7 +563,7 @@ function initTable() {
     stateLoadParams: (s, d) => { if (!location.hash.slice(1) && d.rg) setCtl(d.rg); },
     columns: [
       {data: null, orderable: false, className: "dt-control", defaultContent: "",
-       createdCell: (td, d, r) => { if (!r.v.length && !r.ops.length) td.classList.remove("dt-control"); }},
+       createdCell: td => td.setAttribute("aria-label", "details and review")},
       {data: "el", title: "Election", visible: false, render: {_: d => d, display: d => esc(D.elections[d] || d)}},
       {data: "_stn", title: "Station", className: "scol", render: {_: d => d, display: (d, t, r) => esc(r.muni) + "<br>" +
         esc((r.no ? "BM " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""))}},
@@ -437,6 +574,7 @@ function initTable() {
         esc(r.state) + "<br>" + esc("analysis " + r.ast)}},
       {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
        createdCell: (td, d, r) => { td.append(badges(r.f)); if (r._note) td.append(mk("span", r._note, "note")); }},
+      {data: "u", name: "review", title: "Review", className: "nw", render: {_: (d, t, r) => (rvOf(r) || {}).v || "", display: (d, t, r) => verdictHtml(rvOf(r))}},
       {data: "mods", title: "Models", className: "nw", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
       {data: "pdf", title: "Local PDF", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},
        createdCell: (td, d, r) => { const h = localHref(r.pdf); if (h) td.append(link("Local PDF", h)); }},
@@ -726,13 +864,9 @@ $("tabres").onclick = () => setTab("results");
 $("tmode").addEventListener("input", () => { if (T) renderTally(); });
 $("onlyclear").onclick = () => { onlyId = null; $("onlyid").hidden = true; redraw(); };
 $("csv").onclick = () => {
-  if (!T) return;
-  const a = mk("a");
-  a.href = URL.createObjectURL(new Blob(["\ufeff" + tallyCsv()], {type: "text/csv;charset=utf-8"}));
-  a.download = "rg2-unofficial-tally-" + String(T.parent).replace(/[^\w.-]+/g, "_") + ".csv";
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  if (T) download("rg2-unofficial-tally-" + String(T.parent).replace(/[^\w.-]+/g, "_") + ".csv", tallyCsv());
 };
+$("esccsv").onclick = () => download("rg2-escalated-" + String(D.built).slice(0, 16).replace(/[^\w.-]+/g, "_") + ".csv", escalatedCsv());
 
 // ---- filter state: URL hash first, saved state second; absent keys reset to defaults -------
 const chosenRules = () => [...$("rules").querySelectorAll("input:checked")].map(c => c.value);
@@ -797,7 +931,7 @@ function load(name, global, apply) {
       .then(run, e => console.error("fetching " + name + ".json failed", e));
   } else inject(name, () => run(window[global]));
 }
-function loadStatus() { load("status", "RG2_STATUS", s => { S = s; renderStatus(); }); }
+function loadStatus() { load("status", "RG2_STATUS", s => { S = s; renderStatus(); }); loadReviews(); }
 let dataBuilt = null;
 function loadData() {
   load("data", "RG2_DATA", d => { if (d && d.built !== dataBuilt) { applyData(d); dataBuilt = d.built; } });

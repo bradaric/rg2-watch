@@ -77,13 +77,31 @@ def _disagreement(ops: list[dict]) -> list[str]:
     return sorted(set.union(*high) - set.intersection(*high))
 
 
-def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None) -> dict:
+def review_record(r) -> dict:
+    """A stored review as the page shows it: verdict, note, Serbian local time."""
+    return {"v": r["verdict"], "n": r["note"], "at": to_belgrade(r["created_at"])}
+
+
+def reviews_payload(store: Store) -> dict:
+    """URL -> newest review, for the page's live reviews.json."""
+    return {r["url"]: review_record(r) for r in store.latest_reviews()}
+
+
+def record_review(store: Store, url: str, verdict: str, note: str | None) -> dict | None:
+    """Store a verdict; the page's record of it, or None when `url` is not a stored document."""
+    r = store.set_review(url, verdict, note)
+    return None if r is None else {"url": url, **review_record(r)}
+
+
+def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
+             reviews: dict | None = None) -> dict:
     pdf = hashlib.sha256(d["url"].encode()).hexdigest()
     f = [[x["rule"], x["severity"], x["summary"]] for x in found.get(d["id"], [])]
     f.sort(key=lambda x: -SEV_RANK.get(x[1], 0))
     return {"up": d["uploaded_at"], "seen": to_belgrade(d["first_seen_at"]), "f": f, "ast": _ast(d),
             "pdf": pdf if (cache_dir / (pdf + ".pdf")).is_file() else None,
-            "rik": _rik_link(d["url"], base), "ops": opinions.get(d["id"], [])}
+            "rik": _rik_link(d["url"], base), "ops": opinions.get(d["id"], []),
+            "u": d["url"], "rv": (reviews or {}).get(d["url"])}
 
 
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
@@ -97,6 +115,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     opinions = _opinions(store, {d["id"]: _doc(d) for d in docs}, arows, cfg or Config(),
                          {} if cache is None else cache.setdefault("ops", {}))
     elections = {e.parent: e for e in store.elections()}
+    reviews = {r["url"]: review_record(r) for r in store.latest_reviews(parent)}
     groups: dict[tuple, list] = {}
     for d in docs:  # a NULL station_key cannot be grouped: the document stands alone
         key = d["station_key"] if d["station_key"] is not None else ("id", d["id"])
@@ -106,13 +125,13 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         ds.sort(key=lambda d: (d["uploaded_at"] or "", d["id"]), reverse=True)
         main = next((d for d in ds if d["active"]), ds[0])
         base = elections[par].base_url if par in elections else None
-        row = _version(main, found, opinions, cache_dir, base)
+        row = _version(main, found, opinions, cache_dir, base, reviews)
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
             name=main["station_name"], label=main["label"],
             state="removed" if not main["active"] else "replaced" if len(ds) > 1 else "current",
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),
-            v=[_version(d, found, opinions, cache_dir, base) for d in ds if d is not main])
+            v=[_version(d, found, opinions, cache_dir, base, reviews) for d in ds if d is not main])
         row["dis"] = _disagreement(row["ops"])
         rows.append(row)
     cfg = cfg or Config()

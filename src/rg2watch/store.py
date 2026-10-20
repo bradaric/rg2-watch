@@ -17,11 +17,14 @@ MAX_ANALYSIS_ATTEMPTS = 3
 BROWSE_CHUNK = 2000
 STATUS_RARE = (7, 8, 9, 14, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)  # RG-7/8/9 families, Primedba
 _ANALYSED = ",".join(map(str, ANALYSED_TYPES))
+VERDICTS = ("ok", "escalate", "unsure")  # operator review of one document version (URL)
+NOTE_MAX = 500
 
 INDEXES = """
 CREATE INDEX IF NOT EXISTS analyses_doc ON analyses(document_id, model);
 CREATE INDEX IF NOT EXISTS analyses_parent_cost ON analyses(parent, cost_usd);
 CREATE INDEX IF NOT EXISTS events_parent_kind ON events(parent, kind);
+CREATE INDEX IF NOT EXISTS reviews_url ON reviews(url, id);
 """  # after the migrations: older DBs lack some of these columns until then
 
 SCHEMA = """
@@ -57,6 +60,9 @@ CREATE TABLE IF NOT EXISTS stations(
     PRIMARY KEY(parent, station_id));
 CREATE TABLE IF NOT EXISTS counts(
     parent TEXT, scope TEXT, value INTEGER, updated_at TEXT, PRIMARY KEY(parent, scope));
+CREATE TABLE IF NOT EXISTS reviews(
+    id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, url TEXT NOT NULL, verdict TEXT NOT NULL,
+    note TEXT, created_at TEXT NOT NULL);
 """
 
 
@@ -560,6 +566,57 @@ class Store:
                                 "AND analysis_next_at IS NOT NULL"),
                 "spend": float(one("SELECT COALESCE(SUM(cost_usd), 0) FROM analyses WHERE parent=?")),
             }
+
+    def set_review(self, url: str, verdict: str, note: str | None = None) -> sqlite3.Row | None:
+        """Record a verdict on the document version at `url` (history kept, latest wins); the stored
+        review row, or None when `url` is not a stored document."""
+        if verdict not in VERDICTS:
+            raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}: {verdict!r}")
+        note = (note or "").strip() or None
+        if note is not None and len(note) > NOTE_MAX:
+            raise ValueError(f"note longer than {NOTE_MAX} characters")
+        with self._lock, self._db:
+            d = self._db.execute("SELECT id FROM documents WHERE url=?", (url,)).fetchone()
+            if d is None:
+                return None
+            cur = self._db.execute(
+                "INSERT INTO reviews(document_id, url, verdict, note, created_at) VALUES(?,?,?,?,?)",
+                (d["id"], url, verdict, note, _now()))
+            return self._db.execute("SELECT * FROM reviews WHERE id=?", (cur.lastrowid,)).fetchone()
+
+    def latest_reviews(self, parent: str | None = None) -> list[sqlite3.Row]:
+        """The newest review of each reviewed URL, with its document's parent, municipality,
+        station and active flag; newest first."""
+        where, args = ("WHERE d.parent=?", (parent,)) if parent is not None else ("", ())
+        with self._lock:
+            return self._db.execute(
+                "SELECT r.*, d.parent, d.municipality, d.station_no, d.active FROM reviews r "
+                "JOIN (SELECT url, MAX(id) AS id FROM reviews GROUP BY url) l ON l.id=r.id "
+                f"JOIN documents d ON d.id=r.document_id {where} ORDER BY r.id DESC", args).fetchall()
+
+    def review_todo(self, parent: str | None = None) -> list[sqlite3.Row]:
+        """Active documents with findings and no verdict on their URL, oldest first."""
+        where, args = ("AND d.parent=?", (parent,)) if parent is not None else ("", ())
+        with self._lock:
+            return self._db.execute(
+                "SELECT d.id, d.url, d.parent, d.municipality, d.station_no, d.first_seen_at "
+                "FROM documents d WHERE d.active=1 AND EXISTS (SELECT 1 FROM findings f "
+                "WHERE f.document_id=d.id) AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.url=d.url) "
+                f"{where} ORDER BY d.id", args).fetchall()
+
+    def finding_rules(self, ids: Collection[int]) -> dict[int, list[str]]:
+        """document id -> sorted rules that fired on it."""
+        out: dict[int, list[str]] = {}
+        ids = list(ids)
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            with self._lock:
+                rows = self._db.execute(
+                    f"SELECT document_id, rule FROM findings WHERE document_id IN ({','.join('?' * len(chunk))})",
+                    chunk).fetchall()
+            for r in rows:
+                out.setdefault(r["document_id"], []).append(r["rule"])
+        return {k: sorted(v) for k, v in out.items()}
 
     def total_spend(self, parent: str | None = None) -> float:
         """Recorded spend of one election (`parent`), or of everything when None."""
