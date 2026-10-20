@@ -186,6 +186,7 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .tile .k{color:var(--mut);font-size:clamp(.72rem,.9vw,1.1rem);font-weight:700;text-transform:uppercase;letter-spacing:.08em}
 .tile .s{color:var(--mut);font-size:clamp(.8rem,1vw,1.25rem);font-variant-numeric:tabular-nums}
 #hs-valid{white-space:pre-line}
+#hs-forms{white-space:pre-line}
 .tile .v{font-size:clamp(2.1rem,4.4vw,5.6rem);font-weight:800;line-height:1.05;letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin:2px 0 var(--s1);white-space:nowrap}
 .prog{height:6px;background:var(--track);border-radius:3px;overflow:hidden;margin:var(--s1) 0 var(--s1)}
 .prog>div{height:100%;width:0;background:var(--accent);transition:width .8s ease}
@@ -382,10 +383,19 @@ function alertForm(url) {  // [row, version] of the form an alert is about (from
   }
   return null;
 }
+function paintHero() {
+  if (typeof renderHero === "function" && slots.length) renderHero();
+}
 function renderStatus() {
   setTitle();
   const box = $("status"), ban = $("banner");
-  if (!S) { box.replaceChildren(); ban.style.display = "block"; ban.textContent = "no status yet"; return; }
+  if (!S) {
+    box.replaceChildren();
+    ban.style.display = "block";
+    ban.textContent = "no status yet";
+    paintHero();
+    return;
+  }
   const age = Date.now() / 1000 - S.ts;
   const down = !S.watching || age > STALE_S;
   const mix = !!(D.db && S.db && D.db !== S.db);
@@ -446,7 +456,7 @@ function renderStatus() {
   al.append(t);
   cards.push(al);
   box.replaceChildren(...cards);
-  if (typeof renderHero === "function" && slots.length) renderHero();
+  paintHero();
 }
 
 // ---- table --------------------------------------------------------------------------------
@@ -673,13 +683,15 @@ function loadReviews() {
       REV = d;
       for (const [u, x] of Object.entries(LOCAL)) if (!x.pending && x.t < started) delete LOCAL[u];
       const key = JSON.stringify([REV, LOCAL]);
-      if (key === revKey || !table) return;
+      if (key === revKey) return;
       revKey = key;
-      table.cells(null, "review:name").invalidate();
-      table.rows().every(function () {  // never replace a panel the operator is typing in
-        if (this.child.isShown() && !this.child()[0].contains(document.activeElement)) this.child(child(this.data())).show();
-      });
-      table.draw(false);
+      if (table) {
+        table.cells(null, "review:name").invalidate();
+        table.rows().every(function () {  // never replace a panel the operator is typing in
+          if (this.child.isShown() && !this.child()[0].contains(document.activeElement)) this.child(child(this.data())).show();
+        });
+        table.draw(false);
+      }
       renderStatus();
     }, e => console.error("fetching reviews.json failed", e));
 }
@@ -1105,6 +1117,24 @@ function heroListNames(owner) {
   const names = owner && owner.names || [], fallback = new Set(owner && owner.fallback_name_indices || []);
   return names.map((name, i) => fallback.has(i) ? "Листа " + (i + 1) : name);
 }
+function acceptedAmongFlagged(flagged, forms, reviewOf) {
+  const byId = new Map();
+  for (const form of forms || []) if (form && !byId.has(form.id)) byId.set(form.id, form);
+  const seen = new Set();
+  let n = 0;
+  for (const item of flagged || []) {
+    if (!item || seen.has(item.id)) continue;
+    seen.add(item.id);
+    const review = byId.has(item.id) ? reviewOf(byId.get(item.id)) : null;
+    if (review && review.v === "ok") n++;
+  }
+  return n;
+}
+function heroFlagged(raw) {
+  const list = NV() === "filed" ? T.excluded_filed : T.excluded;
+  if (raw === T.overall) return list || [];
+  return (list || []).filter(item => item.m === raw.m);
+}
 function initHero() {
   for (let i = 0; i <= TOP_LISTS; i++) {
     const row = mk("div", null, "hrow"), hd = mk("div", null, "hd"), no = mk("span", null, "no"),
@@ -1156,10 +1186,12 @@ function renderHero() {
     put("hs-forms", "промене броја: без уочених проблема / за проверу");
   } else if (mode === "cl") {
     put("hv-forms", num(r.clean));
-    put("hs-forms", "без уочених проблема · " + num(r.excluded) + " за проверу изостављено");
+    put("hs-forms", "без уочених проблема · " + num(r.excluded) + " за проверу изостављено" +
+      "\nОд оних за проверу, прихваћено после прегледа: " + num(acceptedAmongFlagged(heroFlagged(raw), D.rows, rvOf)));
   } else {
     put("hv-forms", num(r.counted));
-    put("hs-forms", num(r.clean) + " без уочених проблема · " + num(r.excluded) + " за проверу");
+    put("hs-forms", num(r.clean) + " без уочених проблема · " + num(r.excluded) + " за проверу" +
+      "\nОд оних за проверу, прихваћено после прегледа: " + num(acceptedAmongFlagged(heroFlagged(raw), D.rows, rvOf)));
   }
   put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));
   const gap = t.turnout == null ? null : t.voted - t.valid - t.invalid;
