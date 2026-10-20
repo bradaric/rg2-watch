@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import multiprocessing
 import os
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from rg2watch.case_handoff import CaseError, CaseHandoff
 from rg2watch.config import Config
 from rg2watch.drive_publish import DriveError, DrivePublisher, GoogleDriveAdapter
 from rg2watch.drive_root import DriveRoot
+from rg2watch.publication_service import PublicationJobs
 from rg2watch.store import Store
 from rg2watch import cli
 from test_browse import BASE, P, add, doc
@@ -645,6 +647,147 @@ class PermissionRequest:
         return self.payload
 
 
+class ApiBackedPublicationService:
+    """Drive-v3-shaped fake for the post-share child-permission failure."""
+    def __init__(self, files, permissions, account_id):
+        self.file_rows = files
+        self.permission_rows = permissions
+        self.account_id = account_id
+        self.permission_creates = []
+        self.files_api = self.Files(self)
+        self.permissions_api = self.Permissions(self)
+        self.about_api = self.About(self)
+
+    def files(self):
+        return self.files_api
+
+    def permissions(self):
+        return self.permissions_api
+
+    def about(self):
+        return self.about_api
+
+    class Files:
+        def __init__(self, service):
+            self.service = service
+
+        def get(self, fileId, fields):
+            return PermissionRequest(dict(self.service.file_rows[fileId]))
+
+        def list(self, q, spaces, fields, pageSize, **kwargs):
+            folder_id = q.split("'")[1]
+            children = [dict(row) for row in self.service.file_rows.values()
+                        if row.get("parents") == [folder_id]]
+            return PermissionRequest({"files": children})
+
+    class Permissions:
+        def __init__(self, service):
+            self.service = service
+
+        def list(self, fileId, fields):
+            return PermissionRequest({"permissions": self.service.permission_rows[fileId]})
+
+        def create(self, fileId, body, fields):
+            self.service.permission_creates.append((fileId, dict(body)))
+            self.service.permission_rows[fileId].append(
+                {"id": "created-public-permission", **body})
+            return PermissionRequest({"id": "created-public-permission"})
+
+    class About:
+        def __init__(self, service):
+            self.service = service
+
+        def get(self, fields):
+            return PermissionRequest({"user": {"permissionId": self.service.account_id}})
+
+
+def _wait_for_job(jobs, job_id):
+    for _ in range(200):
+        result = jobs.job(job_id)
+        if result["state"] != "running":
+            return result
+        time.sleep(.01)
+    raise AssertionError("publication job did not finish")
+
+
+def test_api_backed_post_share_failure_is_correlated_bounded_and_non_mutating(
+        tmp_path, caplog):
+    store, cases = setup_case(tmp_path)
+    secrets = {
+        "id": "drive-id-secret-9a8b",
+        "url": URL,
+        "pdf": "pdf-secret-7c6d",
+        "summary": "summary-secret-5e4f",
+        "provider": "provider-secret-3a2b",
+    }
+    claimed = cases.claim(URL, "Јавни опис " + secrets["summary"])
+    ids = ["folder-" + secrets["id"], "pdf-" + secrets["id"],
+           "text-" + secrets["id"]]
+    store.save_drive_ids(URL, *ids)
+    row = dict(store.get_publication(URL))
+    pdf = Path(row["staged_pdf_path"]).read_bytes() + secrets["pdf"].encode()
+    Path(row["staged_pdf_path"]).write_bytes(pdf)
+    store._db.execute("UPDATE publications SET pdf_sha256 = ? WHERE url = ?",
+                      (hashlib.sha256(pdf).hexdigest(), URL))
+    store._db.commit()
+    row = dict(store.get_publication(URL))
+    case = json.loads(row["case_json"])
+    account = "account-" + secrets["id"]
+    root_id = "root-" + secrets["id"]
+    folder_name = f"RG2 предмет — {case['municipality']} БМ {case['station']}"
+    case_text = DrivePublisher._case_text(case, row["summary"], row["pdf_sha256"])
+    files = {
+        root_id: {"id": root_id, "name": "RG2 Watch", "mimeType": ROOT_MIME,
+                  "parents": ["my-drive-" + secrets["id"]],
+                  "owners": [{"permissionId": account}], "trashed": False},
+        ids[0]: {"id": ids[0], "name": folder_name, "mimeType": ROOT_MIME,
+                 "parents": [root_id], "owners": [{"permissionId": account}],
+                 "trashed": False},
+        ids[1]: {"id": ids[1], "name": "документ.pdf", "mimeType": "application/pdf",
+                 "parents": [ids[0]], "md5Checksum": hashlib.md5(pdf).hexdigest(),
+                 "trashed": False},
+        ids[2]: {"id": ids[2], "name": "опис-предмета.txt", "mimeType": "text/plain",
+                 "parents": [ids[0]], "md5Checksum": hashlib.md5(case_text).hexdigest(),
+                 "trashed": False},
+    }
+    owner = {"id": "permission-" + secrets["provider"], "type": "user", "role": "owner",
+             "emailAddress": secrets["provider"]}
+    permissions = {root_id: [owner.copy()], ids[0]: [owner.copy()],
+                   ids[1]: [owner.copy()], ids[2]: [owner.copy()]}
+    service = ApiBackedPublicationService(files, permissions, account)
+    adapter = GoogleDriveAdapter(service)
+    token = tmp_path / "api-backed-token.json"
+    Path(str(token.resolve()) + ".root.json").write_text(json.dumps({
+        "format_version": 2, "root_id": root_id, "account_permission_id": account,
+        "phase": "created", "my_drive_parent_id": "my-drive-" + secrets["id"],
+    }))
+    publisher = DrivePublisher(cases, adapter, DriveRoot(token, adapter))
+    jobs = PublicationJobs(cases, publisher, workers=1)
+    try:
+        with caplog.at_level(logging.INFO):
+            job_id = jobs.submit_publish(URL, row["summary"], True)
+            result = _wait_for_job(jobs, job_id)
+    finally:
+        jobs.close()
+
+    assert result == {"id": job_id, "state": "error", "kind": "publication",
+                      "error": "Drive account policy did not expose both folder children"}
+    pending = store.get_publication(URL)
+    assert pending["phase"] == "uploaded"
+    assert [pending["folder_id"], pending["pdf_file_id"], pending["text_file_id"]] == ids
+    assert service.permission_creates == [(ids[0], {"type": "anyone", "role": "reader"})]
+    logs = caplog.text
+    for expected in ("publication start", "stage=uploaded", "stage=folder-public",
+                     "child=pdf", "child=text", "type=user role=owner",
+                     "anyone_reader=false", "publication fail"):
+        assert expected in logs
+    assert logs.count("diagnostic_id=" + job_id) >= 7
+    assert "exception=DriveError" in logs
+    for secret in secrets.values():
+        assert secret not in logs
+    assert secrets["provider"] not in result["error"]
+
+
 def test_adapter_creates_app_root_with_default_my_drive_placement():
     class FilesService:
         def __init__(self):
@@ -715,6 +858,78 @@ def test_child_effective_access_requires_anyone_reader_role():
         "text": [{"id": "anyoneWithLink", "type": "anyone", "role": "reader"}],
     })
     assert not GoogleDriveAdapter(service).children_have_public_reader(["pdf", "text"])
+
+
+def test_child_permission_logs_are_bounded_and_enum_only(caplog):
+    malicious_type = "domain\nAuthorization: Bearer secret-type"
+    malicious_role = "owner secret-role"
+    permissions = [
+        {"id": f"permission-{index}", "type": malicious_type, "role": malicious_role,
+         "emailAddress": f"person-{index}@secret.example"}
+        for index in range(12)
+    ]
+    service = PermissionService({
+        "pdf-secret-id": permissions,
+        "text-secret-id": [{"type": "anyone", "role": "commenter"}],
+    })
+
+    with caplog.at_level(logging.INFO, logger="rg2watch.drive_publish"):
+        assert not GoogleDriveAdapter(service).children_have_public_reader(
+            ["pdf-secret-id", "text-secret-id"])
+
+    logs = caplog.text
+    assert "child=pdf count=12" in logs
+    assert "child=text count=1" in logs
+    assert logs.count("type=other role=other") == 10
+    assert "type=anyone role=commenter" in logs
+    assert "anyone_reader=false" in logs
+    for forbidden in (malicious_type, malicious_role, "@secret.example", "permission-",
+                      "pdf-secret-id", "text-secret-id"):
+        assert forbidden not in logs
+
+
+def test_child_permission_api_error_logs_only_sanitized_class(caplog):
+    provider_secret = "provider response secret-token-value"
+
+    class FailingRequest:
+        def execute(self):
+            raise RuntimeError(provider_secret)
+
+    class FailingPermissions:
+        def permissions(self):
+            return self
+
+        def list(self, fileId, fields):
+            return FailingRequest()
+
+    with caplog.at_level(logging.INFO, logger="rg2watch.drive_publish"):
+        with pytest.raises(DriveError) as caught:
+            GoogleDriveAdapter(FailingPermissions()).children_have_public_reader(
+                ["secret-child-id", "unreached-child-id"])
+
+    assert str(caught.value) == "Drive permissions could not be inspected"
+    assert "child-check failed" in caplog.text
+    assert "child=pdf" in caplog.text
+    assert "exception=DriveError" in caplog.text
+    for forbidden in (provider_secret, "secret-token-value", "secret-child-id"):
+        assert forbidden not in caplog.text
+
+
+def test_direct_publication_attempts_get_distinct_context_and_reset(tmp_path, caplog):
+    import re
+    from rg2watch.drive_publish import _publication_diagnostic_id
+
+    (tmp_path / "first").mkdir()
+    (tmp_path / "second").mkdir()
+    _, first_cases = setup_case(tmp_path / "first")
+    _, second_cases = setup_case(tmp_path / "second")
+    with caplog.at_level(logging.INFO):
+        make_publisher(first_cases, FakeDrive(), tmp_path / "first").publish(URL, "Јавни опис")
+        make_publisher(second_cases, FakeDrive(), tmp_path / "second").publish(URL, "Јавни опис")
+
+    ids = set(re.findall(r"diagnostic_id=([0-9a-f]{32})", caplog.text))
+    assert len(ids) == 2
+    assert _publication_diagnostic_id.get() is None
 
 
 def test_adapter_inspects_every_page_of_app_visible_children():

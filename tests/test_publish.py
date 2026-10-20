@@ -1,10 +1,12 @@
 import hashlib
 import http.client
 import json
+import logging
 import multiprocessing
 import os
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -21,6 +23,15 @@ from test_browse import BASE, P, add, doc
 
 
 URL = BASE + "/extfile/publish.pdf"
+
+
+def _wait_job_result(jobs, job_id):
+    for _ in range(200):
+        result = jobs.job(job_id)
+        if result["state"] != "running":
+            return result
+        time.sleep(.01)
+    raise AssertionError("job did not finish")
 
 
 def handoff(tmp_path, verdict="escalate", pdf=b"%PDF-1.4\ncase"):
@@ -587,6 +598,54 @@ def test_publication_job_exposes_only_sanitized_generate_ids_error(tmp_path):
         assert "secret-token-value" not in json.dumps(result)
     finally:
         jobs.close()
+
+
+def test_publication_job_contexts_are_isolated_from_each_other_and_drafts(tmp_path, caplog):
+    from rg2watch.drive_publish import _publication_diagnostic_id
+
+    _, cases, _ = handoff(tmp_path)
+    barrier = threading.Barrier(2)
+    observed = {}
+
+    class Publisher:
+        def publish(self, url, summary):
+            if "retry-secret" not in url:
+                barrier.wait(timeout=5)
+            observed[url] = _publication_diagnostic_id.get()
+            return {"status": "published"}
+
+    jobs = PublicationJobs(cases, Publisher(), workers=2)
+    try:
+        with caplog.at_level(logging.INFO):
+            first = jobs.submit_publish("https://fixture.invalid/first-secret", "first", True)
+            second = jobs.submit_publish("https://fixture.invalid/second-secret", "second", True)
+            first_result = _wait_job_result(jobs, first)
+            second_result = _wait_job_result(jobs, second)
+            draft_context = []
+            draft = jobs._submit("preparation", "https://fixture.invalid/draft-secret",
+                                 lambda: draft_context.append(
+                                     _publication_diagnostic_id.get()) or {"summary": "draft"})
+            draft_result = _wait_job_result(jobs, draft)
+            retry = jobs.submit_publish("https://fixture.invalid/retry-secret", "retry", True)
+            retry_result = _wait_job_result(jobs, retry)
+    finally:
+        jobs.close()
+
+    assert first_result["state"] == second_result["state"] == "done"
+    assert draft_result["state"] == retry_result["state"] == "done"
+    assert observed == {
+        "https://fixture.invalid/first-secret": first,
+        "https://fixture.invalid/second-secret": second,
+        "https://fixture.invalid/retry-secret": retry,
+    }
+    assert len({first, second, retry}) == 3
+    assert draft_context == [None]
+    assert _publication_diagnostic_id.get() is None
+    for job_id in (first, second, retry):
+        assert f"publication start diagnostic_id={job_id}" in caplog.text
+        assert f"publication done diagnostic_id={job_id}" in caplog.text
+    assert f"diagnostic_id={draft}" not in caplog.text
+    assert "fixture.invalid" not in caplog.text
 
 
 def test_pending_publication_status_exposes_frozen_summary_for_explicit_retry(tmp_path):
