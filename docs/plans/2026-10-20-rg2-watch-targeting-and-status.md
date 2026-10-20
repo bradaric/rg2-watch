@@ -178,3 +178,32 @@ meaningless; they only make sense for parliamentary and presidential elections.
 - `rg2watch labels --from-reviews` writes eval label suggestions from ok/escalate verdicts
   (ok -> the fired rules false, escalate -> fired rules true) into a separate JSONL for the
   operator to merge; never overwrites tests/golden/labels.jsonl.
+
+## Task H: read RG-7 correction decisions (operator, 20/10/2026)
+
+RG-7-1..4 (+ repeat-vote 23-26) are "Решење о исправљању записника о раду бирачког одбора":
+typed commission decisions that change numbers in a station's RG-2. Samples (gitignored,
+data/fixtures/rg7/, from 662405): Negotin BM37 10.2 180->178, 10.4 177->175, list 1 146->144
+(confirms our A1 on that RG-2); Zaječar BM21 3: 1704->1703, 10.3 17->16. In the 662405 sample 16
+of 70 stations had one; some stations get several, weeks apart.
+
+- Analysis: RG-7 types (19-26) are downloaded and analysed like RG-2 (same limiter, workers, spend
+  cap, retries) with their own prompt and JSON schema (separate PROMPT_VERSION for RG-7):
+  decision date, station number, list of changes `{item: "3"|"10.1".."10.4"|"list:N"|other text,
+  old: int|null, new: int|null}`, the corrected results table (registered, 10.1-10.4, list votes
+  by row number), a one-sentence reason summary, and confidence. No personal names (list names are
+  not needed - rows by number; signatories never).
+- Findings: R1 HIGH when a change touches 10.1-10.4 or list votes; R1 MEDIUM when it only changes
+  other items; R2 MEDIUM when the decision's "old" numbers differ from what we read on the RG-2
+  for that station (our reading or the decision is wrong - check by hand); R3 LOW when the RG-7
+  could not be parsed into changes. RULE_INFO entries for R1-R3.
+- Store: RG-7 analyses linked to their station (station_key) so the page and tally can join them.
+- Tally: for each counted RG-2, apply the station's RG-7 corrections in decision order (latest
+  wins per item; use the corrected table when present). Show corrected values marked
+  "corrected by RG-7 (dd/mm)" with the original on hover; CLI marks them with "*". A corrected
+  form is not flagged for the corrected arithmetic (A1-A5 re-evaluated on corrected numbers),
+  but keeps its RG-2 visual alerts.
+- Page: station row shows RG-7 badge(s) "RG-7 dd/mm: 10.2 180->178, ..." with PDF/RIK links in
+  the child row; filter "corrected by RG-7".
+- Calibration: run Haiku on the 3 samples (~$0.02) and check the extracted changes by eye.
+- RG-8/RG-9 later, same pattern.
