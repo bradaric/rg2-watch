@@ -226,3 +226,20 @@ def test_spend_is_per_parent():
     s.save_failed_analysis("file:///tmp/x.pdf", "m", "v2", 0.5, "x", parent="adhoc")
     assert (s.total_spend(P), s.total_spend("eval"), s.total_spend("adhoc")) == (1.5, 2.0, 0.5)
     assert s.queued_for_analysis(P) == 1
+
+
+def test_analysis_queries_restricted_to_selected_municipalities():
+    s = store()
+    a, b = doc("https://x/a.pdf", muni="А"), doc("https://x/b.pdf", muni="Б", no="2")
+    s.apply_events(P, s.start_sweep(P, "l"), [Event("added", a), Event("added", b)])
+    assert s.queued_for_analysis(P, {"А"}) == 1 and s.queued_for_analysis(P) == 2
+    assert [d.url for d in s.next_for_analysis(5, parent=P, now=0, municipalities={"Б"})] == [b.url]
+    assert s.requeue_running(P, {"А"}) == [] and _status(s, b.url) == "running"
+    s.mark_analysis(a.url, "new")
+    s.mark_analysis(b.url, "failed", "x", retry_at=None)
+    s.requeue_failed(P, all_failed=True)
+    s.mark_analysis(a.url, "skipped")
+    s.mark_analysis(b.url, "skipped")
+    assert s.analysis_backlog(P, {"Б"}) == 1
+    assert s.requeue_skipped(P, {"Б"}) == 1
+    assert (_status(s, a.url), _status(s, b.url)) == ("skipped", "new")

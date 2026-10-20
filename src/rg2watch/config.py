@@ -74,6 +74,9 @@ def load_config(path: Path | None) -> Config:
         logging.getLogger("rg2watch.config").warning(
             "reserved_share %s out of range [0.0, 0.9]; using %s", cfg.reserved_share, clamped)
         cfg.reserved_share = clamped
+    if not (isinstance(cfg.only_municipalities, list)
+            and all(isinstance(n, str) for n in cfg.only_municipalities)):
+        raise ValueError("only_municipalities must be a list of strings")
     if cfg.browse_interval_s < 0:
         raise ValueError(f"browse_interval_s must be >= 0: {cfg.browse_interval_s}")
     topic = os.environ.get("RG2W_NTFY_TOPIC")

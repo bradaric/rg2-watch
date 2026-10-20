@@ -2,6 +2,7 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Collection
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -49,6 +50,13 @@ CREATE TABLE IF NOT EXISTS stations(
 CREATE TABLE IF NOT EXISTS counts(
     parent TEXT, scope TEXT, value INTEGER, updated_at TEXT, PRIMARY KEY(parent, scope));
 """
+
+
+def _in_municipalities(names: Collection[str] | None) -> tuple[str, list[str]]:
+    """SQL suffix and args restricting documents to these municipality names (None = no filter)."""
+    if names is None:
+        return "", []
+    return f" AND municipality IN ({','.join('?' * len(names))})", sorted(names)
 
 
 def _now() -> str:
@@ -299,23 +307,26 @@ class Store:
             return self._db.execute("SELECT enabled_at FROM analysis_state WHERE parent=?",
                                     (parent,)).fetchone()["enabled_at"]
 
-    def analysis_backlog(self, parent: str) -> int:
+    def analysis_backlog(self, parent: str, municipalities: Collection[str] | None = None) -> int:
         """Active RG-2 forms of `parent` that are not queued (seen before analysis was enabled)."""
+        where, extra = _in_municipalities(municipalities)
         with self._lock:
             return self._db.execute(
                 f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
-                f"({_ANALYSED}) AND analysis_status='skipped'", (parent,)).fetchone()[0]
+                f"({_ANALYSED}) AND analysis_status='skipped'{where}", (parent, *extra)).fetchone()[0]
 
-    def queued_for_analysis(self, parent: str) -> int:
+    def queued_for_analysis(self, parent: str, municipalities: Collection[str] | None = None) -> int:
         """Active RG-2 forms of `parent` waiting for (or retrying) analysis."""
+        where, extra = _in_municipalities(municipalities)
         with self._lock:
             return self._db.execute(
                 f"SELECT COUNT(*) FROM documents WHERE parent=? AND active=1 AND doc_type IN "
                 f"({_ANALYSED}) AND analysis_attempts < ? AND (analysis_status='new' OR "
-                "(analysis_status='failed' AND analysis_next_at IS NOT NULL))",
-                (parent, MAX_ANALYSIS_ATTEMPTS)).fetchone()[0]
+                f"(analysis_status='failed' AND analysis_next_at IS NOT NULL)){where}",
+                (parent, MAX_ANALYSIS_ATTEMPTS, *extra)).fetchone()[0]
 
-    def requeue_skipped(self, parent: str | None = None) -> int:
+    def requeue_skipped(self, parent: str | None = None,
+                        municipalities: Collection[str] | None = None) -> int:
         """Queue skipped RG-2 forms (the backlog from before analysis was enabled)."""
         sql = (f"UPDATE documents SET analysis_status='new' WHERE analysis_status='skipped' "
                f"AND doc_type IN ({_ANALYSED})")
@@ -323,10 +334,12 @@ class Store:
         if parent is not None:
             sql += " AND parent=?"
             args.append(parent)
-        return self._write(sql, args).rowcount
+        where, extra = _in_municipalities(municipalities)
+        return self._write(sql + where, [*args, *extra]).rowcount
 
     def next_for_analysis(self, limit: int, parent: str | None = None,
-                          now: float | None = None) -> list[Doc]:
+                          now: float | None = None,
+                          municipalities: Collection[str] | None = None) -> list[Doc]:
         """Claim up to `limit` due documents (marked running, attempts+1), newest first.
 
         Due: active RG-2 types, attempts < 3, status new, or failed with a retry time
@@ -340,6 +353,8 @@ class Store:
         if parent is not None:
             sql += " AND parent=?"
             args.append(parent)
+        where, extra = _in_municipalities(municipalities)
+        sql, args = sql + where, [*args, *extra]
         with self._lock, self._db:
             rows = self._db.execute(sql + " ORDER BY id DESC LIMIT ?", [*args, limit]).fetchall()
             self._db.executemany(
@@ -363,17 +378,20 @@ class Store:
             "analysis_attempts=MAX(0, analysis_attempts - ?) WHERE url=?",
             (status, retry_at if status == "failed" else None, error, int(refund), url))
 
-    def requeue_running(self, parent: str) -> list[Doc]:
+    def requeue_running(self, parent: str,
+                        municipalities: Collection[str] | None = None) -> list[Doc]:
         """Documents of `parent` left running by a previous process go back to new; those that
         already used every attempt (a crash loop) become failed and are returned."""
+        where, extra = _in_municipalities(municipalities)
         with self._lock, self._db:
             exhausted = self._db.execute(
                 "SELECT * FROM documents WHERE analysis_status='running' AND parent=? "
-                "AND analysis_attempts >= ?", (parent, MAX_ANALYSIS_ATTEMPTS)).fetchall()
+                f"AND analysis_attempts >= ?{where}", (parent, MAX_ANALYSIS_ATTEMPTS, *extra)).fetchall()
             self._db.execute(
                 "UPDATE documents SET analysis_status = CASE WHEN analysis_attempts >= ? "
                 "THEN 'failed' ELSE 'new' END, analysis_next_at=NULL "
-                "WHERE analysis_status='running' AND parent=?", (MAX_ANALYSIS_ATTEMPTS, parent))
+                f"WHERE analysis_status='running' AND parent=?{where}",
+                (MAX_ANALYSIS_ATTEMPTS, parent, *extra))
         return [_doc(r) for r in exhausted]
 
     def requeue_failed(self, parent: str | None = None, all_failed: bool = False) -> int:

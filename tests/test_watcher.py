@@ -811,10 +811,20 @@ def test_parliament_scale_first_population_uses_full_pass():
 BETA = {"Beta": "102"}
 
 
-def assert_only_beta(fake):
-    reqs = [r for r in fake.request_log if r["path"] == "/get-election"]
+def only_beta_listings(fake):
+    """Listing requests are for Beta, or global count probes of a rare type (never RG-2)."""
+    reqs = [r["form"] for r in fake.request_log if r["path"] == "/get-election"]
     assert reqs
-    assert {r["form"].get("filters[municipality]") for r in reqs} == {"102"}
+    for f in reqs:
+        if "filters[municipality]" in f:
+            assert f["filters[municipality]"] == "102"
+        else:
+            assert f.get("filters[election_document_type]") not in (None, "6")
+    return reqs
+
+
+def assert_only_beta(fake):
+    only_beta_listings(fake)
     stations = [r["form"]["municipalityId"] for r in fake.request_log
                 if r["path"].endswith("ajaxSelectMunicipality.php")]
     assert set(stations) == {"102"}
@@ -842,7 +852,7 @@ def test_filtered_probe_and_missing_find_new_rg2_in_selected_only():
     fake.request_log.clear()
     w.run_once()
     assert [(e.kind, e.doc.station_key) for e in events(batches)] == [("added", "Beta|12")]
-    assert {r["form"].get("filters[municipality]") for r in fake.request_log} == {"102"}
+    only_beta_listings(fake)
 
 
 def test_filtered_watchlist_skips_entries_outside_set():
@@ -879,8 +889,7 @@ def test_filtered_sweep_does_not_remove_docs_of_other_municipalities():
         w2.run_once()
     assert events(batches) == []
     assert len(store.known_docs(P, Scope(doc_type=6))) == 33
-    assert {r["form"].get("filters[municipality]") for r in fake.request_log
-            if r["path"] == "/get-election"} == {"102"}
+    only_beta_listings(fake)
 
 
 def test_filtered_replacement_in_selected_municipality_is_detected():
@@ -893,3 +902,75 @@ def test_filtered_replacement_in_selected_municipality_is_detected():
         t.now += 400
         w.run_once()
     assert [(e.kind, e.doc.station_key) for e in events(batches)] == [("replaced", "Beta|2")]
+
+
+def _many(m):
+    munis = {str(100 + i): f"M{i}" for i in range(m)}
+    stations = {mid: {f"{mid}{n:02d}": str(n) for n in (1, 2)} for mid in munis}
+    recs = [{"municipality": name, "election_station_number": str(n), "election_station_name": "S",
+             "number": f"{n}.", "_municipality_id": mid,
+             "_docs": [doc(6, f"/extfile/{mid}/{n}/rg2_v1.pdf")]}
+            for mid, name in munis.items() for n in (1, 2)]
+    return munis, stations, recs
+
+
+def _rare_requests(only, m=10, rounds=6):
+    munis, stations, recs = _many(m)
+    kw = {"only": dict(zip(munis.values(), munis))} if only else {}
+    w, fake, store, t, batches, _ = env(records=recs, munis=munis, stations=stations, watcher_kw=kw)
+    w.run_once()
+    fake.request_log.clear()
+    for _ in range(rounds):
+        t.now += 60
+        w.run_once()
+    return [r for r in fake.request_log if r["path"] == "/get-election"
+            and r["form"].get("filters[election_document_type]") not in (None, "6")], fake
+
+
+def test_filtered_rare_lane_costs_the_same_as_unfiltered_when_nothing_changes():
+    filtered, _ = _rare_requests(True)
+    unfiltered, _ = _rare_requests(False)
+    # 20 global counts per interval, no per-municipality follow-up while the counts stay put
+    assert len(filtered) == len(unfiltered)
+    assert all("filters[municipality]" not in r["form"] for r in filtered)
+
+
+def test_filtered_rare_followup_runs_per_municipality_only_for_the_changed_type():
+    munis, stations, recs = _many(10)
+    selected = {"M1": "101", "M2": "102"}
+    w, fake, store, t, batches, _ = env(records=recs, munis=munis, stations=stations,
+                                        watcher_kw={"only": selected})
+    w.run_once()
+    batches.clear()
+    fake.add_doc("M1|1", doc(9, "/extfile/101/1/rg9.pdf"))
+    fake.add_doc("M5|1", doc(9, "/extfile/105/1/rg9.pdf"))
+    fake.request_log.clear()
+    t.now += 60
+    w.run_once()
+    rg9 = [r["form"] for r in fake.request_log if r["path"] == "/get-election"
+           and r["form"].get("filters[election_document_type]") == "9"
+           and "filters[municipality]" in r["form"]]
+    assert {f["filters[municipality]"] for f in rg9} == {"101", "102"}
+    assert [(e.kind, e.doc.station_key, e.doc.doc_type) for e in events(batches)] == [("added", "M1|1", 9)]
+    assert store.get_count(P, "type:9") == 2
+
+
+def test_filtered_followup_is_charged_to_the_tick_budget():
+    munis, stations, recs = _many(10)
+    w, fake, store, t, batches, _ = env(records=recs, munis=munis, stations=stations,
+                                        tick_request_budget=5,
+                                        watcher_kw={"only": dict(zip(munis.values(), munis))})
+    for _ in range(40):
+        w.run_once()
+        t.now += 1
+    fake.add_doc("M3|1", doc(9, "/extfile/103/1/rg9.pdf"))
+    batches.clear()
+    t.now += 60
+    fake.request_log.clear()
+    w.run_once()
+    per_tick = len([r for r in fake.request_log if r["form"].get("filters[municipality]")])
+    assert per_tick <= 5 + 2  # follow-up pages are budgeted; the rest waits for the next tick
+    for _ in range(30):
+        t.now += 1
+        w.run_once()
+    assert [e.doc.station_key for e in events(batches)] == ["M3|1"]

@@ -1,6 +1,8 @@
 import difflib
+import unicodedata
 
 _DIGRAPHS = {"lj": "љ", "nj": "њ", "dž": "џ", "dj": "ђ"}
+_PRECOMPOSED = {"ǆ": "џ", "ǅ": "џ", "Ǆ": "џ", "ǉ": "љ", "ǈ": "љ", "Ǉ": "љ", "ǌ": "њ", "ǋ": "њ", "Ǌ": "њ"}
 _LATIN = dict(zip("abvgdđežzijklmnoprstćufhcčš", "абвгдђежзијклмнопрстћуфхцчш"))
 
 
@@ -14,7 +16,9 @@ class MunicipalityError(ValueError):
 
 def to_cyrillic(text: str) -> str:
     """Serbian Latin -> Cyrillic, casefolded; Cyrillic and other characters pass through."""
-    text, out, i = text.casefold(), [], 0
+    text = " ".join(unicodedata.normalize("NFC", text).split())
+    text = "".join(_PRECOMPOSED.get(c, c) for c in text).casefold()
+    out, i = [], 0
     while i < len(text):
         pair = text[i:i + 2]
         if pair in _DIGRAPHS:

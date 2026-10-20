@@ -69,3 +69,14 @@ def test_negative_browse_interval_rejected(tmp_path):
     f.write_text("browse_interval_s = -1\n")
     with pytest.raises(ValueError, match="browse_interval_s"):
         load_config(f)
+
+
+def test_only_municipalities_must_be_list_of_strings(tmp_path):
+    import pytest
+    f = tmp_path / "c.toml"
+    f.write_text('only_municipalities = ["Beograd", "Нови Сад"]\n')
+    assert load_config(f).only_municipalities == ["Beograd", "Нови Сад"]
+    for bad in ('"Beograd"', "[1]"):
+        f.write_text(f"only_municipalities = {bad}\n")
+        with pytest.raises(ValueError, match="only_municipalities"):
+            load_config(f)

@@ -60,3 +60,16 @@ def test_watch_only_unknown_or_ambiguous_exits_2(tmp_path, capsys):
     assert main(["watch", *common, "--only", "novi"]) == 2
     assert "Нови Сад" in capsys.readouterr().err
     assert main(["watch", *common, "--only", "Ljig,Nowhere"]) == 2
+
+
+def test_nfc_whitespace_and_precomposed_digraphs():
+    import unicodedata
+    assert to_cyrillic("Lj́ig") != ""  # decomposed input does not crash
+    assert to_cyrillic(unicodedata.normalize("NFD", "Šid")) == "шид"
+    assert to_cyrillic("  Novi \t Sad ") == "нови сад"
+    assert to_cyrillic("ǉig ǌegoš ǆep Ǉ") == "љиг његош џеп љ"
+
+
+def test_only_empty_is_an_error(tmp_path):
+    from rg2watch.cli import main
+    assert main(["watch", "--parent", "1", "--db", str(tmp_path / "x.sqlite"), "--only", ""]) == 2

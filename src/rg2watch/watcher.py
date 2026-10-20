@@ -40,7 +40,6 @@ class _Job:
     max_page: int | None = None
     ok: bool = True
     docs: list[Doc] = field(default_factory=list)
-    extra: tuple = (None, None)  # rare jobs: (municipality name, id) under a municipality filter
     touched: set = field(default_factory=set)  # keys changed by other lanes since the job began
 
 
@@ -53,8 +52,10 @@ class _Round:
     ok: bool = True
 
 
-def _count_key(key: int | tuple[int, str]) -> str:
-    return f"type:{key}" if isinstance(key, int) else f"type:{key[0]}:m:{key[1]}"
+def filter_request_rate(cfg: Config, municipalities: int) -> float:
+    """Steady-state listing requests/s of a --only watch: 2 probe counts per municipality per
+    probe interval plus one global count per rare type per rare interval (follow-ups come on top)."""
+    return 2 * municipalities / cfg.probe_interval_s + len(RARE_TYPES) / cfg.rare_interval_s
 
 
 def _type_name(d: Doc) -> str:
@@ -93,6 +94,8 @@ class Watcher:
         self._safety_job: _Job | None = None
         self._safety_rest: list[_Job] = []  # filtered mode: municipalities still to sweep
         self._round: _Round | None = None
+        self._rare_stale: dict[int, int] = {}  # type -> count seen after its sweeps started
+        self._rare_failed: set[int] = set()
         self._recheck: dict[str, dict] = {}  # station key -> {doc key: removal candidate}
         self._rare_resweep_at = self._started
         # The first safety pass starts one interval after start, or at once when it is the baseline.
@@ -107,8 +110,14 @@ class Watcher:
             self.store.save_municipalities(self.parent, self.client.municipalities())
         names = self.store.municipality_ids(self.parent)
         if self._only_ids is not None:
-            self._only = {n: i for n, i in names.items() if i in self._only_ids}
-        for mid in (self._only or names).values():
+            now_selected = {n: i for n, i in names.items() if i in self._only_ids}
+            if now_selected:
+                self._only = now_selected
+            elif "only-gone" not in self._warned:  # keep the previous names rather than going idle
+                self._warned.add("only-gone")
+                log.error("none of the selected municipalities is in the refreshed list; "
+                          "keeping the previous selection")
+        for mid in (names if self._only is None else self._only).values():
             if not self.store.station_ids(self.parent, mid):
                 options = self.client.stations(mid)  # station id -> station no
                 self.store.save_stations(self.parent, mid, {no: sid for sid, no in options.items()})
@@ -287,8 +296,6 @@ class Watcher:
         direct per-station re-check. Returns the docs kept for this scope."""
         if doc_type is not None:
             docs = [d for d in docs if d.doc_type == doc_type]
-        if self._only is not None:
-            docs = [d for d in docs if d.municipality in self._only]
         known_names = self.store.municipality_ids(self.parent)
         for name in {d.municipality for d in docs} - set(known_names):
             self._unknown_names.add(name)
@@ -298,6 +305,11 @@ class Watcher:
                 log.warning("listing municipality %r is not among stored municipalities", name)
         if scope.municipality is not None:
             # Docs under another name cannot be diffed in this scope; the probe falls back to a full sweep.
+            for name in ({d.municipality for d in docs} - {scope.municipality}) & set(known_names):
+                self._refresh_wanted = True
+                if f"stray:{name}" not in self._warned:
+                    self._warned.add(f"stray:{name}")
+                    log.warning("listing for %r returned municipality %r: dropped", scope.municipality, name)
             docs = [d for d in docs if d.municipality == scope.municipality]
         events = diff(self.store.known_docs(self.parent, scope), docs, complete)
         events = [e for e in events if doc_key(e.doc) not in exclude]
@@ -377,52 +389,63 @@ class Watcher:
         """Count checks are not charged to the budget: they always run every rare_interval_s."""
         resweep = now - self._rare_resweep_at >= self.cfg.rare_resweep_interval_s
         jobs = self._jobs["rare"]
-        targets = [(t, None, None) for t in RARE_TYPES] if self._only is None else [
-            (t, name, mid) for t in RARE_TYPES for name, mid in self._only.items()]
-        for t, name, mid in targets:
+        for t in RARE_TYPES:
             if self._abort:
                 return
             try:
-                n, _ = self._count(Filters(doc_type=t, municipality_id=mid), charge=False)
+                n, _ = self._count(Filters(doc_type=t), charge=False)
             except RikUnavailable:
                 raise
             except Exception:
                 log.exception("rare lane: type %d count failed", t)
                 continue
-            key = t if mid is None else (t, mid)
-            stored = self.store.get_count(self.parent, _count_key(key))
-            queued = next((j for j in jobs if j.key == key), None)
-            if queued is not None:
-                if queued.next_page == 1:
-                    queued.total = n
-                elif n != queued.total:
-                    queued.stale_total = n  # may be on a page already passed: re-run when done
+            stored = self.store.get_count(self.parent, f"type:{t}")
+            queued = [j for j in jobs if j.doc_type == t]
+            if queued:
+                for j in queued:
+                    if j.next_page == 1:
+                        j.total = n
+                    elif n != j.total:
+                        j.stale_total = n  # may be on a page already passed: re-run when done
             elif (n != stored or (resweep and n > 0)) and not (n == 0 and stored is None):
-                jobs.append(self._rare_job(t, n, n != stored, name, mid))
+                jobs.extend(self._rare_jobs(t, n, n != stored))
             else:
-                self.store.set_count(self.parent, _count_key(key), n)
+                self.store.set_count(self.parent, f"type:{t}", n)
         self._sort_rare()
         if resweep:  # every non-empty rare type re-swept: catches count-neutral replacements
             self._rare_resweep_at = now
         self._progress["rare"] = True
 
-    def _rare_job(self, t: int, n: int, count_changed: bool, name: str | None = None,
-                  mid: str | None = None) -> _Job:
-        key = t if mid is None else (t, mid)
-        return _Job(Filters(doc_type=t, municipality_id=mid), Scope(doc_type=t, municipality=name),
-                    True, t, on_done=self._rare_done, total=n, key=key,
-                    prio=(not count_changed, t not in URGENT_RARE), extra=(name, mid))
+    def _rare_jobs(self, t: int, n: int, count_changed: bool) -> list[_Job]:
+        """One sweep of the type, or under --only one per selected municipality (the global count
+        is only the trigger, so a type that did not change costs no per-municipality request)."""
+        prio = (not count_changed, t not in URGENT_RARE)
+        if self._only is None:
+            return [_Job(Filters(doc_type=t), Scope(doc_type=t), True, t, on_done=self._rare_done,
+                         total=n, key=t, prio=prio)]
+        return [_Job(Filters(doc_type=t, municipality_id=mid), Scope(doc_type=t, municipality=name),
+                     True, t, on_done=self._rare_done, total=n, key=(t, mid), prio=prio)
+                for name, mid in self._only.items()]
 
     def _sort_rare(self) -> None:
         # Started job first, then count changes before re-sweeps, RG-8/RG-9 family first.
         self._jobs["rare"].sort(key=lambda j: (j.next_page == 1, j.prio))
 
     def _rare_done(self, job: _Job) -> None:
+        t, jobs = job.doc_type, self._jobs["rare"]
+        if not job.ok:
+            self._rare_failed.add(t)
         if job.stale_total is not None:
-            self._jobs["rare"].append(self._rare_job(job.doc_type, job.stale_total, True, *job.extra))
+            self._rare_stale[t] = job.stale_total
+        if any(j is not job and j.doc_type == t for j in jobs):
+            return  # the type's global count is stored once its last sweep is done
+        stale, failed = self._rare_stale.pop(t, None), t in self._rare_failed
+        self._rare_failed.discard(t)
+        if stale is not None:
+            jobs.extend(self._rare_jobs(t, stale, True))
             self._sort_rare()
-        elif job.ok:
-            self.store.set_count(self.parent, _count_key(job.key), job.total)
+        elif not failed:
+            self.store.set_count(self.parent, f"type:{t}", job.total)
 
     def _rechecks(self, sweep_id: int) -> None:
         """Confirm removal candidates with a direct per-station query (charged to the budget)."""
@@ -600,7 +623,7 @@ class Watcher:
         self._last["missing"] = self.clock()
         have = {k[0] for k in self.store.known_docs(self.parent, Scope(doc_type=6))}
         missing = []
-        for name, mid in (self._only or self.store.municipality_ids(self.parent)).items():
+        for name, mid in (self.store.municipality_ids(self.parent) if self._only is None else self._only).items():
             for no, sid in self.store.station_ids(self.parent, mid).items():
                 if f"{name}|{no}" not in have:
                     missing.append((f"{name}|{no}", mid, sid))

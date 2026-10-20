@@ -27,7 +27,7 @@ from .replay import fetch_fixtures, make_replay_server
 from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, download_limiter_for
 from .rules import evaluate_report
 from .store import Store
-from .watcher import Watcher
+from .watcher import Watcher, filter_request_rate
 
 log = logging.getLogger("rg2watch.cli")
 ADHOC = "adhoc"  # parent that `analyze` records its spend under
@@ -268,7 +268,10 @@ def _cmd_watch(args) -> int:
             return 2
         parent = client.election.parent
         only = None
-        wanted = args.only.split(",") if args.only else cfg.only_municipalities
+        wanted = args.only.split(",") if args.only is not None else cfg.only_municipalities
+        if args.only is not None and not any(n.strip() for n in wanted):
+            print("--only needs at least one municipality name", file=sys.stderr)
+            return 2
         if wanted:
             store.upsert_election(client.election)
             if not store.municipality_ids(parent):
@@ -285,6 +288,12 @@ def _cmd_watch(args) -> int:
                     print(f"  {name}", file=sys.stderr)
                 return 2
             log.info("watching only %d municipality(ies): %s", len(only), ", ".join(sorted(only)))
+            rate = filter_request_rate(cfg, len(only))
+            log.info("estimated steady request rate %.2f/s of max_rps %.2f", rate, cfg.max_rps)
+            if rate > cfg.max_rps / 2:
+                log.warning("this selection needs about %.0f%% of max_rps for counting alone; "
+                            "raise probe_interval_s or select fewer municipalities",
+                            100 * rate / cfg.max_rps)
         notifier = Notifier(cfg, _notifier_http(), out=sys.stdout)
 
         pipeline = None
@@ -309,7 +318,8 @@ def _cmd_watch(args) -> int:
                         _store_finding(store, parent, f)
 
                 pipeline = AnalysisPipeline(client, store, notifier, ai, cfg, on_findings,
-                                            _cache_dir(cfg), backlog=args.analyze_backlog)
+                                            _cache_dir(cfg), backlog=args.analyze_backlog,
+                                            **({"municipalities": set(only)} if only else {}))
         on_events, deliver = _handlers(store, notifier, parent, pipeline)
         watcher = Watcher(client, store, cfg, on_events, initial_safety=args.once,
                           on_status=notifier.status, baseline=args.baseline, only=only)

@@ -2,7 +2,7 @@
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import datetime
 from pathlib import Path
 
@@ -67,11 +67,13 @@ def _hhmm(ts: float) -> str:
 class AnalysisPipeline:
     def __init__(self, client: RikClient, store: Store, notifier: Notifier, anthropic_client,
                  cfg: Config, on_findings: Callable[[list[Finding]], None], cache_dir: Path,
-                 clock: Callable[[], float] = time.time, backlog: bool = False):
+                 clock: Callable[[], float] = time.time, backlog: bool = False,
+                 municipalities: Collection[str] | None = None):
         self.client, self.store, self.notifier = client, store, notifier
         self.anthropic, self.cfg = anthropic_client, cfg
         self.on_findings, self.cache_dir, self.clock = on_findings, cache_dir, clock
         self.parent = client.election.parent
+        self.municipalities = municipalities  # watch --only: analyse only these municipalities
         self.backlog = backlog  # also analyse forms seen before analysis was enabled
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -105,16 +107,16 @@ class AnalysisPipeline:
     def start(self) -> None:
         self.store.enable_analysis(self.parent)
         if self.backlog:
-            n = self.store.requeue_skipped(self.parent)
+            n = self.store.requeue_skipped(self.parent, self.municipalities)
             log.info("--analyze-backlog: %d form(s) seen before analysis was enabled queued", n)
-        for doc in self.store.requeue_running(self.parent):
+        for doc in self.store.requeue_running(self.parent, self.municipalities):
             self._emit([Finding("X2", "LOW", doc, f"analysis failed after {MAX_ANALYSIS_ATTEMPTS} "
                                 "attempts: interrupted every time (crash or shutdown)")])
         log.info("analysis on for election %s: spend cap $%.2f, $%.2f spent so far on this election, "
                  "%d form(s) queued, %d form(s) seen before analysis was enabled not analysed "
                  "(--analyze-backlog to include)", self.parent, self.cfg.max_spend_usd,
-                 self.store.total_spend(self.parent), self.store.queued_for_analysis(self.parent),
-                 self.store.analysis_backlog(self.parent))
+                 self.store.total_spend(self.parent), self.store.queued_for_analysis(self.parent, self.municipalities),
+                 self.store.analysis_backlog(self.parent, self.municipalities))
         for i in range(max(1, self.cfg.analysis_workers)):
             t = threading.Thread(target=self._loop, name=f"analysis-{i}", daemon=True)
             t.start()
@@ -157,7 +159,8 @@ class AnalysisPipeline:
                 self._probing = True  # one probe form decides whether to resume
         outcome = None
         try:
-            docs = self.store.next_for_analysis(1, parent=self.parent, now=self.clock())
+            docs = self.store.next_for_analysis(1, parent=self.parent, now=self.clock(),
+                                                 municipalities=self.municipalities)
             if not docs:
                 return False
             outcome = self._process(docs[0], probe)
