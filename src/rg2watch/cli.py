@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
+from .batch import ADHOC, describe_estimate, run_batch, select_forms
 from .browse import build_page
 from .config import Config, load_config
 from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
@@ -30,7 +31,6 @@ from .store import Store
 from .watcher import Watcher, filter_request_rate
 
 log = logging.getLogger("rg2watch.cli")
-ADHOC = "adhoc"  # parent that `analyze` records its spend under
 
 
 def _positive_int(text: str) -> int:
@@ -78,7 +78,17 @@ def _parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("analyze", parents=[common],
                        help="analyse one RG-2 PDF (local path or URL of a registered election)")
-    s.add_argument("source", help="local PDF path or document URL")
+    s.add_argument("source", nargs="?", help="local PDF path or document URL")
+    s.add_argument("--parent", help="batch mode: re-analyse stored forms of this election")
+    s.add_argument("--municipality", help="batch: comma-separated municipality names")
+    s.add_argument("--station", help="batch: comma-separated station numbers")
+    s.add_argument("--rule", help="batch: forms with a stored finding of these rules (comma-separated)")
+    s.add_argument("--severity", type=str.upper, choices=["LOW", "MEDIUM", "HIGH"],
+                   help="batch: forms with a stored finding of at least this severity")
+    s.add_argument("--state", choices=["current", "replaced", "removed"], help="batch: form state")
+    s.add_argument("--limit", type=_positive_int, help="batch: only the first N selected forms")
+    s.add_argument("--yes", action="store_true", help="batch: confirm the estimated API spend")
+    s.add_argument("--max-usd", type=float, help="batch: stop at this spend (default max_spend_usd)")
     s.add_argument("--json", action="store_true", help="print report and findings as JSON")
     s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
 
@@ -361,8 +371,77 @@ def _cmd_watch(args) -> int:
         store.close()
 
 
+def _rik_client(cfg: Config, election) -> RikClient:
+    http = httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True)
+    return RikClient(election, AdaptiveLimiter(cfg.max_rps), http, cfg.request_timeout_s,
+                     cfg.max_pdf_bytes, download_limiter_for(cfg))
+
+
+def _csv(text: str | None) -> list[str] | None:
+    return [x.strip() for x in text.split(",") if x.strip()] if text else None
+
+
+def _cmd_analyze_batch(args, cfg: Config) -> int:
+    store = _open_store(cfg)
+    try:
+        election = store.get_election(args.parent)
+        if election is None:
+            print(f"unknown election {args.parent}; run `rg2watch add <zapisnici-url>` first",
+                  file=sys.stderr)
+            return 2
+        try:
+            sel = select_forms(store, args.parent, municipalities=_csv(args.municipality),
+                               stations=_csv(args.station),
+                               rules=[r.upper() for r in _csv(args.rule) or []] or None,
+                               severity=args.severity, state=args.state, limit=args.limit)
+        except MunicipalityError as exc:
+            print(exc, file=sys.stderr)
+            for name in exc.candidates:
+                print(f"  {name}", file=sys.stderr)
+            return 2
+        model = stored_model(cfg.model)
+        todo = [d for d in sel.docs if store.latest_report(d.url, model, PROMPT_VERSION) is None]
+        print(f"{len(sel.docs)} form(s) selected, {len(sel.docs) - len(todo)} already analysed by "
+              f"{model} (cached: rules re-applied, free)")
+        max_usd = cfg.max_spend_usd if args.max_usd is None else args.max_usd
+        if is_ollama(cfg.model):
+            print("local model, no API cost")
+        elif todo:
+            line, _ = describe_estimate(todo, _cache_dir(cfg), cfg)
+            print(line)
+            print(f"the batch stops at ${max_usd:.2f} (--max-usd, default max_spend_usd)")
+            if not args.yes:
+                print("not calling the API without --yes")
+                return 0
+        ai, why = _analysis_client(cfg)
+        if ai is None:
+            print(f"analysis unavailable: {why}", file=sys.stderr)
+            return 2
+        res = run_batch(sel.docs, store, _rik_client(cfg, election), ai, cfg, _cache_dir(cfg),
+                        max_usd, sys.stdout, sys.stderr)
+    finally:
+        store.close()
+    print(f"{res['analysed']} analysed, {res['cached']} cached, {res['failed']} failed, "
+          f"${res['cost_usd']:.3f} spent")
+    return 1 if res["stopped"] or res["failed"] else 0
+
+
 def _cmd_analyze(args) -> int:
     cfg = _config(args)
+    batch_flags = (args.municipality, args.station, args.rule, args.severity, args.state, args.limit,
+                   args.yes, args.max_usd)
+    if args.parent and args.source:
+        print("give either a source or --parent, not both", file=sys.stderr)
+        return 2
+    if not args.parent and not args.source:
+        print("analyze needs a source (PDF path or URL) or --parent for batch mode", file=sys.stderr)
+        return 2
+    if args.parent:
+        return _cmd_analyze_batch(args, cfg)
+    if any(batch_flags):
+        print("--municipality/--station/--rule/--severity/--state/--limit/--yes/--max-usd need "
+              "--parent", file=sys.stderr)
+        return 2
     ai, why = _analysis_client(cfg)
     if ai is None:
         print(f"analysis unavailable: {why}", file=sys.stderr)
@@ -385,11 +464,8 @@ def _cmd_analyze(args) -> int:
             print(f"refusing to download {src}: not on the host of a registered election "
                   "(run `rg2watch add` first)", file=sys.stderr)
             return 2
-        http = httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True)
-        client = RikClient(election, AdaptiveLimiter(cfg.max_rps), http, cfg.request_timeout_s,
-                           cfg.max_pdf_bytes, download_limiter_for(cfg))
         try:
-            path = fetch_pdf(client, src, _cache_dir(cfg))
+            path = fetch_pdf(_rik_client(cfg, election), src, _cache_dir(cfg))
         except RikError as exc:
             print(f"download failed: {exc}", file=sys.stderr)
             return 1

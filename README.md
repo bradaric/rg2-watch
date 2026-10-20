@@ -120,6 +120,26 @@ counts against an election's cap (and is not capped itself: each run is an expli
 budget) and exits. `watch` also
 accepts a zapisnici URL instead of `--parent`. `--base-url` overrides the RIK host; `-v` enables debug logs.
 
+## Batch re-analysis (second opinions)
+
+`analyze --parent P` (no source) re-analyses stored, active RG-2 forms of a registered election with
+another model or prompt. Filters are ANDed: `--municipality NAME[,NAME]` (Cyrillic or Latin, like
+`watch --only`), `--station NO[,NO]`, `--rule R[,R]` and `--severity LOW|MEDIUM|HIGH` (forms with a
+stored finding, from any model, of that rule / at least that severity), `--state current|replaced|
+removed` (as on the browse page; `removed` uses the newest version), `--limit N`.
+
+    uv run rg2watch analyze --parent 662405 --municipality "Нови Сад" --severity MEDIUM --model claude-opus-5-5
+    uv run rg2watch analyze --parent 662405 --rule V1,V2 --yes --max-usd 5
+    uv run rg2watch analyze --parent 662405 --state removed --model ollama:qwen3.8:27b-96k
+
+It prints the number of forms, how many are already analysed by this model and prompt version
+(cached: rules are re-applied for free) and an estimate for the rest. A paid model needs `--yes`;
+without it the estimate is printed and nothing is spent. `ollama:` models need no `--yes`. Forms
+are downloaded one at a time through the download limiter. The batch stops at `--max-usd` (default
+`max_spend_usd`); its spend is recorded under `adhoc`, linked to the document, and results are
+stored per model. Busy API / Ollama: a form is retried twice with backoff, then skipped; an
+authentication or permission error stops the batch. No alerts are sent.
+
 ## Local models
 
 `model = "ollama:<name>"` in the config (or `--model ollama:<name>` on `eval`, `analyze` and `watch`)

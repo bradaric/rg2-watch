@@ -84,9 +84,12 @@ def estimate_cost(labels: list[dict], pdf_dir: Path, cfg: Config) -> tuple[int, 
             continue
         forms += 1
         tiles += n
-    usd = (tiles * TOKENS_PER_TILE * cfg.price_in_per_mtok
-           + forms * OUTPUT_TOKENS * cfg.price_out_per_mtok) / 1_000_000
-    return forms, tiles, usd
+    return forms, tiles, usd_for(forms, tiles, cfg)
+
+
+def usd_for(forms: int, tiles: int, cfg: Config) -> float:
+    return (tiles * TOKENS_PER_TILE * cfg.price_in_per_mtok
+            + forms * OUTPUT_TOKENS * cfg.price_out_per_mtok) / 1_000_000
 
 
 def _register(store: Store, entry: dict, path: Path) -> Doc:
