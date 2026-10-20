@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rg2watch.models import DOC_TYPES, Doc, Election, Event, Finding, Scope, doc_key
+from rg2watch.case_locks import CaseLocks
 
 if TYPE_CHECKING:
     from rg2watch.analyze import AnalysisResult
@@ -66,6 +67,16 @@ CREATE TABLE IF NOT EXISTS counts(
 CREATE TABLE IF NOT EXISTS reviews(
     id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, url TEXT NOT NULL, verdict TEXT NOT NULL,
     note TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS publications(
+    id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE, document_id INTEGER NOT NULL, parent TEXT NOT NULL,
+    summary TEXT NOT NULL, summary_sha256 TEXT NOT NULL, staged_pdf_path TEXT NOT NULL,
+    pdf_sha256 TEXT NOT NULL, case_json TEXT NOT NULL,
+    folder_id TEXT, pdf_file_id TEXT, text_file_id TEXT, final_url TEXT, viber_text TEXT,
+    phase TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, published_at TEXT);
+CREATE TABLE IF NOT EXISTS ai_draft_costs(
+    id INTEGER PRIMARY KEY, parent TEXT NOT NULL, url TEXT NOT NULL, model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cost_usd REAL NOT NULL,
+    status TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 
 
@@ -104,6 +115,7 @@ def _doc(row) -> Doc:
 
 class Store:
     def __init__(self, path: Path | str):
+        self.path = str(path)
         self.name = Path(path).stem if str(path) != ":memory:" else "memory"  # which DB (page banner)
         self._db = sqlite3.connect(str(path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
@@ -135,6 +147,7 @@ class Store:
                 # (`requeue --skipped` or `watch --analyze-backlog` opts them in)
                 self._db.execute("UPDATE documents SET analysis_status='skipped'")
         self._db.executescript(INDEXES)
+        self.case_locks = CaseLocks(path)
 
     def close(self) -> None:
         with self._lock:
@@ -718,7 +731,8 @@ class Store:
                 "ast": ast,
                 "retrying": one(f"SELECT COUNT(*) {base} AND active=1 AND analysis_status='failed' "
                                 "AND analysis_next_at IS NOT NULL"),
-                "spend": float(one("SELECT COALESCE(SUM(cost_usd), 0) FROM analyses WHERE parent=?")),
+                "spend": float(one("SELECT COALESCE(SUM(cost_usd), 0) FROM analyses WHERE parent=?")
+                               + one("SELECT COALESCE(SUM(cost_usd), 0) FROM ai_draft_costs WHERE parent=?")),
             }
 
     def set_review(self, url: str, verdict: str, note: str | None = None) -> sqlite3.Row | None:
@@ -727,14 +741,70 @@ class Store:
         if verdict not in VERDICTS:
             raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}: {verdict!r}")
         note = clean_note(note)
+        with self.case_locks.decision(url):
+            with self._lock, self._db:
+                d = self._db.execute("SELECT id FROM documents WHERE url=?", (url,)).fetchone()
+                if d is None:
+                    return None
+                cur = self._db.execute(
+                    "INSERT INTO reviews(document_id, url, verdict, note, created_at) VALUES(?,?,?,?,?)",
+                    (d["id"], url, verdict, note, _now()))
+                return self._db.execute("SELECT * FROM reviews WHERE id=?", (cur.lastrowid,)).fetchone()
+
+    def case_context(self, url: str) -> sqlite3.Row | None:
+        """Document/election plus the latest verdict, read as one short transaction."""
         with self._lock, self._db:
-            d = self._db.execute("SELECT id FROM documents WHERE url=?", (url,)).fetchone()
-            if d is None:
-                return None
-            cur = self._db.execute(
-                "INSERT INTO reviews(document_id, url, verdict, note, created_at) VALUES(?,?,?,?,?)",
-                (d["id"], url, verdict, note, _now()))
-            return self._db.execute("SELECT * FROM reviews WHERE id=?", (cur.lastrowid,)).fetchone()
+            return self._db.execute(
+                "SELECT d.*, e.title election_title, e.url election_url, r.verdict, r.note "
+                "FROM documents d LEFT JOIN elections e ON e.parent=d.parent "
+                "LEFT JOIN reviews r ON r.id=(SELECT id FROM reviews WHERE url=d.url "
+                "ORDER BY id DESC LIMIT 1) WHERE d.url=?", (url,)).fetchone()
+
+    def latest_verdict(self, url: str) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT verdict FROM reviews WHERE url=? ORDER BY id DESC LIMIT 1",
+                                   (url,)).fetchone()
+        return row["verdict"] if row else None
+
+    def claim_publication(self, url: str, summary: str, summary_sha256: str, staged_pdf_path: str,
+                          pdf_sha256: str, case: dict) -> sqlite3.Row:
+        now = _now()
+        with self._lock, self._db:
+            doc = self._db.execute("SELECT id, parent FROM documents WHERE url=?", (url,)).fetchone()
+            if doc is None:
+                raise KeyError(url)
+            self._db.execute(
+                "INSERT OR IGNORE INTO publications(url,document_id,parent,summary,summary_sha256,"
+                "staged_pdf_path,pdf_sha256,case_json,phase,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (url, doc["id"], doc["parent"], summary, summary_sha256, staged_pdf_path,
+                 pdf_sha256, json.dumps(case, ensure_ascii=False), "preparing", now, now))
+            return self._db.execute("SELECT * FROM publications WHERE url=?", (url,)).fetchone()
+
+    def get_publication(self, url: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self._db.execute("SELECT * FROM publications WHERE url=?", (url,)).fetchone()
+
+    def save_drive_ids(self, url: str, folder_id: str, pdf_id: str, text_id: str) -> None:
+        self._write("UPDATE publications SET folder_id=?,pdf_file_id=?,text_file_id=?,updated_at=? "
+                    "WHERE url=? AND folder_id IS NULL", (folder_id, pdf_id, text_id, _now(), url))
+
+    def advance_publication(self, url: str, phase: str) -> None:
+        if phase not in ("preparing", "uploaded"):
+            raise ValueError(phase)
+        self._write("UPDATE publications SET phase=?,updated_at=? WHERE url=? AND phase<>'published'",
+                    (phase, _now(), url))
+
+    def finalize_publication(self, url: str, final_url: str, viber_text: str) -> None:
+        now = _now()
+        self._write("UPDATE publications SET phase='published',final_url=?,viber_text=?,"
+                    "updated_at=?,published_at=? WHERE url=?", (final_url, viber_text, now, now, url))
+
+    def record_draft_cost(self, parent: str, url: str, model: str, input_tokens: int,
+                          output_tokens: int, cost_usd: float, status: str) -> None:
+        self._write("INSERT INTO ai_draft_costs(parent,url,model,input_tokens,output_tokens,cost_usd,"
+                    "status,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (parent, url, model, input_tokens, output_tokens, cost_usd, status, _now()))
 
     def latest_reviews(self, parent: str | None = None) -> list[sqlite3.Row]:
         """The newest review of each reviewed URL, with its document's parent, municipality,
@@ -775,9 +845,12 @@ class Store:
 
     def total_spend(self, parent: str | None = None) -> float:
         """Recorded spend of one election (`parent`), or of everything when None."""
-        sql, args = "SELECT COALESCE(SUM(cost_usd), 0) AS s FROM analyses", ()
+        where, args = "", ()
         if parent is not None:
-            sql, args = sql + " WHERE parent=?", (parent,)
+            where, args = " WHERE parent=?", (parent,)
         with self._lock:
-            row = self._db.execute(sql, args).fetchone()
-        return float(row["s"])
+            analyses = self._db.execute("SELECT COALESCE(SUM(cost_usd), 0) AS s FROM analyses" + where,
+                                        args).fetchone()["s"]
+            drafts = self._db.execute("SELECT COALESCE(SUM(cost_usd), 0) AS s FROM ai_draft_costs" + where,
+                                      args).fetchone()["s"]
+        return float(analyses) + float(drafts)
