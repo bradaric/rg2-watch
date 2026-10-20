@@ -421,6 +421,19 @@ class Store:
                 (url, model, prompt_version)).fetchone()
         return json.loads(row["result_json"]) if row else None
 
+    def browse_rows(self, parent: str | None = None) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+        """(RG-2 documents, their findings), oldest first; optionally of one election."""
+        where, args = f"doc_type IN ({_ANALYSED})", ()
+        if parent is not None:
+            where, args = where + " AND parent=?", (parent,)
+        with self._lock:
+            docs = self._db.execute(f"SELECT * FROM documents WHERE {where} ORDER BY id",
+                                    args).fetchall()
+            found = self._db.execute(
+                "SELECT document_id, rule, severity, summary FROM findings WHERE document_id IN "
+                f"(SELECT id FROM documents WHERE {where}) ORDER BY id", args).fetchall()
+        return docs, found
+
     def total_spend(self, parent: str | None = None) -> float:
         """Recorded spend of one election (`parent`), or of everything when None."""
         sql, args = "SELECT COALESCE(SUM(cost_usd), 0) AS s FROM analyses", ()

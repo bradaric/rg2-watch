@@ -38,6 +38,7 @@ class Config:
     price_in_per_mtok: float = 4.0
     price_out_per_mtok: float = 20.0
     analysis_workers: int = 4
+    browse_interval_s: int = 120  # rebuild the browse page this often in `watch`; 0 = off
     download_max_rps: float = 0.5
     analysis_pause_s: int = 600
     stop_wait_s: int = 80
@@ -72,6 +73,8 @@ def load_config(path: Path | None) -> Config:
         logging.getLogger("rg2watch.config").warning(
             "reserved_share %s out of range [0.0, 0.9]; using %s", cfg.reserved_share, clamped)
         cfg.reserved_share = clamped
+    if cfg.browse_interval_s < 0:
+        raise ValueError(f"browse_interval_s must be >= 0: {cfg.browse_interval_s}")
     topic = os.environ.get("RG2W_NTFY_TOPIC")
     if topic:
         cfg.ntfy_topic = topic

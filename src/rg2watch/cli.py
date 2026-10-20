@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
+from .browse import build_page
 from .config import Config, load_config
 from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
 from .evaluate import PARENT as EVAL_PARENT
@@ -100,6 +101,10 @@ def _parser() -> argparse.ArgumentParser:
                    help="also queue RG-2 forms skipped because they were seen before analysis "
                         "was enabled")
 
+    s = sub.add_parser("browse", parents=[common], help="write the local HTML page of RG-2 forms")
+    s.add_argument("--parent", help="only this election")
+    s.add_argument("--out", type=Path, help="HTML path (default: index.html next to the DB)")
+
     s = sub.add_parser("replay", parents=[common], help="serve fixtures as a fake RIK")
     s.add_argument("--fixtures", type=Path, required=True)
     s.add_argument("--host", default="127.0.0.1")
@@ -178,6 +183,23 @@ def _anthropic_client():
 def _cache_dir(cfg: Config) -> Path:
     db = str(cfg.db_path)
     return (Path("data") if db == ":memory:" else Path(db).parent) / "pdfs"
+
+
+def _browse_path(cfg: Config) -> Path:
+    db = str(cfg.db_path)
+    return (Path("data") if db == ":memory:" else Path(db).parent) / "index.html"
+
+
+def _cmd_browse(args) -> int:
+    cfg = _config(args)
+    store = _open_store(cfg)
+    try:
+        out = args.out or _browse_path(cfg)
+        n = build_page(store, out, _cache_dir(cfg), args.parent)
+    finally:
+        store.close()
+    print(f"{out} ({n} form(s))")
+    return 0
 
 
 def _handlers(store: Store, notifier: Notifier, parent: str, pipeline=None):
@@ -272,6 +294,16 @@ def _cmd_watch(args) -> int:
                           on_status=notifier.status, baseline=args.baseline)
         if pipeline is not None:
             pipeline.start()
+
+        def browse() -> None:
+            try:
+                build_page(store, _browse_path(cfg), _cache_dir(cfg))
+            except Exception:
+                log.exception("browse page rebuild failed")
+
+        if cfg.browse_interval_s > 0:
+            browse()
+        next_browse = time.monotonic() + cfg.browse_interval_s
         try:
             while True:
                 try:
@@ -282,6 +314,9 @@ def _cmd_watch(args) -> int:
                     deliver()
                 except Exception:
                     log.exception("delivery failed; retrying next tick")
+                if cfg.browse_interval_s > 0 and (args.once or time.monotonic() >= next_browse):
+                    browse()
+                    next_browse = time.monotonic() + cfg.browse_interval_s
                 if args.once:
                     break
                 time.sleep(1)
@@ -493,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO if args.cmd == "watch" else logging.WARNING)
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
-               "requeue": _cmd_requeue}[args.cmd]
+               "requeue": _cmd_requeue, "browse": _cmd_browse}[args.cmd]
     previous = None
     if args.cmd in ("watch", "replay"):  # SIGTERM shuts down like Ctrl-C (DB closed, exit 0)
         previous = signal.signal(signal.SIGTERM, _sigterm)

@@ -62,6 +62,8 @@ price_in_per_mtok = 4.0
 price_out_per_mtok = 20.0
 # Background analysis worker threads
 analysis_workers = 4
+# Seconds between rebuilds of the local browse page (index.html next to the DB) while watching; 0 = off
+browse_interval_s = 120
 # PDF downloads have their own rate limiter (requests/second), on top of max_rps for listings
 download_max_rps = 0.5
 # Pause all analysis this long after a key/permission/model/request error (then one probe form)
