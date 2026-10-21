@@ -55,8 +55,9 @@ class CaseDrafter:
                 status = None
             if type(status) is not int or not 100 <= status <= 599:
                 status = "unknown"
-            logger.warning("AI draft failure stage=anthropic-request exception=%s status=%s",
-                           type(exc).__name__, status)
+            logger.warning(
+                "AI draft failure stage=anthropic-request exception=%s status=%s error=%s",
+                type(exc).__name__, status, exc, exc_info=True)
             cost = getattr(exc, "cost_usd", 0.0)
             if cost:
                 self.store.record_draft_cost(case["parent"], case["url"], self.cfg.model,

@@ -317,10 +317,6 @@ class SensitiveRequestError(Exception):
     status_code = 404
 
 
-class MissingStatusRequestError(Exception):
-    pass
-
-
 class InvalidStatusRequestError(Exception):
     status_code = "secret-status-object"
 
@@ -339,7 +335,16 @@ class FailingMessages:
         raise self.error
 
 
-def _assert_sanitized_draft_failure(caplog, out, expected_exception, expected_status):
+class ChainedFailingMessages:
+    def create(self, **kw):
+        try:
+            raise RuntimeError("underlying client detail")
+        except RuntimeError as exc:
+            raise TypeError("draft request type mismatch") from exc
+
+
+def _assert_draft_failure(caplog, out, expected_exception, expected_status,
+                          expected_error):
     records = [record for record in caplog.records
                if record.name == "rg2watch.case_draft"
                and record.levelno == logging.WARNING]
@@ -347,17 +352,16 @@ def _assert_sanitized_draft_failure(caplog, out, expected_exception, expected_st
     record = records[0]
     rendered = record.getMessage()
     assert rendered == ("AI draft failure stage=anthropic-request "
-                        f"exception={expected_exception} status={expected_status}")
-    assert record.exc_info is None
-    assert not any(isinstance(arg, BaseException) for arg in record.args)
+                        f"exception={expected_exception} status={expected_status} "
+                        f"error={expected_error}")
+    assert record.exc_info is not None
+    assert expected_error in caplog.text
+    assert "Traceback (most recent call last):" in caplog.text
     assert out["warning"] == "AI draft failed; use the manual template"
     assert out["summary"] == manual_template(out["case"])
-    for sensitive in ("secret-token", "internal-note", "prompt-body",
-                      "missing-status-secret", "secret-status-object",
-                      "status-access-secret", URL,
-                      "проверити записник", "Напиши кратак", "Traceback"):
-        assert sensitive not in rendered
-        assert sensitive not in out["warning"]
+    response = json.dumps(out, ensure_ascii=False)
+    assert expected_error not in response
+    assert "Traceback" not in response
 
 
 @pytest.mark.parametrize(("error", "expected_exception", "expected_status"), [
@@ -368,7 +372,7 @@ def _assert_sanitized_draft_failure(caplog, out, expected_exception, expected_st
     (RaisingStatusRequestError("secret-token internal-note prompt-body"),
      "RaisingStatusRequestError", "unknown"),
 ])
-def test_ai_draft_request_failure_logs_only_sanitized_classification(
+def test_ai_draft_request_failure_logs_raw_error_and_traceback(
         tmp_path, caplog, error, expected_exception, expected_status):
     store, service, _ = handoff(tmp_path)
     client = type("Client", (), {"messages": FailingMessages(error)})()
@@ -377,19 +381,21 @@ def test_ai_draft_request_failure_logs_only_sanitized_classification(
     with caplog.at_level(logging.WARNING, logger="rg2watch.case_draft"):
         out = service.prepare(URL, draft=True)
 
-    _assert_sanitized_draft_failure(caplog, out, expected_exception, expected_status)
+    _assert_draft_failure(caplog, out, expected_exception, expected_status, str(error))
 
 
-def test_ai_draft_request_failure_without_status_logs_sanitized_unknown(tmp_path, caplog):
+def test_ai_draft_request_failure_without_status_logs_chained_traceback(tmp_path, caplog):
     store, service, _ = handoff(tmp_path)
-    error = MissingStatusRequestError("missing-status-secret internal-note prompt-body")
-    client = type("Client", (), {"messages": FailingMessages(error)})()
+    client = type("Client", (), {"messages": ChainedFailingMessages()})()
     service.drafter = CaseDrafter(store, service.cfg, client)
 
     with caplog.at_level(logging.WARNING, logger="rg2watch.case_draft"):
         out = service.prepare(URL, draft=True)
 
-    _assert_sanitized_draft_failure(caplog, out, "MissingStatusRequestError", "unknown")
+    _assert_draft_failure(caplog, out, "TypeError", "unknown", "draft request type mismatch")
+    assert "underlying client detail" in caplog.text
+    assert "The above exception was the direct cause of the following exception:" in caplog.text
+    assert "underlying client detail" not in json.dumps(out, ensure_ascii=False)
 
 
 def test_ai_draft_is_explicit_bounded_cyrillic_billed_and_has_no_failure_log(tmp_path, caplog):
