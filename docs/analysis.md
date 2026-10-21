@@ -42,9 +42,15 @@ X2); when it works, analysis resumes ("[rg2-watch] analysis resumed"). While the
 extended, "[rg2-watch] analysis still paused since HH:MM" is re-sent at most once an hour. When
 RIK is busy or blocking a download (including a download that takes longer than 120 s in one
 attempt), the form is retried after 120 s without using an attempt, and workers sit out the
-watcher's blocked pause. When PDF downloads are refused (401/403) 3 times in a row, workers stop
-downloading for `blocked_pause_s`. You get one "[rg2-watch] PDF downloads blocked/unavailable since
-HH:MM" alert (at that pause, or after 10 deferrals in a row) and one when downloads work again.
+watcher's blocked pause. During `watch --analyze`, an uncached RIK PDF that answers HTTP 404 is also
+retried every 120 s while that document URL remains active. These retries do not use analysis
+attempts or produce D3; analysis resumes automatically if the PDF becomes available. A 404 breaks
+the consecutive refused-download count, while 3 consecutive 401/403 responses stop downloads for
+`blocked_pause_s`. You get one "[rg2-watch] PDF downloads blocked/unavailable since HH:MM" alert at
+that pause, or after 10 download deferrals in a row across documents, and one when downloads work
+again. A malformed or non-PDF response remains a permanent D3. This automatic 404 retry applies to
+the watch pipeline, not one-off or batch analysis, and does not imply that a browser PDF link is
+available yet.
 After fixing a problem, put failed forms back in the queue:
 
     uv run rg2watch requeue [--parent <parent>]            # forms that used all 3 attempts (X2)

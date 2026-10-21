@@ -90,7 +90,8 @@ from the database without re-alerting.
 | "analysis paused: ..." | Key, credit or model problem | Fix it (top up credit, check `.env`), then wait; it retries itself after 10 min. |
 | "spend cap reached" | `max_spend_usd` hit | Raise it in `rg2watch.toml`, restart `watch`. Watching continued meanwhile. |
 | "analysis delayed: Anthropic overloaded" | Anthropic busy | Nothing; forms are retried without losing attempts. |
-| "PDF downloads blocked" | RIK refusing downloads | Nothing; downloads pause and resume. Listing changes are still detected. |
+| An active form's PDF link answers 404 | RIK listed the document before its PDF became available | Nothing; `watch --analyze` retries the uncached PDF every 120 s without using analysis attempts or creating D3, and resumes automatically when it appears. Browser links may still show 404 meanwhile. |
+| "PDF downloads blocked" | RIK refusing downloads (consecutive 401/403), or at least 10 cumulative download deferrals | Nothing; downloads recover automatically. A 401/403 streak pauses downloads; an HTTP 404 instead breaks that streak. Listing changes are still detected. |
 | Forms stuck as failed (X2/D3/X1, LOW) | Analysis gave up on them | After fixing the cause: `uv run --env-file .env rg2watch requeue --parent <parent> --failed`, then keep `watch --analyze` running. |
 | Watch started without `--analyze` | Forms recorded, not analysed | Restart with `--analyze`, and `uv run rg2watch requeue --parent <parent> --skipped`. |
 
