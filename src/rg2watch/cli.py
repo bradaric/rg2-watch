@@ -103,6 +103,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
     s.add_argument("--analyze-backlog", action="store_true",
                    help="with analysis on, also analyse forms seen before analysis was enabled")
+    s.add_argument("--no-ntfy", action="store_true",
+                   help="print and mark alerts handled without sending ntfy (including pending alerts)")
 
     s = sub.add_parser("analyze", parents=[common],
                        help="analyse one RG-2 PDF (local path or URL of a registered election)")
@@ -213,6 +215,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def _config(args) -> Config:
     cfg = load_config(args.config)
+    if getattr(args, "no_ntfy", False):
+        cfg.ntfy_topic = None
     if args.db is not None:
         cfg.db_path = args.db
     if getattr(args, "model", None):

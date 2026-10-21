@@ -1,4 +1,5 @@
 import io
+import json
 import sqlite3
 import threading
 from types import SimpleNamespace
@@ -7,9 +8,9 @@ import httpx
 import pytest
 
 import rg2watch.cli as cli
-from rg2watch.cli import _UntilDone, main
+from rg2watch.cli import _UntilDone, _config, _parser, main
 from rg2watch.config import Config
-from rg2watch.models import Doc, Election, Event
+from rg2watch.models import Doc, Election, Event, Finding
 from rg2watch.notify import Notifier
 from rg2watch.replay import make_replay_server
 from rg2watch.store import Store
@@ -17,6 +18,34 @@ from test_e2e_replay import make_fixture_dir
 from test_watcher import doc, env
 
 P = "662405"
+
+
+def test_no_ntfy_is_watch_only():
+    parser = _parser()
+    assert parser.parse_args(["watch", "--no-ntfy"]).no_ntfy is True
+    assert parser.parse_args(["watch"]).no_ntfy is False
+
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["add", "http://rik.test/zapisnici/1", "--no-ntfy"])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("source", ["toml", "environment"])
+@pytest.mark.parametrize("disabled", [False, True])
+def test_no_ntfy_overrides_effective_topic(tmp_path, monkeypatch, source, disabled):
+    config_path = tmp_path / "rg2watch.toml"
+    if source == "toml":
+        config_path.write_text('ntfy_topic = "configured-test-topic"\n')
+    else:
+        config_path.write_text("")
+        monkeypatch.setenv("RG2W_NTFY_TOPIC", "environment-test-topic")
+
+    argv = ["watch", "--config", str(config_path)]
+    if disabled:
+        argv.append("--no-ntfy")
+    cfg = _config(_parser().parse_args(argv))
+
+    assert (cfg.ntfy_topic is None) is disabled
 
 
 @pytest.fixture
@@ -101,6 +130,86 @@ def test_flag_absent_loop_unchanged(rehearsal, monkeypatch):
     monkeypatch.setattr(cli.Watcher, "run_once", stop_after_two)
     assert main(argv) == 0
     assert len(ticks) == 2
+
+
+@pytest.mark.parametrize("topic_source", ["toml", "environment"])
+def test_no_ntfy_cli_prints_and_consumes_pending_and_new_findings(
+        rehearsal, monkeypatch, capsys, topic_source):
+    argv, db = rehearsal
+    cfg_path = db.parent / "rg2watch.toml"
+    extra = 'ntfy_url = "http://ntfy.test"\n'
+    if topic_source == "toml":
+        extra += 'ntfy_topic = "configured-test-topic"\n'
+    else:
+        monkeypatch.setenv("RG2W_NTFY_TOPIC", "environment-test-topic")
+    cfg_path.write_text(cfg_path.read_text() + extra)
+
+    old_doc = Doc("Old municipality", "1", "Old station", "old", 6,
+                  "http://rik.test/old.pdf", "2026-10-20T10:00")
+    store = Store(db)
+    store.apply_events(P, store.start_sweep(P, "test-old"), [Event("added", old_doc)])
+    assert store.add_finding(P, Finding("A1", "HIGH", old_doc, "old pending finding"), old_doc.url)
+    old_id = store.unalerted(P, {"HIGH"})[0][0]
+    store.close()
+
+    requests = []
+    monkeypatch.setattr(cli, "_notifier_http", lambda: httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: (requests.append(request), httpx.Response(200))[1])))
+
+    real_background = cli._background
+    monkeypatch.setattr(cli, "_background", lambda name, stop, period, fn, first=None: (
+        SimpleNamespace(join=lambda timeout: None) if name == "deliver"
+        else real_background(name, stop, period, fn, first)))
+
+    generated = []
+
+    def controlled_run_once(self):
+        if not generated:
+            new_doc = Doc("New municipality", "2", "New station", "new", 9,
+                          "http://rik.test/new.pdf", "2026-10-20T10:01")
+            self.store.apply_events(P, self.store.start_sweep(P, "test-new"),
+                                    [Event("added", new_doc)])
+            self.on_events([Event("added", new_doc)])
+            self.on_status("watcher test status")
+            pending = self.store.unalerted(P, {"HIGH", "MEDIUM"})
+            generated.append((new_doc, [fid for fid, _ in pending]))
+        self._first_pass.clear()
+        self.client.last_ok = 1.0
+
+    monkeypatch.setattr(cli.Watcher, "run_once", controlled_run_once)
+    capsys.readouterr()
+    assert main([*argv, "--until-done", "--no-ntfy"]) == 0
+    out = capsys.readouterr().out
+
+    new_doc, initially_pending = generated[0]
+    assert old_id in initially_pending and len(initially_pending) >= 2
+    assert "old pending finding" in out
+    assert "RG-9 published" in out
+    assert "watcher test status" in out
+    assert requests == []
+    store = Store(db)
+    assert store.unalerted(P, {"HIGH", "MEDIUM"}) == []
+    store.close()
+    status = json.loads((db.parent / db.stem / "status.json").read_text())
+    assert status["ntfy"]["enabled"] is False
+
+    assert main([*argv, "--until-done"]) == 0
+    assert requests == []
+
+    later_doc = Doc("Later municipality", "3", "Later station", "later", 6,
+                    "http://rik.test/later.pdf", "2026-10-20T10:02")
+    store = Store(db)
+    store.apply_events(P, store.start_sweep(P, "test-later"), [Event("added", later_doc)])
+    assert store.add_finding(P, Finding("A2", "HIGH", later_doc, "later pending finding"),
+                             later_doc.url)
+    effective = _config(_parser().parse_args(argv))
+    notifier = Notifier(effective, cli._notifier_http(), out=io.StringIO())
+    _, deliver = cli._handlers(store, notifier, P)
+    deliver(flush=True)
+    assert len(requests) == 1
+    assert store.unalerted(P, {"HIGH", "MEDIUM"}) == []
+    store.close()
 
 
 # --- _UntilDone with a controllable queue --------------------------------------------------
