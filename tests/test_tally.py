@@ -278,7 +278,8 @@ def test_hero_markup_labelled_and_safe():
     assert 'id="hero"' in html and "НЕЗВАНИЧНО" in html and "Први подаци" in html
     assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
     assert "Esc" in html and 'get("hero") === "1"' in html and 'ev.key === "Escape"' in html
-    assert 'id="hs-forms"' in html
+    assert 'id="hs-forms-primary"' in html and 'id="hs-forms-context"' in html
+    assert '<span id="hv-forms">-</span><span class="of" id="hv-formstot"></span>' in html
     for text in ("Општина", "Обухваћени записници", "Приказ података", "Цео екран",
                  "Излаз (Esc)", "Излазност", "Обрађена бирачка места", "Записници", "Важећи гласови"):
         assert text in html
@@ -291,9 +292,10 @@ def test_hero_markup_labelled_and_safe():
     assert 'id="hs-valid-primary"' in html and 'id="hs-valid-context"' in html
     assert "#hs-valid-primary,#hs-valid-context{white-space:pre-line}" in html
     assert "#hs-valid-context{border-top:1px solid var(--line2);margin-top:.7em;padding-top:.7em;font-size:.9em}" in html
-    assert "#hs-forms{white-space:pre-line}" in html
-    assert "Од оних за проверу, прихваћено после прегледа: " in html
-    assert "У збиру: " in html
+    assert "#hs-forms-primary,#hs-forms-context{white-space:pre-line}" in html
+    assert "#hs-forms-context{border-top:1px solid var(--line2)" in html
+    assert "Од оних за проверу, прихваћено после прегледа: " not in html
+    assert "урачунато у резултат" in html
     assert "Ван заједничког збира: " in html
     assert "Неусаглашена разлика излазности" in html
     assert "само са исправкама: " in html and "само оригинално: " in html
@@ -727,16 +729,20 @@ for (const [warning, expected] of renderedWarnings) {
 T.scope_note = null;
 r = row([60, 40], [55, 45]);
 r.counted = 15; r.clean = 10; r.excluded = 5;
-r.all.vote_forms = 6; r.cl.vote_forms = 6;
+r.cl = {...r.cl};
+r.all.vote_forms = 12; r.cl.vote_forms = 10;
 r.all.invalid = 9; r.all.withheld_valid = 11; r.all.voted = 120;
 setData(r);
 els.tview.value = "corrected";
 els.tmode.value = "all";
 renderHero();
 assert(els.herotitle.textContent.endsWith(" — са исправкама (RG-7)"));
-assert.deepEqual(els["hs-forms"].textContent.split("\n"), [
-  "10 без уочених проблема · 5 за проверу",
-  "Од оних за проверу, прихваћено после прегледа: 0",
+assert.equal(els["hv-forms"].textContent, "12");
+assert.equal(els["hv-formstot"].textContent, " / 15");
+assert.equal(els["hs-forms-primary"].textContent, "урачунато у резултат");
+assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
+  "10 без уочених проблема · 2 за проверу",
+  "Није урачунато: 3 записника — подаци по листама нису потпуни или усаглашени",
 ]);
 assert.deepEqual(els["hs-valid-primary"].textContent.split("\n"), [
   "Неважећи: 9",
@@ -744,7 +750,6 @@ assert.deepEqual(els["hs-valid-primary"].textContent.split("\n"), [
 ]);
 assert.deepEqual(els["hs-valid-context"].textContent.split("\n"), [
   "Није урачунато: 11 важећих гласова — подаци по листама нису потпуни или усаглашени",
-  "У збиру: 6 од 15 записника",
 ]);
 assert(els.herofoot.children[0].includes("НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а. Стање у "));
 assert(els.herofoot.children[0].includes("20:00"));
@@ -752,112 +757,35 @@ for (const absent of ["opaque-model-v1", "Сви обрађени записни
   assert(!els.herofoot.children[0].includes(absent));
 els.tmode.value = "cl";
 renderHero();
-assert.deepEqual(els["hs-forms"].textContent.split("\n"), [
-  "без уочених проблема · 5 за проверу изостављено",
-  "Од оних за проверу, прихваћено после прегледа: 0",
+assert.equal(els["hv-forms"].textContent, "10");
+assert.equal(els["hv-formstot"].textContent, " / 10");
+assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
+  "10 без уочених проблема · 0 за проверу",
+  "Није урачунато: 0 записника — подаци по листама нису потпуни или усаглашени",
 ]);
-assert(els["hs-valid-context"].textContent.split("\n").includes("У збиру: 6 од 10 записника"));
+assert(!els["hs-valid-context"].textContent.includes("У збиру:"));
 
 els.tview.value = "filed";
 r.fclean = 8; r.fexcluded = 7; r.fcl = {...r.fcl}; r.fall.vote_forms = 4; r.fcl.vote_forms = 3;
 els.tmode.value = "all";
 renderHero();
 assert.equal(els.herotitle.textContent, "Све општине — Избори Ћирилица");
-assert.deepEqual(els["hs-forms"].textContent.split("\n"), [
-  "8 без уочених проблема · 7 за проверу",
-  "Од оних за проверу, прихваћено после прегледа: 0",
+assert.equal(els["hv-forms"].textContent, "4");
+assert.equal(els["hv-formstot"].textContent, " / 15");
+assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
+  "3 без уочених проблема · 1 за проверу",
+  "Није урачунато: 11 записника — подаци по листама нису потпуни или усаглашени",
 ]);
-assert(els["hs-valid-context"].textContent.split("\n").includes("У збиру: 4 од 15 записника"));
 els.tmode.value = "cl";
 renderHero();
-assert.deepEqual(els["hs-forms"].textContent.split("\n"), [
-  "без уочених проблема · 7 за проверу изостављено",
-  "Од оних за проверу, прихваћено после прегледа: 0",
+assert.equal(els["hv-forms"].textContent, "3");
+assert.equal(els["hv-formstot"].textContent, " / 8");
+assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
+  "3 без уочених проблема · 0 за проверу",
+  "Није урачунато: 5 записника — подаци по листама нису потпуни или усаглашени",
 ]);
-assert(els["hs-valid-context"].textContent.split("\n").includes("У збиру: 3 од 8 записника"));
 assert(!els.herofoot.children[0].includes("оригинални"));
 
-const acceptedAlpha = row([60, 40], [55, 45]);
-acceptedAlpha.excluded = 5;
-const acceptedBeta = row([60, 40], [55, 45]);
-acceptedBeta.m = "Beta";
-acceptedBeta.excluded = 5;
-const acceptedOverall = row([60, 40], [55, 45]);
-acceptedOverall.m = "(all)";
-acceptedOverall.excluded = 5;
-setData(acceptedOverall);
-T.munis = [acceptedAlpha, acceptedBeta];
-T.excluded = [
-  {id: 1, m: "Alpha"}, {id: 2, m: "Alpha"}, {id: 4, m: "Alpha"}, {id: 3, m: "Beta"}
-];
-T.excluded_filed = [
-  {id: 1, m: "Alpha"}, {id: 5, m: "Alpha"}
-];
-D.rows = [
-  {id: 1, u: "u1", rv: {v: "ok"}, v: [{u: "old1", rv: {v: "escalate"}}]},
-  {id: 2, u: "u2", rv: {v: "escalate"}, v: []},
-  {id: 3, u: "u3", rv: {v: "ok"}, v: []},
-  {id: 4, u: "u4", rv: null, v: [{u: "old4", rv: {v: "ok"}}]},
-  {id: 5, u: "u5", rv: {v: "ok"}, v: []},
-  {id: 9, u: "u9", rv: {v: "ok"}, v: []}
-];
-const smallExcluded = T.excluded, smallFiled = T.excluded_filed, smallRows = D.rows;
-heroPicked = true;
-heroMuni = "";
-els.tview.value = "corrected";
-els.tmode.value = "all";
-renderHero();
-assert.deepEqual(els["hs-forms"].textContent.split("\n").slice(1), ["Од оних за проверу, прихваћено после прегледа: 2"]);
-heroMuni = "Alpha";
-els.tmode.value = "cl";
-renderHero();
-assert(els["hs-forms"].textContent.split("\n")[0].startsWith("без уочених проблема ·"));
-assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 1");
-els.tmode.value = "all";
-renderHero();
-assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 1");
-els.tview.value = "filed";
-renderHero();
-assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 2");
-REV = {u1: {v: "unsure"}};
-els.tview.value = "corrected";
-renderHero();
-assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 0");
-LOCAL.u4 = {v: "ok", pending: true};
-renderHero();
-assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 1");
-delete LOCAL.u4;
-renderHero();
-assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 0");
-const bulkExcluded = [], bulkRows = [];
-for (let i = 0; i < 1000; i++) {
-  bulkExcluded.push({id: i, m: "Alpha"});
-  bulkRows.push({id: i, u: "bulk" + i, rv: {v: "ok"}, v: []});
-}
-T.excluded = bulkExcluded;
-D.rows = bulkRows;
-REV = null;
-els.tview.value = "corrected";
-renderHero();
-assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 1,000");
-T.excluded = smallExcluded;
-T.excluded_filed = smallFiled;
-D.rows = smallRows;
-els.tview.value = "diff";
-renderHero();
-assert.equal(els["hs-forms"].textContent, "промене броја: без уочених проблема / за проверу");
-assert(!els["hs-forms"].textContent.includes("прихваћено"));
-els.tview.value = "corrected";
-heroMuni = "Alpha";
-heroPicked = true;
-T.excluded = [{id: 404, m: "Alpha"}];
-D.rows = [{id: 1, u: "u1", rv: {v: "ok"}, v: []}];
-renderHero();
-assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 0");
-delete T.excluded;
-renderHero();
-assert.equal(els["hs-forms"].textContent.split("\n")[1], "Од оних за проверу, прихваћено после прегледа: 0");
-delete T.excluded_filed;
 D.rows = [];
 REV = null;
 for (const k of Object.keys(LOCAL)) delete LOCAL[k];
@@ -920,8 +848,9 @@ setData(r);
 els.tmode.value = "all";
 renderHero();
 assert(els.herotitle.textContent.endsWith(" — РАЗЛИКА (са исправкама RG-7 − оригинални RG-2)"));
-assert.equal(els["hs-forms"].textContent, "промене броја: без уочених проблема / за проверу");
-assert(!els["hs-forms"].textContent.includes("прихваћено"));
+assert.equal(els["hv-formstot"].textContent, "");
+assert.equal(els["hs-forms-primary"].textContent, "промене броја: без уочених проблема / за проверу");
+assert.equal(els["hs-forms-context"].textContent, "");
 assert.deepEqual(els["hs-valid-primary"].textContent.split("\n"), [
   "Разлика неважећих: +7",
   "У оба приказа у збиру: 5 од 13 упарених записника",
@@ -1034,7 +963,7 @@ T.names = []; T.names_note = emptyNational.names_note;
 renderHero();
 const listWarning = "Упоредиви збирови по листама нису доступни за овај обухват.";
 const correctedUnavailableLines = els["hs-valid-context"].textContent.split("\n");
-assert.equal(correctedUnavailableLines.length, 3);
+assert.equal(correctedUnavailableLines.length, 2);
 assert.equal(correctedUnavailableLines.at(-1), listWarning);
 els.tview.value = "diff";
 renderHero();
@@ -1066,9 +995,6 @@ assert(!bodyHero && els.herobtn.textContent === "Цео екран");
 
 async function flushTurns() {
   for (let i = 0; i < 4; i++) await Promise.resolve();
-}
-function acceptedCaption() {
-  return els["hs-forms"].textContent.split("\n")[1];
 }
 function installReviewTable(id) {
   const api = {
@@ -1111,13 +1037,12 @@ async function refreshCases() {
   submitReview({id, u: url}, "ok", "", null);
   assert.equal(heroPaints, 1, "submit paints the hero once before fetch settles");
   assert.equal(LOCAL[url].pending, true);
-  assert.equal(acceptedCaption(), "Од оних за проверу, прихваћено после прегледа: 1");
+  assert(!els["hs-forms-context"].textContent.includes("прихваћено"));
 
   gate.reject(new Error("save failed"));
   await flushTurns();
   assert.equal(heroPaints, 2, "failed save paints the hero once more");
   assert.equal(url in LOCAL, false);
-  assert.equal(acceptedCaption(), "Од оних за проверу, прихваћено после прегледа: 0");
 
   table = null;
   const body = {[url]: {v: "ok"}};
@@ -1126,7 +1051,6 @@ async function refreshCases() {
   loadReviews();
   await flushTurns();
   assert.equal(heroPaints, 1, "changed poll paints once when the table is missing");
-  assert.equal(acceptedCaption(), "Од оних за проверу, прихваћено после прегледа: 1");
   heroPaints = 0;
   loadReviews();
   await flushTurns();
@@ -1139,7 +1063,6 @@ async function refreshCases() {
   loadReviews();
   await flushTurns();
   assert.equal(LOCAL[url2].pending, true, "poll must not delete a pending verdict");
-  assert.equal(acceptedCaption(), "Од оних за проверу, прихваћено после прегледа: 2");
 
   for (const k of Object.keys(LOCAL)) delete LOCAL[k];
   REV = null;
