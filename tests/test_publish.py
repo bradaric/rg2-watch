@@ -177,6 +177,18 @@ def test_preflight_uses_exact_cached_pdf_without_downloading(tmp_path):
     store.close()
 
 
+def test_manual_template_has_one_clear_rik_link():
+    case = {"election": "Парламентарни избори 2023", "municipality": "Алибунар",
+            "station": "12", "url": "https://example.test/version.pdf",
+            "rik_url": "https://rik.example/document.pdf"}
+
+    assert manual_template(case) == (
+        "Избори: Парламентарни избори 2023\n"
+        "Општина и бирачко место: Алибунар, 12\n"
+        "РИК: https://rik.example/document.pdf\n\n"
+        "Разлог за проверу: [унесите опис].")
+
+
 @pytest.mark.parametrize("data", [b"not pdf", b"", b"%PDF" + b"x" * 1001])
 def test_preflight_rejects_bad_or_oversize_pdf(tmp_path, data):
     _, service, _ = handoff(tmp_path, pdf=data)

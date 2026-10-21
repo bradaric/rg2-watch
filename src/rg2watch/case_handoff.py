@@ -128,9 +128,8 @@ def viber_revision(row, url: str, reason: str) -> dict:
 def manual_template(case: dict) -> str:
     return (f"Избори: {case['election']}\n"
             f"Општина и бирачко место: {case['municipality']}, {case['station']}\n"
-            f"Верзија документа: {case['url']}\n"
             f"РИК: {case['rik_url']}\n\n"
-            "Разлог за пажљиву људску проверу: [унесите опрезан, проверен опис].")
+            "Разлог за проверу: [унесите опис].")
 
 
 class CaseHandoff:
