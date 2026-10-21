@@ -188,7 +188,9 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 #hs-valid-primary,#hs-valid-context{white-space:pre-line}
 #hs-valid-context{border-top:1px solid var(--line2);margin-top:.7em;padding-top:.7em;font-size:.9em}
 #hs-valid-context:empty{display:none}
-#hs-forms{white-space:pre-line}
+#hs-forms-primary,#hs-forms-context{white-space:pre-line}
+#hs-forms-context{border-top:1px solid var(--line2);margin-top:.7em;padding-top:.7em;font-size:.9em}
+#hs-forms-context:empty{display:none}
 .tile .v{font-size:min(clamp(2.1rem,4.4vw,5.6rem),19cqi);font-weight:800;line-height:1.05;letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin:2px 0 var(--s1);white-space:nowrap}
 .tile .v .of{font-size:.45em;font-weight:700;color:var(--mut);letter-spacing:0}
 .prog{height:6px;background:var(--track);border-radius:3px;overflow:hidden;margin:var(--s1) 0 var(--s1)}
@@ -285,7 +287,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <div id="heronums">
 <div class="tile"><div class="k">Излазност</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
 <div class="tile"><div class="k">Обрађена бирачка места</div><div class="v"><span id="hv-st">-</span><span class="of" id="hv-sttot"></span></div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
-<div class="tile"><div class="k">Записници</div><div class="v" id="hv-forms">-</div><div class="s" id="hs-forms"></div></div>
+<div class="tile"><div class="k">Записници</div><div class="v"><span id="hv-forms">-</span><span class="of" id="hv-formstot"></span></div><div class="s" id="hs-forms"><div id="hs-forms-primary"></div><div id="hs-forms-context"></div></div></div>
 <div class="tile"><div class="k">Важећи гласови</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"><div id="hs-valid-primary"></div><div id="hs-valid-context"></div></div></div>
 </div>
 <div id="heronames" class="warnbox" hidden></div>
@@ -1122,24 +1124,6 @@ function heroListNames(owner) {
   const names = owner && owner.names || [], fallback = new Set(owner && owner.fallback_name_indices || []);
   return names.map((name, i) => fallback.has(i) ? "Листа " + (i + 1) : name);
 }
-function acceptedAmongFlagged(flagged, forms, reviewOf) {
-  const byId = new Map();
-  for (const form of forms || []) if (form && !byId.has(form.id)) byId.set(form.id, form);
-  const seen = new Set();
-  let n = 0;
-  for (const item of flagged || []) {
-    if (!item || seen.has(item.id)) continue;
-    seen.add(item.id);
-    const review = byId.has(item.id) ? reviewOf(byId.get(item.id)) : null;
-    if (review && review.v === "ok") n++;
-  }
-  return n;
-}
-function heroFlagged(raw) {
-  const list = NV() === "filed" ? T.excluded_filed : T.excluded;
-  if (raw === T.overall) return list || [];
-  return (list || []).filter(item => item.m === raw.m);
-}
 function initHero() {
   for (let i = 0; i <= TOP_LISTS; i++) {
     const row = mk("div", null, "hrow"), hd = mk("div", null, "hd"), no = mk("span", null, "no"),
@@ -1189,15 +1173,23 @@ function renderHero() {
   $("hp-st").style.width = (cover == null ? 0 : Math.min(100, cover * 100)) + "%";
   if (dg) {
     put("hv-forms", dnum(r.clean) + " / " + dnum(r.excluded));
-    put("hs-forms", "промене броја: без уочених проблема / за проверу");
-  } else if (mode === "cl") {
-    put("hv-forms", num(r.clean));
-    put("hs-forms", "без уочених проблема · " + num(r.excluded) + " за проверу изостављено" +
-      "\nОд оних за проверу, прихваћено после прегледа: " + num(acceptedAmongFlagged(heroFlagged(raw), D.rows, rvOf)));
+    put("hv-formstot", "");
+    put("hs-forms-primary", "промене броја: без уочених проблема / за проверу");
+    put("hs-forms-context", "");
+  } else if (none) {
+    put("hv-forms", "-");
+    put("hv-formstot", "");
+    put("hs-forms-primary", "");
+    put("hs-forms-context", "");
   } else {
-    put("hv-forms", num(r.counted));
-    put("hs-forms", num(r.clean) + " без уочених проблема · " + num(r.excluded) + " за проверу" +
-      "\nОд оних за проверу, прихваћено после прегледа: " + num(acceptedAmongFlagged(heroFlagged(raw), D.rows, rvOf)));
+    const selected = mode === "cl" ? r.clean : r.counted;
+    const cleanContributing = r.cl.vote_forms;
+    const flaggedContributing = Math.max(0, t.vote_forms - cleanContributing);
+    put("hv-forms", num(t.vote_forms));
+    put("hv-formstot", " / " + num(selected));
+    put("hs-forms-primary", "урачунато у резултат");
+    put("hs-forms-context", num(cleanContributing) + " без уочених проблема · " + num(flaggedContributing) + " за проверу" +
+      "\nНије урачунато: " + num(selected - t.vote_forms) + " записника — подаци по листама нису потпуни или усаглашени");
   }
   put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));
   const gap = t.turnout == null ? null : t.voted - t.valid - t.invalid;
@@ -1218,12 +1210,9 @@ function renderHero() {
     put("hs-valid-primary", lines.join("\n"));
     put("hs-valid-context", "");
   } else {
-    const selected = mode === "cl" ? r.clean : r.counted;
     const primary = ["Неважећи: " + num(t.invalid),
       "Неусаглашена разлика излазности: " + snum(gap)];
-    const context = [
-      "Није урачунато: " + num(t.withheld_valid) + " важећих гласова — подаци по листама нису потпуни или усаглашени",
-      "У збиру: " + t.vote_forms + " од " + selected + " записника"];
+    const context = ["Није урачунато: " + num(t.withheld_valid) + " важећих гласова — подаци по листама нису потпуни или усаглашени"];
     if (noComparableLists) context.push("Упоредиви збирови по листама нису доступни за овај обухват.");
     put("hs-valid-primary", primary.join("\n"));
     put("hs-valid-context", context.join("\n"));
