@@ -482,6 +482,41 @@ def test_folder_is_shared_only_after_both_verified_uploads(tmp_path):
     assert s.get_publication(URL)["phase"] == "published"
 
 
+def test_publication_waits_for_inherited_child_access(tmp_path):
+    _, cases = setup_case(tmp_path)
+
+    class DelayedAccessDrive(FakeDrive):
+        def __init__(self):
+            super().__init__()
+            self.child_checks = 0
+
+        def children_have_public_reader(self, child_ids):
+            self.child_checks += 1
+            return self.child_checks >= 3
+
+    drive = DelayedAccessDrive()
+    root = DriveRoot(tmp_path / "drive-token.json", drive)
+    root.setup()
+    sleeps = []
+
+    result = DrivePublisher(cases, drive, root, sleep=sleeps.append).publish(
+        URL, "Јавни опис", VIBER_REASON)
+
+    assert result["status"] == "published"
+    assert drive.child_checks == 3
+    assert sleeps == [.5, .5]
+
+
+def test_public_case_text_has_no_operator_attribution():
+    case = {"election": "Избори", "municipality": "Општина", "station": "7",
+            "url": "https://example.test/document.pdf", "rik_url": "https://rik.example/"}
+
+    text = DrivePublisher._case_text(case, "Јавни опис", "a" * 64).decode()
+
+    assert "Опис који је одобрио оператор" not in text
+    assert text.endswith("\n\nЈавни опис\n")
+
+
 @pytest.mark.parametrize("crash", ["folder", "pdf", "text", "share"])
 def test_retry_after_each_remote_crash_reuses_ids_and_one_folder(tmp_path, crash):
     s, cases = setup_case(tmp_path)
@@ -785,7 +820,7 @@ def test_api_backed_post_share_failure_is_correlated_bounded_and_non_mutating(
         "format_version": 2, "root_id": root_id, "account_permission_id": account,
         "phase": "created", "my_drive_parent_id": "my-drive-" + secrets["id"],
     }))
-    publisher = DrivePublisher(cases, adapter, DriveRoot(token, adapter))
+    publisher = DrivePublisher(cases, adapter, DriveRoot(token, adapter), sleep=lambda _: None)
     jobs = PublicationJobs(cases, publisher, workers=1)
     try:
         with caplog.at_level(logging.INFO):

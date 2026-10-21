@@ -5,6 +5,7 @@ import io
 import json
 import logging
 from pathlib import Path
+import time
 import uuid
 
 from .case_handoff import CaseError, CaseHandoff
@@ -198,8 +199,17 @@ class LazyConfiguredDrive:
 
 
 class DrivePublisher:
-    def __init__(self, cases: CaseHandoff, drive, root):
+    def __init__(self, cases: CaseHandoff, drive, root, sleep=time.sleep):
         self.cases, self.drive, self.root, self.store = cases, drive, root, cases.store
+        self.sleep = sleep
+
+    def _children_have_public_reader(self, children: list[str]) -> bool:
+        for attempt in range(11):
+            if self.drive.children_have_public_reader(children):
+                return True
+            if attempt < 10:
+                self.sleep(.5)
+        return False
 
     def publish(self, url: str, summary: str, viber_reason: str | None = None) -> dict:
         token = None
@@ -325,7 +335,7 @@ class DrivePublisher:
                 logger.info("publication checkpoint diagnostic_id=%s stage=folder-public",
                             diagnostic_id)
                 children = [publication["pdf_file_id"], publication["text_file_id"]]
-                if not self.drive.children_have_public_reader(children):
+                if not self._children_have_public_reader(children):
                     logger.info("publication checkpoint diagnostic_id=%s "
                                 "stage=child-check-failed", diagnostic_id)
                     raise DriveError("Drive account policy did not expose both folder children")
@@ -344,7 +354,7 @@ class DrivePublisher:
         text = (f"Избори: {case['election']}\nОпштина: {case['municipality']}\n"
                 f"Бирачко место: {case['station']}\nВерзија документа: {case['url']}\n"
                 f"РИК: {case['rik_url']}\nSHA-256 PDF датотеке: {pdf_sha}\n\n"
-                f"Опис који је одобрио оператор:\n{summary}\n")
+                f"{summary}\n")
         return text.encode("utf-8")
 
     @staticmethod
