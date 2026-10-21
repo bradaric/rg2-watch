@@ -1,7 +1,9 @@
 # rg2-watch runbook
 
-Operator steps for election night and for targeted checks afterwards. Reference detail for every
-option is in README.md.
+Operator steps for election night and for targeted checks afterwards.
+See the [README](../README.md) for installation, [Analysis](analysis.md) for models and evaluation,
+[Review and sharing](review-and-sharing.md) for verdicts and case handoff, and
+[Runtime reference](reference.md) for server behavior, throttling and privacy.
 
 All commands run from the repo root. `--env-file .env` loads the Anthropic key (and the ntfy topic,
 if you put it there); commands that never call Claude do not need it.
@@ -24,7 +26,7 @@ fit: `mv data/rehearsal-677087.sqlite data/election-677087.sqlite`.
 ## 1. Days before
 
 - [ ] `uv sync`, then `uv run pytest -q` - all pass.
-- [ ] Anthropic credit: enough for the election (section 5), plus margin.
+- [ ] Anthropic credit: enough for the election (section 6), plus margin.
 - [ ] ntfy: install the ntfy phone app, subscribe to an unguessable topic (the topic name is the
       only secret). Add `RG2W_NTFY_TOPIC=<topic>` to `.env`. Test it:
       `curl -d "rg2-watch test" https://ntfy.sh/<topic>` - the phone must buzz.
@@ -186,3 +188,50 @@ parliamentary one.
 
 Calibration 20/10/2026: Haiku 5.5 matched Sonnet 5.5 on 72 RG-2s; Bonsai (local) recommended as a
 free second opinion afterwards (caught the small rotated scan both missed).
+
+## Watcher behavior and recovery details
+
+HIGH findings (RG-8/RG-9 published, RG-2 replaced, with the old URL as "was: ...") are pushed
+immediately, MEDIUM in digests, LOW only printed. Individual HIGH pushes are capped at
+`high_push_max` (10) per `high_push_window_s` (300 s); the rest roll into one "[HIGH] N findings"
+digest (same compact format) sent when the window allows, so a busy night cannot trip ntfy's rate
+limits. Status alerts (RIK unreachable, analysis paused, spend cap) are separate, go first and are
+never held back by the finding backlog. If one sweep replaces more than `mass_replace_threshold`
+(20) documents, ONE "[rg2-watch] mass replacement: N documents replaced in one sweep (RIK
+re-upload?)" alert is pushed and those D2 findings go to the digest.
+Alerts are delivered, and RIK reachability checked, by their own thread every 5 s, so a slow
+RIK tick (10 minutes at a throttled rate) never holds them back.
+A second `watch` on the same database is refused (exit 2, `<db>.lock` holds the pid of the first). A digest is compact (under 3.5 KB): counts by rule, up
+to 10 detail lines without URLs, and "+K more - open the page, filter MEDIUM" with the page URL when
+serving (a single-finding digest keeps its RIK URL). Every finding is also printed (and flushed) to
+stdout. If ntfy is unreachable, findings stay un-alerted and pushes back off (5 s doubling to
+60 s) before being retried. Ctrl-C or SIGTERM stops cleanly; state is kept in the SQLite DB
+(`data/rg2watch.sqlite` by default, `--db` to change), so a restart resumes without re-alerting.
+
+If RIK answers 401/403 repeatedly, all lanes pause for `blocked_pause_s`. After `blind_alert_s`
+without a successful request you get one HIGH "[rg2-watch] RIK unreachable/blocking since HH:MM"
+push, and "[rg2-watch] RIK reachable again" on recovery.
+
+Starting mid-night on an empty DB? Add `--baseline`: each lane's first full pass records what is
+already published without alerting, prints one `[baseline] <type>: N document(s) recorded` line
+per document type, and later changes alert normally.
+On a DB that already holds documents of the election `--baseline` is refused (exit 2) unless
+`--force-baseline` is given; `scripts/rehearse.sh` only passes it on an empty DB.
+Only care about some places? `--only "Beograd,Нови Сад"` (or `only_municipalities` in the config;
+Cyrillic or Latin, case-insensitive, exact name beats substring) limits every lane to those
+municipalities: no global listings are requested, other documents are not recorded, and an
+unknown or ambiguous name exits 2 with the candidates. Per-municipality counts replace the global
+ones, so a larger set costs more requests per round.
+
+## Replay (rehearsal without RIK)
+
+Download a past election once (polite default 1 request/s; PDFs optional):
+
+    uv run rg2watch fixtures https://www.rik.parlament.gov.rs/zapisnici/662405 --out fixtures [--pdfs --limit-pdfs 50]
+
+Re-enact it locally with a fake RIK server (documents appear along their original upload times,
+`--speed` is simulated seconds per real second, `--faults` injects a replace, a removal and a synthetic RG-9):
+
+    uv run rg2watch replay --fixtures fixtures/662405 --speed 600 --faults
+    uv run rg2watch add http://127.0.0.1:8765/zapisnici/662405 --db /tmp/replay.sqlite
+    uv run rg2watch watch --parent 662405 --base-url http://127.0.0.1:8765 --db /tmp/replay.sqlite
