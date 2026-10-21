@@ -275,7 +275,7 @@ def test_snapshot_turnout_gap_formats_zero_and_signed_values():
 
 def test_hero_markup_labelled_and_safe():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert 'id="hero"' in html and "НЕЗВАНИЧНО" in html and "Веома рано" in html
+    assert 'id="hero"' in html and "НЕЗВАНИЧНО" in html and "Први подаци" in html
     assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
     assert "Esc" in html and 'get("hero") === "1"' in html and 'ev.key === "Escape"' in html
     assert 'id="hs-forms"' in html
