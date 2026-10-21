@@ -244,12 +244,16 @@ def test_404_raises_typed_error_immediately_for_download_and_listing():
     assert len(calls) == 1
     assert client.download_last_ok is None
 
+    client.download_blocked_streak = 2
+    client.download_last_ok = 123.0
     with pytest.raises(RikNotFound) as listing_error:
         client.listing(Filters(doc_type=6), 1)
     assert isinstance(listing_error.value, RikError)
     assert not isinstance(listing_error.value, RikUnavailable)
     assert len(calls) == 2
     assert client.last_ok is None
+    assert client.download_blocked_streak == 2
+    assert client.download_last_ok == 123.0
 
 
 def test_pdf_404_breaks_consecutive_blocked_streak():
@@ -390,7 +394,6 @@ def test_limiter_threads_never_exceed_cap():
 
 
 def test_403_is_blocked_overload_without_retry_and_tracked():
-    from rg2watch.rik_client import RikBlocked
     calls = []
     status = [403]
 
@@ -401,8 +404,9 @@ def test_403_is_blocked_overload_without_retry_and_tracked():
     client, limiter, t = make(handler)
     assert client.last_ok is None
     for _ in range(2):
-        with pytest.raises(RikBlocked):
+        with pytest.raises(RikBlocked) as error:
             client.listing(Filters(), 1)
+        assert not isinstance(error.value, RikNotFound)
     assert len(calls) == 2 and client.blocked_streak == 2
     assert limiter.current_rps < 2.0
     assert issubclass(RikBlocked, RikUnavailable)
