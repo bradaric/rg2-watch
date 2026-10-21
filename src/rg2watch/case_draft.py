@@ -1,9 +1,13 @@
 """Optional, paid Anthropic drafting for an operator-edited public case summary."""
+import logging
 import re
 
 from .analyze import _usage_cost, is_ollama
 from .config import Config, UnknownPrice, model_prices
 from .store import Store
+
+
+logger = logging.getLogger("rg2watch.case_draft")
 
 
 class DraftUnavailable(RuntimeError):
@@ -45,6 +49,14 @@ class CaseDrafter:
                 model=self.cfg.model, max_tokens=600, temperature=0,
                 messages=[{"role": "user", "content": prompt}], timeout=30.0)
         except Exception as exc:
+            try:
+                status = getattr(exc, "status_code", None)
+            except Exception:
+                status = None
+            if type(status) is not int or not 100 <= status <= 599:
+                status = "unknown"
+            logger.warning("AI draft failure stage=anthropic-request exception=%s status=%s",
+                           type(exc).__name__, status)
             cost = getattr(exc, "cost_usd", 0.0)
             if cost:
                 self.store.record_draft_cost(case["parent"], case["url"], self.cfg.model,

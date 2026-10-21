@@ -313,17 +313,83 @@ class FakeMessages:
                                      "content": [block]})()
 
 
-def test_ai_draft_is_explicit_bounded_cyrillic_and_billed_to_existing_cap(tmp_path):
+class SensitiveRequestError(Exception):
+    status_code = 404
+
+
+class InvalidStatusRequestError(Exception):
+    status_code = "secret-status-object"
+
+
+class RaisingStatusRequestError(Exception):
+    @property
+    def status_code(self):
+        raise RuntimeError("status-access-secret")
+
+
+class FailingMessages:
+    def __init__(self, error):
+        self.error = error
+
+    def create(self, **kw):
+        raise self.error
+
+
+def _assert_sanitized_draft_failure(caplog, out, expected_exception, expected_status):
+    records = [record for record in caplog.records
+               if record.name == "rg2watch.case_draft"
+               and record.levelno == logging.WARNING]
+    assert len(records) == 1
+    record = records[0]
+    rendered = record.getMessage()
+    assert rendered == ("AI draft failure stage=anthropic-request "
+                        f"exception={expected_exception} status={expected_status}")
+    assert record.exc_info is None
+    assert not any(isinstance(arg, BaseException) for arg in record.args)
+    assert out["warning"] == "AI draft failed; use the manual template"
+    assert out["summary"] == manual_template(out["case"])
+    for sensitive in ("secret-token", "internal-note", "prompt-body",
+                      "secret-status-object", "status-access-secret", URL,
+                      "проверити записник", "Напиши кратак", "Traceback"):
+        assert sensitive not in rendered
+        assert sensitive not in out["warning"]
+
+
+@pytest.mark.parametrize(("error", "expected_exception", "expected_status"), [
+    (SensitiveRequestError("secret-token internal-note prompt-body"),
+     "SensitiveRequestError", "404"),
+    (InvalidStatusRequestError("secret-token internal-note prompt-body"),
+     "InvalidStatusRequestError", "unknown"),
+    (RaisingStatusRequestError("secret-token internal-note prompt-body"),
+     "RaisingStatusRequestError", "unknown"),
+])
+def test_ai_draft_request_failure_logs_only_sanitized_classification(
+        tmp_path, caplog, error, expected_exception, expected_status):
+    store, service, _ = handoff(tmp_path)
+    client = type("Client", (), {"messages": FailingMessages(error)})()
+    service.drafter = CaseDrafter(store, service.cfg, client)
+
+    with caplog.at_level(logging.WARNING, logger="rg2watch.case_draft"):
+        out = service.prepare(URL, draft=True)
+
+    _assert_sanitized_draft_failure(caplog, out, expected_exception, expected_status)
+
+
+def test_ai_draft_is_explicit_bounded_cyrillic_billed_and_has_no_failure_log(tmp_path, caplog):
     store, service, _ = handoff(tmp_path)
     messages = FakeMessages()
     client = type("Client", (), {"messages": messages})()
     service.drafter = CaseDrafter(store, service.cfg, client)
-    out = service.prepare(URL, draft=True)
+    with caplog.at_level(logging.WARNING, logger="rg2watch.case_draft"):
+        out = service.prepare(URL, draft=True)
     assert out["summary"].startswith("Опрезно")
     call = messages.calls[0]
     assert call["max_tokens"] <= 700 and len(call["messages"][0]["content"]) < 7000
     assert "проверити записник" in call["messages"][0]["content"]
     assert store.total_spend(P) > 0
+    assert not [record for record in caplog.records
+                if record.name == "rg2watch.case_draft"
+                and "stage=anthropic-request" in record.getMessage()]
 
 
 def test_ai_draft_is_bounded_by_publish_utf8_byte_limit(tmp_path):
