@@ -46,7 +46,7 @@ class CaseDrafter:
             f"Интерна напомена оператера: {case['note'][:500] or '(нема напомене)'}")[:6500]
         try:
             response = client.messages.create(
-                model=self.cfg.model, max_tokens=600, temperature=0,
+                model=self.cfg.model, max_tokens=600,
                 messages=[{"role": "user", "content": prompt}], timeout=30.0)
         except Exception as exc:
             try:
