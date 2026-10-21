@@ -16,7 +16,7 @@ from .fetch import fetch_pdf
 from .models import Doc, Event, Finding
 from .notify import Notifier
 from .render import RenderError, render_tiles
-from .rik_client import RikBlocked, RikClient, RikError, RikUnavailable
+from .rik_client import RikBlocked, RikClient, RikError, RikNotFound, RikUnavailable
 from .rules import decision_sort_key, evaluate_report, evaluate_rg7
 from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, RG7_TYPES, Store, _doc
 
@@ -252,6 +252,12 @@ class AnalysisPipeline:
                 self._download_ok()
             with _RENDER_LOCK:
                 tiles = render_tiles(path)
+        except RikNotFound as exc:
+            log.warning("download of %s deferred %d s: %s", doc.url, RIK_RETRY_S, _short(exc))
+            self.store.mark_analysis(doc.url, "failed", _short(exc),
+                                     retry_at=self.clock() + RIK_RETRY_S, refund=True)
+            self._download_deferred(False)
+            return None
         except RikUnavailable as exc:  # RIK busy/blocking is not the document's fault
             log.warning("download of %s deferred %d s: %s", doc.url, RIK_RETRY_S, _short(exc))
             self.store.mark_analysis(doc.url, "failed", _short(exc),
