@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from rg2watch.case_handoff import CaseError, CaseHandoff
+from rg2watch.case_handoff import CaseError, CaseHandoff, manual_template
 from rg2watch.config import Config
 from rg2watch.drive_publish import DriveError, DrivePublisher, GoogleDriveAdapter
 from rg2watch.drive_root import DriveRoot
@@ -507,14 +507,31 @@ def test_publication_waits_for_inherited_child_access(tmp_path):
     assert sleeps == [.5, .5]
 
 
-def test_public_case_text_has_no_operator_attribution():
+def test_public_case_text_uses_viber_reason_without_repeating_fallback():
     case = {"election": "Избори", "municipality": "Општина", "station": "7",
             "url": "https://example.test/document.pdf", "rik_url": "https://rik.example/"}
 
-    text = DrivePublisher._case_text(case, "Јавни опис", "a" * 64).decode()
+    text = DrivePublisher._case_text(
+        case, manual_template(case), "a" * 64, "Кратак разлог.").decode()
 
     assert "Опис који је одобрио оператор" not in text
-    assert text.endswith("\n\nЈавни опис\n")
+    assert text == (
+        "Избори: Избори\n"
+        "Општина и бирачко место: Општина, 7\n"
+        "Документ РИК: https://rik.example/\n"
+        f"SHA-256 PDF датотеке: {'a' * 64}\n\n"
+        "Разлог за проверу:\nКратак разлог.\n")
+
+
+def test_public_case_text_adds_nonfallback_description():
+    case = {"election": "Избори", "municipality": "Општина", "station": "7",
+            "url": "https://example.test/document.pdf", "rik_url": "https://rik.example/"}
+
+    text = DrivePublisher._case_text(
+        case, "Дужи јавни опис.", "a" * 64, "Кратак разлог.").decode()
+
+    assert text.endswith(
+        "Разлог за проверу:\nКратак разлог.\n\nДодатни опис:\nДужи јавни опис.\n")
 
 
 @pytest.mark.parametrize("crash", ["folder", "pdf", "text", "share"])
@@ -794,7 +811,8 @@ def test_api_backed_post_share_failure_is_correlated_bounded_and_non_mutating(
     account = "account-" + secrets["id"]
     root_id = "root-" + secrets["id"]
     folder_name = f"RG2 предмет — {case['municipality']} БМ {case['station']}"
-    case_text = DrivePublisher._case_text(case, row["summary"], row["pdf_sha256"])
+    case_text = DrivePublisher._case_text(
+        case, row["summary"], row["pdf_sha256"], row["viber_reason"])
     files = {
         root_id: {"id": root_id, "name": "RG2 Watch", "mimeType": ROOT_MIME,
                   "parents": ["my-drive-" + secrets["id"]],
