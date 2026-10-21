@@ -8,7 +8,14 @@ import pytest
 
 from rg2watch.config import Config
 from rg2watch.models import Election, Filters
-from rg2watch.rik_client import AdaptiveLimiter, RikClient, RikError, RikUnavailable
+from rg2watch.rik_client import (
+    AdaptiveLimiter,
+    RikBlocked,
+    RikClient,
+    RikError,
+    RikNotFound,
+    RikUnavailable,
+)
 
 FIX = Path(__file__).parent / "fixtures"
 BASE = "https://www.rik.parlament.gov.rs"
@@ -220,6 +227,42 @@ def test_429_retried_and_4xx_raises_immediately():
         client.listing(Filters(), 1)
     assert not isinstance(e.value, RikUnavailable)
     assert len(calls) == 2
+
+
+def test_404_raises_typed_error_immediately_for_download_and_listing():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(404)
+
+    client, _, _ = make(handler)
+    with pytest.raises(RikNotFound) as download_error:
+        client.download(BASE + "/extfile/missing.pdf")
+    assert isinstance(download_error.value, RikError)
+    assert not isinstance(download_error.value, RikUnavailable)
+    assert len(calls) == 1
+    assert client.download_last_ok is None
+
+    with pytest.raises(RikNotFound) as listing_error:
+        client.listing(Filters(doc_type=6), 1)
+    assert isinstance(listing_error.value, RikError)
+    assert not isinstance(listing_error.value, RikUnavailable)
+    assert len(calls) == 2
+    assert client.last_ok is None
+
+
+def test_pdf_404_breaks_consecutive_blocked_streak():
+    statuses = iter((403, 404, 403, 404, 403))
+    client, _, _ = make(lambda request: httpx.Response(next(statuses)))
+    url = BASE + "/extfile/missing.pdf"
+
+    for status, expected_streak in zip((403, 404, 403, 404, 403), (1, 0, 1, 0, 1)):
+        error = RikBlocked if status == 403 else RikNotFound
+        with pytest.raises(error):
+            client.download(url)
+        assert client.download_blocked_streak == expected_streak
+        assert client.download_last_ok is None
 
 
 def test_municipalities_union():
