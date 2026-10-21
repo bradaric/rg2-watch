@@ -393,9 +393,10 @@ def test_limiter_threads_never_exceed_cap():
     assert now[0] >= 24.5
 
 
-def test_403_is_blocked_overload_without_retry_and_tracked():
+@pytest.mark.parametrize("blocked_status", [401, 403])
+def test_401_403_are_blocked_overload_without_retry_and_tracked(blocked_status):
     calls = []
-    status = [403]
+    status = [blocked_status]
 
     def handler(request):
         calls.append(1)
