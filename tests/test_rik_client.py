@@ -8,7 +8,14 @@ import pytest
 
 from rg2watch.config import Config
 from rg2watch.models import Election, Filters
-from rg2watch.rik_client import AdaptiveLimiter, RikClient, RikError, RikUnavailable
+from rg2watch.rik_client import (
+    AdaptiveLimiter,
+    RikBlocked,
+    RikClient,
+    RikError,
+    RikNotFound,
+    RikUnavailable,
+)
 
 FIX = Path(__file__).parent / "fixtures"
 BASE = "https://www.rik.parlament.gov.rs"
@@ -222,6 +229,46 @@ def test_429_retried_and_4xx_raises_immediately():
     assert len(calls) == 2
 
 
+def test_404_raises_typed_error_immediately_for_download_and_listing():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(404)
+
+    client, _, _ = make(handler)
+    with pytest.raises(RikNotFound) as download_error:
+        client.download(BASE + "/extfile/missing.pdf")
+    assert isinstance(download_error.value, RikError)
+    assert not isinstance(download_error.value, RikUnavailable)
+    assert len(calls) == 1
+    assert client.download_last_ok is None
+
+    client.download_blocked_streak = 2
+    client.download_last_ok = 123.0
+    with pytest.raises(RikNotFound) as listing_error:
+        client.listing(Filters(doc_type=6), 1)
+    assert isinstance(listing_error.value, RikError)
+    assert not isinstance(listing_error.value, RikUnavailable)
+    assert len(calls) == 2
+    assert client.last_ok is None
+    assert client.download_blocked_streak == 2
+    assert client.download_last_ok == 123.0
+
+
+def test_pdf_404_breaks_consecutive_blocked_streak():
+    statuses = iter((403, 404, 403, 404, 403))
+    client, _, _ = make(lambda request: httpx.Response(next(statuses)))
+    url = BASE + "/extfile/missing.pdf"
+
+    for status, expected_streak in zip((403, 404, 403, 404, 403), (1, 0, 1, 0, 1)):
+        error = RikBlocked if status == 403 else RikNotFound
+        with pytest.raises(error):
+            client.download(url)
+        assert client.download_blocked_streak == expected_streak
+        assert client.download_last_ok is None
+
+
 def test_municipalities_union():
     seen = []
 
@@ -346,10 +393,10 @@ def test_limiter_threads_never_exceed_cap():
     assert now[0] >= 24.5
 
 
-def test_403_is_blocked_overload_without_retry_and_tracked():
-    from rg2watch.rik_client import RikBlocked
+@pytest.mark.parametrize("blocked_status", [401, 403])
+def test_401_403_are_blocked_overload_without_retry_and_tracked(blocked_status):
     calls = []
-    status = [403]
+    status = [blocked_status]
 
     def handler(request):
         calls.append(1)
@@ -358,8 +405,9 @@ def test_403_is_blocked_overload_without_retry_and_tracked():
     client, limiter, t = make(handler)
     assert client.last_ok is None
     for _ in range(2):
-        with pytest.raises(RikBlocked):
+        with pytest.raises(RikBlocked) as error:
             client.listing(Filters(), 1)
+        assert not isinstance(error.value, RikNotFound)
     assert len(calls) == 2 and client.blocked_streak == 2
     assert limiter.current_rps < 2.0
     assert issubclass(RikBlocked, RikUnavailable)

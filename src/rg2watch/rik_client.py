@@ -27,6 +27,10 @@ class RikError(Exception):
     pass
 
 
+class RikNotFound(RikError):
+    pass
+
+
 class RikUnavailable(RikError):
     pass
 
@@ -107,6 +111,8 @@ def _send(http: httpx.Client, limiter: AdaptiveLimiter, timeout_s: float,
             elif resp.status_code in (401, 403):
                 limiter.on_overload()
                 raise RikBlocked(f"{method} {url} -> HTTP {resp.status_code}")
+            elif resp.status_code == 404:
+                raise RikNotFound(f"{method} {url} -> HTTP 404")
             elif resp.status_code >= 400:
                 raise RikError(f"{method} {url} -> HTTP {resp.status_code}")
             else:
@@ -305,6 +311,9 @@ class RikClient:
             body = _send(self.http, lim, self.timeout_s, "GET", full, parse=parse, opener=opener)
         except RikBlocked:
             self.download_blocked_streak += 1
+            raise
+        except RikNotFound:
+            self.download_blocked_streak = 0
             raise
         self.download_last_ok = lim.clock()
         self.download_blocked_streak = 0

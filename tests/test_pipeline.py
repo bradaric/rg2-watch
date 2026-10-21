@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import json
 import threading
@@ -15,7 +16,7 @@ from rg2watch.config import Config
 from rg2watch.fake_rik import FakeRik
 from rg2watch.models import Doc, Election, Event
 from rg2watch.notify import Notifier
-from rg2watch.pipeline import PROMPT_VERSION, AnalysisPipeline
+from rg2watch.pipeline import PROMPT_VERSION, RIK_RETRY_S, AnalysisPipeline
 from rg2watch.rik_client import AdaptiveLimiter, RikClient
 from rg2watch.store import Store
 from test_rules import clean_report, nf, to_wire
@@ -224,6 +225,91 @@ def test_bad_pdf_gives_d3(tmp_path):
     e.clock.now += 10_000
     assert e.drain() == 0  # permanent: never retried
     assert e.ai.calls == 0
+
+
+def test_uncached_pdf_404_retries_without_using_attempts(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc("missing.pdf")
+    e.publish(d)
+
+    assert e.drain() == 1
+    row = e.store._db.execute(
+        "SELECT analysis_status, analysis_attempts, analysis_next_at, analysis_error "
+        "FROM documents WHERE url=?", (d.url,)).fetchone()
+    assert tuple(row[:3]) == ("failed", 0, e.clock.now + RIK_RETRY_S)
+    assert "HTTP 404" in row[3]
+    assert len(e.pdf_requests()) == 1
+    assert e.findings == [] and e.ai.calls == 0
+    assert e.rik.download_blocked_streak == 0
+    assert e.rik.download_last_ok is None
+    assert e.pipe._download_paused_until == float("-inf")
+
+    assert e.drain() == 0
+    assert len(e.pdf_requests()) == 1
+    for _ in range(4):
+        e.clock.now += RIK_RETRY_S
+        assert e.drain() == 1
+        assert e.status(d.url) == ("failed", 0)
+        assert e.findings == [] and e.ai.calls == 0
+    assert len(e.pdf_requests()) == 5
+
+
+def test_uncached_pdf_404_recovers_when_file_appears(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc("missing.pdf")
+    e.publish(d)
+    assert e.drain() == 1
+
+    make_pdf(tmp_path / "pdfs" / "missing.pdf")
+    e.clock.now += RIK_RETRY_S
+    assert e.drain() == 1
+
+    digest = hashlib.sha256(d.url.encode()).hexdigest()
+    assert len(e.pdf_requests()) == 2
+    assert e.status(d.url) == ("done", 1)
+    assert e.ai.calls == 1
+    assert (tmp_path / "cache" / f"{digest}.pdf").is_file()
+    assert "D3" not in e.rules()
+
+
+def test_cached_pdf_bypasses_external_404(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    d = doc("missing.pdf")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    digest = hashlib.sha256(d.url.encode()).hexdigest()
+    make_pdf(cache / f"{digest}.pdf")
+
+    e.publish(d)
+    assert e.drain() == 1
+    assert e.pdf_requests() == []
+    assert e.status(d.url) == ("done", 1)
+    assert e.ai.calls == 1
+
+
+def test_deferred_404_is_not_retried_after_removal_or_replacement(tmp_path):
+    e = Env(tmp_path, resp(clean_report()))
+    removed = doc("missing.pdf", no="1")
+    e.publish(removed)
+    assert e.drain() == 1
+    e.store.apply_events(P, e.store.start_sweep(P, "t"), [Event("removed", removed)])
+    e.clock.now += RIK_RETRY_S
+    assert e.drain() == 0
+    assert [r["path"] for r in e.pdf_requests()] == ["/extfile/missing.pdf"]
+
+    old, new = doc("other-missing.pdf", no="2"), doc("b.pdf", no="2")
+    e.publish(old)
+    assert e.drain() == 1
+    replacement = Event("replaced", new, previous_url=old.url)
+    e.store.apply_events(P, e.store.start_sweep(P, "t"), [replacement])
+    e.pipe.submit([replacement])
+    assert e.drain() == 1
+    e.clock.now += RIK_RETRY_S
+    assert e.drain() == 0
+    paths = [r["path"] for r in e.pdf_requests()]
+    assert paths.count("/extfile/other-missing.pdf") == 1
+    assert paths.count("/extfile/b.pdf") == 1
+    assert e.status(new.url) == ("done", 1)
 
 
 def test_non_rg2_not_analysed(tmp_path):

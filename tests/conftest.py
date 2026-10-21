@@ -10,6 +10,12 @@ def _no_real_anthropic(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_ntfy_topic(monkeypatch):
+    """A topic from the environment (e.g. uv's .env) never reaches tests: no pushes to the real topic."""
+    monkeypatch.delenv("RG2W_NTFY_TOPIC", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _pre_calibration_cli_defaults(monkeypatch):
     """CLI runs without --config keep the pre-calibration model, prices and cap that the cost tests assert."""
     from rg2watch import cli
