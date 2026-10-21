@@ -604,16 +604,18 @@ function caseBox(v) {
     const label = mk("label", " Anyone with the link can open the published case folder.", "publicwarn");
     const confirm = document.createElement("input"); confirm.type = "checkbox"; label.prepend(confirm);
     const publish = mk("button", "Publish public case"); publish.type = "button"; publish.hidden = true;
-    prep.onclick = () => {
-      prep.disabled = true; msg.textContent = "Preparing... The internal note is sent to the AI provider if available.";
-      caseFetch("case/prepare", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"}, body: JSON.stringify({url: v.u})})
+    const prepare = draft => {
+      prep.disabled = true;
+      msg.textContent = draft ? "Preparing... The internal note is sent to the AI provider if available." : "Loading template...";
+      return caseFetch("case/prepare", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"}, body: JSON.stringify({url: v.u, draft: draft})})
         .then(j => waitCaseJob(j.job_id)).then(result => {
           area.value = result.summary || ""; area.hidden = areaLabel.hidden = false;
           reason.hidden = reasonLabel.hidden = publish.hidden = label.hidden = false;
-          msg.textContent = result.warning ? "AI draft failed; use the manual template." : "Review and edit the draft before publishing.";
+          msg.textContent = result.warning ? "AI draft failed; use the manual template." : draft ? "Review and edit the draft before publishing." : "Edit the template, or prepare an AI draft if needed.";
           prep.disabled = false;
         }).catch(e => { prep.disabled = false; msg.textContent = "Preparation error: " + e.message; });
     };
+    prep.onclick = () => prepare(true);
     label.hidden = true;
     publish.onclick = () => {
       if (!area.value.trim() || (!pending || pending.viber_reason != null) && !reason.value.trim()) {
@@ -637,7 +639,7 @@ function caseBox(v) {
       }
       msg.textContent = "A frozen publication is pending. Review its text and explicitly retry; the cache and a new draft are not used.";
       box.append(" ", areaLabel, reasonLabel, label, publish);
-    } else box.append(" ", prep, areaLabel, reasonLabel, label, publish);
+    } else { box.append(" ", prep, areaLabel, reasonLabel, label, publish); prepare(false); }
   };
   caseFetch("case/publication?url=" + encodeURIComponent(v.u)).then(data => {
     if (data.status === "published") publishedCase(box, data);

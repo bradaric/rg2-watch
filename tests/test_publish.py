@@ -185,8 +185,7 @@ def test_manual_template_has_one_clear_rik_link():
     assert manual_template(case) == (
         "Избори: Парламентарни избори 2023\n"
         "Општина и бирачко место: Алибунар, 12\n"
-        "РИК: https://rik.example/document.pdf\n\n"
-        "Разлог за проверу: [унесите опис].")
+        "РИК: https://rik.example/document.pdf")
 
 
 @pytest.mark.parametrize("data", [b"not pdf", b"", b"%PDF" + b"x" * 1001])
@@ -354,8 +353,25 @@ def test_sdk_compatible_draft_request(tmp_path):
     assert captured["timeout"] == 30.0
     assert len(captured["messages"]) == 1
     assert captured["messages"][0]["role"] == "user"
-    assert "Интерна напомена оператера: проверити записник" in captured["messages"][0]["content"]
+    prompt = captured["messages"][0]["content"]
+    assert "Напомена: проверити записник" in prompt
+    assert "оператер" not in prompt.lower()
+    assert "људску проверу" not in prompt.lower()
     assert store.total_spend(P) > 0
+
+
+def test_draft_prompt_omits_missing_note_without_commentary(tmp_path):
+    store, service, _ = handoff(tmp_path)
+    messages = FakeMessages()
+    case = service._case(URL)
+    case["note"] = ""
+
+    CaseDrafter(store, service.cfg, type("Client", (), {"messages": messages})()).draft(case)
+
+    prompt = messages.calls[0]["messages"][0]["content"]
+    assert "Напомена:" not in prompt
+    assert "нема напомене" not in prompt.lower()
+    assert "оператер" not in prompt.lower()
 
 
 class SensitiveRequestError(Exception):
@@ -492,7 +508,10 @@ def test_unusable_paid_draft_is_still_accounted(tmp_path):
 
 
 class FakeCaseAPI:
-    def submit_prepare(self, url):
+    def __init__(self):
+        self.prepare_calls = []
+    def submit_prepare(self, url, draft):
+        self.prepare_calls.append((url, draft))
         return "prepare-job"
     def submit_publish(self, url, summary, viber_reason, confirm):
         assert confirm is True
@@ -528,9 +547,14 @@ def case_request(server, method, path, body=None, headers=None):
 
 def test_case_http_routes_are_explicit_strict_and_same_origin(tmp_path):
     (tmp_path / "index.html").write_text("ok")
-    srv = start_server(tmp_path, tmp_path, 0, case_api=FakeCaseAPI())
+    api = FakeCaseAPI()
+    srv = start_server(tmp_path, tmp_path, 0, case_api=api)
     try:
-        assert case_request(srv, "POST", "/case/prepare", {"url": URL}) == (202, {"job_id": "prepare-job"})
+        assert case_request(srv, "POST", "/case/prepare", {"url": URL, "draft": False}) == (
+            202, {"job_id": "prepare-job"})
+        assert case_request(srv, "POST", "/case/prepare", {"url": URL, "draft": True}) == (
+            202, {"job_id": "prepare-job"})
+        assert api.prepare_calls == [(URL, False), (URL, True)]
         assert case_request(srv, "POST", "/case/publish",
                             {"url": URL, "summary": "Јавно", "viber_reason": VIBER_REASON,
                              "confirm": True}) == (
@@ -539,7 +563,7 @@ def test_case_http_routes_are_explicit_strict_and_same_origin(tmp_path):
         assert case_request(srv, "GET", "/case/publication?url=" + URL) == (
             200, {"status": "uploaded", "summary": "Замрзнути опис",
                   "viber_reason": VIBER_REASON, "retryable": True})
-        assert case_request(srv, "POST", "/case/prepare", {"url": URL},
+        assert case_request(srv, "POST", "/case/prepare", {"url": URL, "draft": False},
                             {"Origin": "http://evil.example"})[0] == 403
         assert case_request(srv, "GET", "/case/jobs/prepare-job",
                             headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
@@ -583,14 +607,16 @@ def test_case_http_transports_legacy_and_new_frozen_pending_retries(tmp_path):
 
 
 @pytest.mark.parametrize("method,path,body,headers,status", [
+    ("POST", "/case/prepare", {"url": URL}, None, 400),
     ("POST", "/case/prepare", {"url": URL, "extra": 1}, None, 400),
+    ("POST", "/case/prepare", {"url": URL, "draft": "false"}, None, 400),
     ("POST", "/case/prepare", {"url": 7}, None, 400),
     ("POST", "/case/publish", {"url": URL, "summary": 7, "confirm": True}, None, 400),
     ("POST", "/case/publish", {"url": URL, "summary": "x", "viber_reason": "",
                                   "confirm": True}, None, 400),
     ("POST", "/case/publish", {"url": URL, "summary": "x", "confirm": True, "x": 1}, None, 400),
-    ("POST", "/case/prepare", {"url": URL}, {"Content-Type": "application/json; charset=utf-8"}, 400),
-    ("POST", "/case/prepare", {"url": URL}, {"X-RG2W": ""}, 403),
+    ("POST", "/case/prepare", {"url": URL, "draft": False}, {"Content-Type": "application/json; charset=utf-8"}, 400),
+    ("POST", "/case/prepare", {"url": URL, "draft": False}, {"X-RG2W": ""}, 403),
 ])
 def test_case_http_rejects_invalid_fields_types_and_headers(
         tmp_path, method, path, body, headers, status):
@@ -628,6 +654,8 @@ def test_page_has_explicit_safe_case_controls():
     assert "area.value = result.summary" in html
     assert "area.value = pending.summary" in html
     assert "reason.value = pending.viber_reason" in html
+    assert "JSON.stringify({url: v.u, draft: draft})" in html
+    assert "prepare(false)" in html and "prepare(true)" in html
 
 
 def test_case_ui_reenables_prepare_and_publish_after_async_job_errors():
@@ -711,14 +739,17 @@ let HTTP = true;
 function mk(tag, text, cls) { const e = new El(tag); if (text != null) e.textContent = text; e.className = cls || ""; return e; }
 function link(text, href) { const e = mk("a", text); e.href = href; return e; }
 function rvOf(v) { return v.rv || {v: "escalate"}; }
-const publications = new Map(), jobs = new Map(), publishRequests = [];
+const publications = new Map(), jobs = new Map(), prepareRequests = [], publishRequests = [];
 let prepareId = "prepare", publishId = "publish";
 function caseFetch(path, options) {
   if (path.startsWith("case/publication")) {
     const url = decodeURIComponent(path.split("url=")[1]);
     return Promise.resolve(publications.get(url) || {status: "none"});
   }
-  if (path === "case/prepare") return Promise.resolve({job_id: prepareId});
+  if (path === "case/prepare") {
+    prepareRequests.push(JSON.parse(options.body));
+    return Promise.resolve({job_id: prepareId});
+  }
   if (path === "case/publish") {
     publishRequests.push(JSON.parse(options.body));
     return Promise.resolve({job_id: publishId});
@@ -743,9 +774,12 @@ async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve =
   jobs.set("prepare-ai", {state: "done", result: {summary: "Српски јавни опис", warning: true}});
   prepareId = "prepare-ai";
   box = caseBox({u: "ai", pdf: "hash"}); await flush();
-  findText(box, "Prepare draft").onclick(); await flush();
-  check(allText(box).includes("AI draft failed; use the manual template."), "AI fallback");
   const aiArea = find(box, x => x.tag === "textarea");
+  check(prepareRequests.at(-1).draft === false && aiArea.value === "Српски јавни опис",
+    "manual template loads without requesting AI");
+  findText(box, "Prepare draft").onclick(); await flush();
+  check(prepareRequests.at(-1).draft === true, "AI draft is explicitly requested");
+  check(allText(box).includes("AI draft failed; use the manual template."), "AI fallback");
   check(aiArea.value === "Српски јавни опис", "Serbian prepared summary unchanged");
   check(aiArea.attrs["aria-label"] === "public case summary in Serbian Cyrillic", "textarea label");
 
@@ -844,7 +878,7 @@ def test_bounded_job_service_returns_manual_preparation_and_persisted_state(tmp_
     _, cases, _ = handoff(tmp_path)
     jobs = PublicationJobs(cases, None, workers=1)
     try:
-        job_id = jobs.submit_prepare(URL)
+        job_id = jobs.submit_prepare(URL, False)
         for _ in range(100):
             result = jobs.job(job_id)
             if result["state"] != "running":
