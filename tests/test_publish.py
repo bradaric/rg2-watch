@@ -317,6 +317,10 @@ class SensitiveRequestError(Exception):
     status_code = 404
 
 
+class MissingStatusRequestError(Exception):
+    pass
+
+
 class InvalidStatusRequestError(Exception):
     status_code = "secret-status-object"
 
@@ -349,7 +353,8 @@ def _assert_sanitized_draft_failure(caplog, out, expected_exception, expected_st
     assert out["warning"] == "AI draft failed; use the manual template"
     assert out["summary"] == manual_template(out["case"])
     for sensitive in ("secret-token", "internal-note", "prompt-body",
-                      "secret-status-object", "status-access-secret", URL,
+                      "missing-status-secret", "secret-status-object",
+                      "status-access-secret", URL,
                       "проверити записник", "Напиши кратак", "Traceback"):
         assert sensitive not in rendered
         assert sensitive not in out["warning"]
@@ -373,6 +378,18 @@ def test_ai_draft_request_failure_logs_only_sanitized_classification(
         out = service.prepare(URL, draft=True)
 
     _assert_sanitized_draft_failure(caplog, out, expected_exception, expected_status)
+
+
+def test_ai_draft_request_failure_without_status_logs_sanitized_unknown(tmp_path, caplog):
+    store, service, _ = handoff(tmp_path)
+    error = MissingStatusRequestError("missing-status-secret internal-note prompt-body")
+    client = type("Client", (), {"messages": FailingMessages(error)})()
+    service.drafter = CaseDrafter(store, service.cfg, client)
+
+    with caplog.at_level(logging.WARNING, logger="rg2watch.case_draft"):
+        out = service.prepare(URL, draft=True)
+
+    _assert_sanitized_draft_failure(caplog, out, "MissingStatusRequestError", "unknown")
 
 
 def test_ai_draft_is_explicit_bounded_cyrillic_billed_and_has_no_failure_log(tmp_path, caplog):
