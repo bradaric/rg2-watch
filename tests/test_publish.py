@@ -313,6 +313,39 @@ class FakeMessages:
                                      "content": [block]})()
 
 
+def test_sdk_compatible_draft_request(tmp_path):
+    store, service, _ = handoff(tmp_path)
+    captured = {}
+
+    class StrictMessages:
+        def create(self, *, model, max_tokens, messages, timeout):
+            captured.update(model=model, max_tokens=max_tokens,
+                            messages=messages, timeout=timeout)
+            usage = type("Usage", (), {"input_tokens": 100, "output_tokens": 20,
+                                        "cache_read_input_tokens": 0,
+                                        "cache_creation_input_tokens": 0})()
+            block = type("Block", (), {
+                "type": "text", "text": "Опрезно треба проверити неслагање."})()
+            return type("Response", (), {"usage": usage, "model": model,
+                                         "content": [block]})()
+
+    client = type("Client", (), {"messages": StrictMessages()})()
+    service.drafter = CaseDrafter(store, service.cfg, client)
+
+    out = service.prepare(URL, draft=True)
+
+    assert out["summary"] == "Опрезно треба проверити неслагање."
+    assert out["summary"] != manual_template(out["case"])
+    assert out["warning"] is None
+    assert captured["model"] == service.cfg.model
+    assert captured["max_tokens"] == 600
+    assert captured["timeout"] == 30.0
+    assert len(captured["messages"]) == 1
+    assert captured["messages"][0]["role"] == "user"
+    assert "Интерна напомена оператера: проверити записник" in captured["messages"][0]["content"]
+    assert store.total_spend(P) > 0
+
+
 class SensitiveRequestError(Exception):
     status_code = 404
 
