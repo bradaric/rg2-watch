@@ -13,7 +13,8 @@ if you put it there); commands that never call Claude do not need it.
 One argument: the election ID (digits). Databases are `data/election-<id>.sqlite`.
 
 - `scripts/night.sh <id>` - election night: register if needed, watch with analysis (`--watch-only`, `--baseline` if starting late)
-- `scripts/rehearse.sh <id>` - rehearsal on a past election, runs until done
+- `scripts/rehearse.sh <id>` - rehearsal on a past election, runs until done; add `--no-ntfy`
+  to print and handle alerts without phone pushes: `scripts/rehearse.sh <id> --no-ntfy`
 - `scripts/view.sh <id>` - rebuild the page and serve it (no RIK, no API)
 - `scripts/status.sh <id>` - compact status: counts, spend, review state, watcher running or not
 - `scripts/escalated.sh <id>` - forms marked ESCALATE
@@ -22,6 +23,12 @@ One argument: the election ID (digits). Databases are `data/election-<id>.sqlite
 
 Extra arguments are passed through to the underlying command. An older rehearsal DB can be renamed to
 fit: `mv data/rehearsal-677087.sqlite data/election-677087.sqlite`.
+
+For a direct silent watch, run
+`uv run --env-file .env rg2watch watch --parent <id> --config rg2watch.toml --db data/election-<id>.sqlite --no-ntfy`.
+A plain rehearsal still sends alerts when a topic is configured. For this watch process only,
+`--no-ntfy` wins over a topic from either `rg2watch.toml` or `.env`/`RG2W_NTFY_TOPIC`; it does not
+change the file or environment variable.
 
 ## 1. Days before
 
@@ -202,6 +209,12 @@ never held back by the finding backlog. If one sweep replaces more than `mass_re
 re-upload?)" alert is pushed and those D2 findings go to the digest.
 Alerts are delivered, and RIK reachability checked, by their own thread every 5 s, so a slow
 RIK tick (10 minutes at a throttled rate) never holds them back.
+With `watch --no-ntfy`, watcher status messages and findings still print locally and the status
+panel reports ntfy disabled. Successful delivery/marking consumes both outstanding pending alerts
+and findings created during the muted run, so a later normal watch does not push them. An
+interrupted run can still leave a finding pending if it stops before that delivery/marking step;
+use a separate database when an existing backlog must be preserved. This flag is not a dry run and
+does not disable watching, analysis, storage, or unrelated RIK/model network requests.
 A second `watch` on the same database is refused (exit 2, `<db>.lock` holds the pid of the first). A digest is compact (under 3.5 KB): counts by rule, up
 to 10 detail lines without URLs, and "+K more - open the page, filter MEDIUM" with the page URL when
 serving (a single-finding digest keeps its RIK URL). Every finding is also printed (and flushed) to
