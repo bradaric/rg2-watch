@@ -181,13 +181,14 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 @media (prefers-color-scheme:dark){.kicker{color:#1d1300}}
 #herotitle{font-size:clamp(1.3rem,2.4vw,2.8rem);font-weight:800;letter-spacing:-.015em;line-height:1.15;overflow-wrap:anywhere}
 #heronums{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0;margin:var(--s4) 0 var(--s3)}
-.tile{padding:var(--s2) var(--s4);border-left:1px solid var(--line2);min-width:0}
+.tile{padding:var(--s2) var(--s4);border-left:1px solid var(--line2);min-width:0;container-type:inline-size}
 .tile:first-child{border-left:0;padding-left:0}
 .tile .k{color:var(--mut);font-size:clamp(.72rem,.9vw,1.1rem);font-weight:700;text-transform:uppercase;letter-spacing:.08em}
 .tile .s{color:var(--mut);font-size:clamp(.8rem,1vw,1.25rem);font-variant-numeric:tabular-nums}
 #hs-valid{white-space:pre-line}
 #hs-forms{white-space:pre-line}
-.tile .v{font-size:clamp(2.1rem,4.4vw,5.6rem);font-weight:800;line-height:1.05;letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin:2px 0 var(--s1);white-space:nowrap}
+.tile .v{font-size:min(clamp(2.1rem,4.4vw,5.6rem),19cqi);font-weight:800;line-height:1.05;letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin:2px 0 var(--s1);white-space:nowrap}
+.tile .v .of{font-size:.45em;font-weight:700;color:var(--mut);letter-spacing:0}
 .prog{height:6px;background:var(--track);border-radius:3px;overflow:hidden;margin:var(--s1) 0 var(--s1)}
 .prog>div{height:100%;width:0;background:var(--accent);transition:width .8s ease}
 #herochart{margin:var(--s3) 0 var(--s2)}
@@ -214,7 +215,7 @@ body.hero{padding:2.2vh 3vw;min-height:100vh}
 body.hero #hero{border:0;background:transparent;box-shadow:none;padding:0;margin:0}
 body.hero #herobar{opacity:.55}
 body.hero #herobar:hover,body.hero #herobar:focus-within{opacity:1}
-body.hero .tile .v{font-size:clamp(2.4rem,4.2vw,5.4rem)}
+body.hero .tile .v{font-size:min(clamp(2.4rem,4.2vw,5.4rem),19cqi)}
 body.hero #heronums{margin:var(--s3) 0 var(--s2)}
 body.hero .hrow{font-size:clamp(1.1rem,1.55vw,1.95rem);padding:.14em 0}
 body.hero .hrow .track{height:.9em}
@@ -281,7 +282,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <div id="herohead"><span class="kicker">НЕЗВАНИЧНО</span><div id="herotitle"></div></div>
 <div id="heronums">
 <div class="tile"><div class="k">Излазност</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
-<div class="tile"><div class="k">Обрађена бирачка места</div><div class="v" id="hv-st">-</div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
+<div class="tile"><div class="k">Обрађена бирачка места</div><div class="v"><span id="hv-st">-</span><span class="of" id="hv-sttot"></span></div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
 <div class="tile"><div class="k">Записници</div><div class="v" id="hv-forms">-</div><div class="s" id="hs-forms"></div></div>
 <div class="tile"><div class="k">Важећи гласови</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"></div></div>
 </div>
@@ -1178,7 +1179,8 @@ function renderHero() {
   put("herotitle", none ? "" : (allMunis ? "Све општине" : heroMuniName(raw)) + " — " + shortTitle(T.title) + titleSuffix);
   put("hv-turn", none ? "-" : dg ? dpp(t.turnout) : pc(t.turnout));
   put("hs-turn", none ? "" : dg ? "разлика у излазности, процентни поени" : num(t.voted) + " од " + num(t.registered) + " уписаних");
-  put("hv-st", num(r.counted) + (r.stations ? " / " + num(r.stations) : ""));
+  put("hv-st", num(r.counted));
+  put("hv-sttot", r.stations ? " / " + num(r.stations) : "");
   put("hs-st", cover == null ? "број бирачких места није познат" : pc(cover) + " бирачких места");
   $("hp-st").style.width = (cover == null ? 0 : Math.min(100, cover * 100)) + "%";
   if (dg) {
