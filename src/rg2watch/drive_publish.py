@@ -5,9 +5,10 @@ import io
 import json
 import logging
 from pathlib import Path
+import time
 import uuid
 
-from .case_handoff import CaseError, CaseHandoff
+from .case_handoff import CaseError, CaseHandoff, manual_template
 
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -198,8 +199,17 @@ class LazyConfiguredDrive:
 
 
 class DrivePublisher:
-    def __init__(self, cases: CaseHandoff, drive, root):
+    def __init__(self, cases: CaseHandoff, drive, root, sleep=time.sleep):
         self.cases, self.drive, self.root, self.store = cases, drive, root, cases.store
+        self.sleep = sleep
+
+    def _children_have_public_reader(self, children: list[str]) -> bool:
+        for attempt in range(11):
+            if self.drive.children_have_public_reader(children):
+                return True
+            if attempt < 10:
+                self.sleep(.5)
+        return False
 
     def publish(self, url: str, summary: str, viber_reason: str | None = None) -> dict:
         token = None
@@ -264,7 +274,8 @@ class DrivePublisher:
                 raise CaseError("frozen staged PDF is missing or changed") from exc
             if hashlib.sha256(pdf).hexdigest() != publication["pdf_sha256"]:
                 raise CaseError("frozen staged PDF is missing or changed")
-            case_text = self._case_text(case, publication["summary"], publication["pdf_sha256"])
+            case_text = self._case_text(case, publication["summary"], publication["pdf_sha256"],
+                                        publication["viber_reason"])
             logger.info("publication checkpoint diagnostic_id=%s stage=frozen-package-verified",
                         diagnostic_id)
             expected = (
@@ -325,7 +336,7 @@ class DrivePublisher:
                 logger.info("publication checkpoint diagnostic_id=%s stage=folder-public",
                             diagnostic_id)
                 children = [publication["pdf_file_id"], publication["text_file_id"]]
-                if not self.drive.children_have_public_reader(children):
+                if not self._children_have_public_reader(children):
                     logger.info("publication checkpoint diagnostic_id=%s "
                                 "stage=child-check-failed", diagnostic_id)
                     raise DriveError("Drive account policy did not expose both folder children")
@@ -340,12 +351,19 @@ class DrivePublisher:
             return self._result(self.store.get_publication(url))
 
     @staticmethod
-    def _case_text(case: dict, summary: str, pdf_sha: str) -> bytes:
-        text = (f"Избори: {case['election']}\nОпштина: {case['municipality']}\n"
-                f"Бирачко место: {case['station']}\nВерзија документа: {case['url']}\n"
-                f"РИК: {case['rik_url']}\nSHA-256 PDF датотеке: {pdf_sha}\n\n"
-                f"Опис који је одобрио оператор:\n{summary}\n")
-        return text.encode("utf-8")
+    def _case_text(case: dict, summary: str, pdf_sha: str,
+                   viber_reason: str | None = None) -> bytes:
+        sections = [
+            f"Избори: {case['election']}\n"
+            f"Општина и бирачко место: {case['municipality']}, {case['station']}\n"
+            f"Документ РИК: {case['rik_url']}\n"
+            f"SHA-256 PDF датотеке: {pdf_sha}"
+        ]
+        if viber_reason is not None:
+            sections.append(f"Разлог за проверу:\n{viber_reason}")
+        if summary != manual_template(case):
+            sections.append(f"Додатни опис:\n{summary}")
+        return ("\n\n".join(sections) + "\n").encode("utf-8")
 
     @staticmethod
     def _verify(found, file_id, name, mime, parents, data, legacy_parent_recovery=False):

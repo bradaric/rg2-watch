@@ -60,8 +60,8 @@ class PublicationJobs:
         self._executor.submit(run)
         return job_id
 
-    def submit_prepare(self, url: str) -> str:
-        return self._submit("preparation", url, lambda: self.cases.prepare(url, draft=True))
+    def submit_prepare(self, url: str, draft: bool) -> str:
+        return self._submit("preparation", url, lambda: self.cases.prepare(url, draft=draft))
 
     def submit_publish(self, url: str, summary: str, viber_reason: str | None,
                        confirm: bool) -> str:

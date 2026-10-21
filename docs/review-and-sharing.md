@@ -166,6 +166,17 @@ editable manual template when credentials/model/pricing/cap/API output are unava
 usage is recorded in the same per-election `max_spend_usd` total as document analysis. As with the
 existing analysis workers, simultaneous calls can exceed the cap slightly while already in flight.
 
+If **Prepare draft** falls back with the generic warning, inspect the terminal that launched
+`rg2watch serve` or `rg2watch watch`. One `rg2watch.case_draft` WARNING records the provider
+exception class, an integer HTTP status (or `unknown`), the raw error message, and the full chained
+traceback. This is local stderr, not browser output or a persistent debug file. After installing a
+diagnostics release, restart the local server and explicitly click **Prepare draft** once to reproduce
+the failure; there is no automatic AI call. Raw errors and tracebacks may contain sensitive request or
+provider details: inspect and redact them before sharing. For a safe initial report, share the
+`stage=... exception=... status=...` fields and only the minimal relevant traceback lines after
+redaction. Do not indiscriminately paste full traces, job JSON, provider payloads, URLs, prompts,
+notes, credentials, headers, or response bodies.
+
 The returned Drive URL and Viber text are copy/paste only. Anyone receiving or forwarding the URL can
 open the case. A later correction or `ok`/`unsure` verdict does **not** revoke, replace, or silently
 alter an already-public case; subsequent notification or correction management is manual and out of

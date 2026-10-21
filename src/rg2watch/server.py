@@ -199,10 +199,11 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "body is not JSON"})
         try:
             if path == "/case/prepare":
-                if not (isinstance(req, dict) and set(req) == {"url"}
-                        and isinstance(req["url"], str) and req["url"]):
-                    return self._json(400, {"error": "expected {url}"})
-                job = self.server.case_api.submit_prepare(req["url"])
+                if not (isinstance(req, dict) and set(req) == {"url", "draft"}
+                        and isinstance(req["url"], str) and req["url"]
+                        and isinstance(req["draft"], bool)):
+                    return self._json(400, {"error": "expected {url, draft: boolean}"})
+                job = self.server.case_api.submit_prepare(req["url"], req["draft"])
             else:
                 if not (isinstance(req, dict)
                         and set(req) in ({"url", "summary", "confirm"},
