@@ -279,14 +279,14 @@ def test_hero_markup_labelled_and_safe():
     assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
     assert "Esc" in html and 'get("hero") === "1"' in html and 'ev.key === "Escape"' in html
     assert 'id="hs-forms"' in html
-    for text in ("Општина", "Обухваћени записници", "Приказ бројева", "Цео екран",
+    for text in ("Општина", "Обухваћени записници", "Приказ података", "Цео екран",
                  "Излаз (Esc)", "Излазност", "Обрађена бирачка места", "Записници", "Важећи гласови"):
         assert text in html
     assert "Режим презентације" not in html
     assert "помоћу АИ" not in html
     assert "само записници без уочених проблема (без оних за проверу)" in html
     assert "са исправкама (RG-7)" in html
-    assert "оригинални бројеви (RG-2)" in html
+    assert "оригинални подаци (RG-2)" in html
     assert "разлика (са исправкама − оригинални)" in html
     assert "#hs-valid{white-space:pre-line}" in html
     assert "#hs-forms{white-space:pre-line}" in html
