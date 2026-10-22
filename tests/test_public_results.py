@@ -129,6 +129,17 @@ def test_public_page_uses_wide_layout_nonwrapping_ratios_and_unofficial_badge():
     assert ".status-badge{" in html and "background:var(--badge-bg)" in html
 
 
+def test_public_page_aligns_chart_bars_and_values_in_shared_columns():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert "grid-template-columns:minmax(16rem,30%) minmax(8rem,1fr) 9rem" in html
+    assert "@media(max-width:780px)" in html
+    assert ".row{grid-template-columns:1fr auto}" in html
+
+
 def test_export_refuses_directory_with_other_files(tmp_path):
     s = store()
     form(s, 1, clean_report())

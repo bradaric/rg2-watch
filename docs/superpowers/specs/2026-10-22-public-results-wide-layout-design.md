@@ -19,10 +19,14 @@ The polling-station and form ratios must remain on one line when displayed as `c
 
 Render `Незванични резултати` as a compact soft-orange pill above the election title. Use a pale orange background with dark orange text so the badge communicates caution without looking like an error or competing with the title. Provide equivalent colors in dark mode and preserve the existing uppercase lettering and spacing.
 
+## Chart alignment
+
+Give every desktop result row the same explicit columns: `minmax(16rem, 30%)` for the list name, the remaining space for the bar, and `9rem` for the right-aligned vote and percentage value. This prevents content-dependent value widths from shifting each bar's endpoints. Below 780px, retain the existing two-row mobile chart layout.
+
 ## Scope
 
 These changes affect only the standalone public-results template. They do not change exported data, private browse pages, export commands, hosting, or publication behavior.
 
 ## Verification
 
-Add static regression assertions for the 1,600px cap, non-wrapping ratio style, and soft-orange badge. Run the focused public-results tests, inspect the generated page, and run the full test suite before completion. Publishing a refreshed export to Cloudflare remains a separate manual action.
+Add static regression assertions for the 1,600px cap, non-wrapping ratio style, soft-orange badge, and shared chart columns. Run the focused public-results tests, inspect the generated page, and run the full test suite before completion. Publishing a refreshed export to Cloudflare remains a separate manual action.
