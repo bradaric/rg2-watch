@@ -97,7 +97,7 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
             "pdf": pdf if (cache_dir / (pdf + ".pdf")).is_file() else None,
             "rik": _rik_link(d["url"], base), "ops": opinions.get(d["id"], []),
             "u": d["url"], "rv": (reviews or {}).get(d["url"]),
-            "oc": (corrections or {}).get(d["url"])}
+            "oc": (corrections or {}).get(d["url"]), "correctable": d["doc_type"] == 6}
 
 
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
