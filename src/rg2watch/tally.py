@@ -8,6 +8,7 @@ from collections import Counter
 from .config import Config
 from .models import Doc
 from .names import to_cyrillic
+from .operator_corrections import OperatorCorrections, apply_operator_snapshot
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from .rules import (RG7_FIELDS, _dash_zero, _ok, change_text, decision_label, decision_sort_key, evaluate_report,
                     repeats, rg2_value, rg7_field, rg7_mismatch)
@@ -122,10 +123,11 @@ def apply_rg7(report: dict, decisions: list[dict]) -> tuple[dict, list[dict], li
     return out, applied, unverified
 
 
-def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None) -> dict:
+def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None,
+            operator_snapshot: dict | None = None) -> dict:
     """The counted numbers of one report (None = not readable) plus what makes it unreliable.
-    With `rg7` decisions the corrected numbers are counted and the arithmetic rules re-run on them;
-    the physical alerts (V, P) of the original RG-2 stay."""
+    Corrections are counted and arithmetic is re-run. RG-7 keeps physical alerts from the filed RG-2;
+    a validated operator snapshot clears alerts tied to the replaced numeric fields."""
     original = report
     applied, unverified = [], []
     if rg7:
@@ -135,22 +137,34 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None) 
             log.warning("RG-7 corrections of %s %s could not be applied", doc.municipality,
                         doc.station_no, exc_info=True)
             report, applied, unverified = original, [], []
+    if operator_snapshot is not None:
+        report = apply_operator_snapshot(report, operator_snapshot)
     n, lists, bad = _numbers(report)
     found = evaluate_report(report, doc, cfg)  # the rules re-applied to the stored report (no D-rules)
     arith = sorted({f.rule for f in found if f.rule in ARITHMETIC})
+    arith_details = {f.rule: f.summary for f in found if f.rule in ARITHMETIC}
+    raw_nums = {k: _dash_zero(v) for k, v in report["numbers"].items() if k != "list_votes"}
+    rec_bad = any(not _ok(raw_nums[k]) for k in ("registered", "voted", "ballots_in_box", "invalid", "valid"))
+    rec_bad = rec_bad or any(not _ok(_dash_zero(x["field"])) for x in report["numbers"]["list_votes"])
+    rec_bad = rec_bad or any(not raw_nums[k]["legible"] and raw_nums[k]["mark"] != "empty"
+                             for k in ("outside_voted", "outside_confirmations"))
+    rec_bad = rec_bad or (_ok(raw_nums["outside_voted"]) and not _ok(raw_nums["outside_confirmations"]))
     high = {f.rule for f in found if f.severity == "HIGH"}
     filed = None  # the RG-2 as filed, when corrections changed anything: n, l, bad, arith, high
-    if applied:  # arithmetic from the corrected numbers, everything else from the RG-2 as filed
+    if applied or operator_snapshot is not None:
         orig = evaluate_report(original, doc, cfg)
         fn, fl, fb = _numbers(original)
         filed = {"n": fn, "l": fl, "bad": fb, "arith": sorted({f.rule for f in orig if f.rule in ARITHMETIC}),
                  "high": sorted({f.rule for f in orig if f.severity == "HIGH"})}
-        high = {r for r in high if r in ARITHMETIC} | {
-            f.rule for f in orig if f.severity == "HIGH" and f.rule not in ARITHMETIC}
+        if operator_snapshot is None:  # RG-7 does not erase physical alerts on the filed RG-2
+            high = {r for r in high if r in ARITHMETIC} | {
+                f.rule for f in orig if f.severity == "HIGH" and f.rule not in ARITHMETIC}
     high = sorted(high)
     return {"n": n, "l": lists, "bad": bad, "conf": report["confidence"],
             "pq": report["visual"]["page_quality"], "arith": arith, "high": high,
-            "rg7": applied, "rg7_bad": unverified, "filed": filed}
+            "arith_details": arith_details, "rec_bad": rec_bad,
+            "rg7": applied, "rg7_bad": unverified, "operator": operator_snapshot is not None,
+            "filed": filed}
 
 
 def _numbers(report: dict) -> tuple[dict, dict, list[str]]:
@@ -177,7 +191,8 @@ def _numbers(report: dict) -> tuple[dict, dict, list[str]]:
 
 def as_filed(ex: dict) -> dict:
     """The extract judged on the RG-2 alone: no corrections, so no unverified-correction flag."""
-    return {**ex, **(ex.get("filed") or {}), "rg7": [], "rg7_bad": [], "filed": None}
+    return {**ex, **(ex.get("filed") or {}), "rg7": [], "rg7_bad": [], "operator": False,
+            "filed": None}
 
 
 def disagreements(mine: dict, others: dict[str, dict], model: str) -> tuple[list[dict], list[str]]:
@@ -341,9 +356,27 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     corr = {k: [d for d, _ in sorted(v, key=lambda x: x[1])] for k, v in corr.items()}
     sigs = {k: hash(json.dumps(v, sort_keys=True)) for k, v in corr.items()}
 
+    latest_operator = {r["url"]: r for r in store.latest_operator_corrections(parent)}
+    operator_states = {}
+    if latest_operator:
+        service = OperatorCorrections(store, cfg, model)
+        for d in mains:
+            if d["url"] not in latest_operator:
+                continue
+            try:
+                operator_states[d["id"]] = service.state(d["url"])
+            except Exception:
+                log.warning("operator correction state of %s could not be read", d["url"], exc_info=True)
+
     def key_of(a) -> object:
         sig = sigs.get(docobj[a["document_id"]].station_key) if a["document_id"] in docobj else None
-        return a["id"] if sig is None else (a["id"], sig)
+        op = operator_states.get(a["document_id"])
+        parts = [a["id"]]
+        if sig is not None:
+            parts.append(sig)
+        if op is not None:
+            parts.append(op["source_token"])
+        return parts[0] if len(parts) == 1 else tuple(parts)
 
     docobj = {d["id"]: _doc(d) for d in mains}
     need = [a["id"] for d in mains for m, a in by_doc.get(d["id"], {}).items()
@@ -355,7 +388,9 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         if k not in cache:
             doc = docobj[a["document_id"]]
             try:
-                cache[k] = extract(json.loads(reports[a["id"]]), doc, cfg, corr.get(doc.station_key))
+                op = operator_states.get(a["document_id"])
+                cache[k] = extract(json.loads(reports[a["id"]]), doc, cfg, corr.get(doc.station_key),
+                                   op["active_snapshot"] if op and op["status"] == "active" else None)
             except Exception:
                 log.warning("stored analysis %s could not be read for the tally", a["id"], exc_info=True)
                 cache[k] = None
@@ -377,7 +412,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             continue
         others = {m: e for m, a in got.items() if m != model and a["prompt_version"] == PROMPT_VERSION
                   and (e := ex_of(a)) is not None}
-        forms.append({"d": d, "muni": muni, "ex": mine, "others": others})
+        forms.append({"d": d, "muni": muni, "ex": mine, "others": others,
+                      "operator": operator_states.get(d["id"])})
     scope, scope_note = scope_of(store, cfg, parent)
     national = scope == "national"
     by_muni: dict[str, list] = {}
@@ -413,6 +449,15 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         f["why"] = reasons(f["ex"], dis, f["rows"])
         fdis, _ = disagreements(as_filed(f["ex"]), {m: as_filed(e) for m, e in f["others"].items()}, model)
         f["why_f"] = reasons(as_filed(f["ex"]), fdis, f["rows"])
+        contribution = _contrib(f["ex"], f["rows"])
+        turnout_gap = (contribution.get("rv", (0, 0))[1] - contribution.get("valid", 0)
+                       - contribution.get("invalid", 0))
+        unavailable = (f["ex"]["rec_bad"] or not f["rows"]
+                       or sorted(f["ex"]["l"]) != f["rows"])
+        status = "fail" if f["ex"]["arith"] else "unavailable" if unavailable else "ok"
+        f["rec"] = {"status": status, "rules": f["ex"]["arith"],
+                    "details": [f["ex"]["arith_details"][r] for r in f["ex"]["arith"]],
+                    "gap": turnout_gap}
         notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
     stations = {m: n for m, n in store.station_counts(parent).items()
                 if municipalities is None or m in municipalities}
@@ -462,6 +507,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                "generated_unknown_muni": bool(muni_sources.get(name))
                and all(not source for source in muni_sources[name]),
                "corrected": sum(1 for f in mine if f["ex"]["rg7"]),
+               "operator_corrected": sum(1 for f in mine if f["ex"]["operator"]),
                "clean": sum(1 for f in mine if not f["why"]), "unanalysed": unanalysed.get(name, 0),
                "fclean": sum(1 for f in mine if not f["why_f"]),
                **{k: _tot(acc[k]) for k in acc},
@@ -483,6 +529,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         munis.append(row)
     total = {"m": "(all)", "generated_unknown_muni": False, **counts,
              "corrected": sum(r["corrected"] for r in munis), "fclean": sum(r["fclean"] for r in munis),
+             "operator_corrected": sum(r["operator_corrected"] for r in munis),
              **{k: _tot(overall[k]) for k in overall},
               "pair": {k: _pair_tot(p) for k, p in opair.items()}}
     if not national:
@@ -501,6 +548,12 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             "scope_note": scope_note, **top, "munis": munis, "overall": total, "notes": notes,
             "corrected": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                            "rg7": f["ex"]["rg7"]} for f in forms if f["ex"]["rg7"]],
+            "operator_corrected": [{"id": f["d"]["id"], "m": f["muni"],
+                                     "no": f["d"]["station_no"],
+                                     "reason": f["operator"]["reason"], "at": f["operator"]["at"]}
+                                    for f in forms if f["ex"]["operator"]],
+            "reconciliation": [{"id": f["d"]["id"], "m": f["muni"],
+                                "no": f["d"]["station_no"], **f["rec"]} for f in forms],
             "excluded": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                           "why": f["why"]} for f in forms if f["why"]],
             "excluded_filed": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
@@ -554,7 +607,8 @@ def _list_table(names: list[str], rows: list[dict], key: str, diff: bool = False
 
 def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> str:
     """Plain-text report of build_tally(): totals, list votes, flagged forms. `view`: "corrected"
-    (RG-7 corrections counted), "filed" (the RG-2s as filed) or "diff" (corrected - as filed)."""
+    (RG-7 and operator corrections counted), "filed" (the RG-2s as filed) or "diff"
+    (corrected - as filed)."""
     key = "all" if all_forms else "cl"
     fkey = "f" + key
     diff = view == "diff"
@@ -564,7 +618,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
         rows = [{**r, "clean": r["fclean"], "excluded": r["fexcluded"]} for r in rows]
     elif diff:
         rows = [{**r, key: _delta(r["pair"][key]["c"], r["pair"][key]["f"])} for r in rows]
-    label = {"corrected": "with RG-7 corrections", "filed": "as filed on the RG-2 forms",
+    label = {"corrected": "with RG-7 and operator-entered corrections", "filed": "as filed on the RG-2 forms",
              "diff": "difference (corrected - as filed, over term-specific comparable cohorts; . = no change; turnout in percentage points)"}[view]
     out = [f"UNOFFICIAL - numbers read by {t['model']} from the scanned forms, not RIK results",
            f"{t['title']} ({t['parent']}): "
@@ -577,7 +631,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
         head.append("terms corrected-only/filed-only")
     pp = (lambda v: "-" if v is None else f"{v * 100:+.1f}") if diff else _pct
     num = (lambda v: _sgn(v)) if diff else (lambda v: f"{v:,}")
-    body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if r["corrected"] and view != "filed" else ""), str(r["clean"]), str(r["excluded"]),
+    body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if (r["corrected"] or r["operator_corrected"]) and view != "filed" else ""), str(r["clean"]), str(r["excluded"]),
              _pct(r["counted"] / r["stations"] if r["stations"] else None),
              *(num(r[key][k]) for k in ("registered", "voted")), pp(r[key]["turnout"]),
               *(num(r[key][k]) for k in ("ballots_in_box", "invalid", "valid", "outside_voted")),
@@ -631,6 +685,10 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
         out += ["", "* corrected by RG-7 decisions (corrected numbers counted):"]
         out += [f"  {c['m']} BM {c['no']}: " + "; ".join(f"RG-7 {d['d']}: {', '.join(d['ch'])}" for d in c["rg7"])
                 for c in t["corrected"]]
+    if t["operator_corrected"] and view != "filed":
+        out += ["", "* operator-entered corrections (corrected numbers counted):"]
+        out += [f"  {c['m']} BM {c['no']}: operator correction: {c['reason']} ({c['at']})"
+                for c in t["operator_corrected"]]
     if t["notes"]:
         out += ["", "notes (not flagged):"] + [f"  {n['m']} BM {n['no']}: {n['note']}" for n in t["notes"]]
     flagged = t["excluded_filed"] if view == "filed" else t["excluded"]

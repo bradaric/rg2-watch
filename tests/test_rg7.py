@@ -645,7 +645,7 @@ def test_tally_three_views_corrected_filed_and_diff():
     d = _delta(o["all"], o["fall"])
     assert d["ballots_in_box"] == -2 and d["invalid"] == -2 and d["valid"] == 0 and d["lists"] == [0, 0]
     assert all(d[k] == o["all"][k] - o["fall"][k] for k in ("registered", "voted", "valid", "outside_voted"))
-    assert "numbers with RG-7 corrections" in format_tally(t)
+    assert "numbers with RG-7 and operator-entered corrections" in format_tally(t)
     assert "as filed on the RG-2" in format_tally(t, view="filed") and "*" not in format_tally(t, view="filed").split("\n")[4]
     dt = format_tally(t, view="diff")
     assert "difference" in dt and "-2" in dt

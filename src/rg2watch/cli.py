@@ -28,7 +28,9 @@ from .findings import findings_for
 from .models import Doc, Event, Finding
 from .names import MunicipalityError, resolve_municipalities
 from .notify import Notifier
+from .operator_corrections import OperatorCorrections
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
+from .public_results import write_public_results
 from .render import RenderError, render_tiles
 from .replay import fetch_fixtures, make_replay_server
 from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, download_limiter_for
@@ -161,6 +163,12 @@ def _parser() -> argparse.ArgumentParser:
     g.add_argument("--as-filed", action="store_true", help="totals from the RG-2 forms as filed, "
                    "without RG-7 corrections")
     g.add_argument("--diff", action="store_true", help="difference: with RG-7 corrections minus as filed")
+
+    s = sub.add_parser("export-results", parents=[common],
+                       help="write a standalone public snapshot of unofficial results")
+    s.add_argument("--parent", help="election (default: the newest registered)")
+    s.add_argument("--out", type=Path, default=Path("public-results"),
+                   help="output directory (default: public-results)")
 
     s = sub.add_parser("review", parents=[common], help="record or list operator verdicts on forms")
     s.add_argument("url", nargs="?", help="document URL (one version of a form)")
@@ -313,8 +321,14 @@ def _publication_api(store: Store, cfg: Config):
 def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Config | None = None):
     """Serve the page on `port`, else the next free port up to +10; None when none is free."""
     case_api = _publication_api(store, cfg) if cfg is not None else None
+    correction_api = (OperatorCorrections(
+        store, cfg, stored_model(cfg.model),
+        on_change=lambda: build_page(store, page_dir / "index.html", cache_dir, cfg=cfg,
+                                     interval=cfg.browse_interval_s, with_status=False))
+                      if cfg is not None else None)
     for p in range(port, min(port + PORT_TRIES, 65536)):
-        server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api)
+        server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
+                              correction_api)
         if server is not None:
             if p != port:
                 log.warning("port %d busy, using %d", port, p)
@@ -404,6 +418,26 @@ def _cmd_tally(args) -> int:
     finally:
         store.close()
     print(format_tally(t, not args.clean, "diff" if args.diff else "filed" if args.as_filed else "corrected"))
+    return 0
+
+
+def _cmd_export_results(args) -> int:
+    cfg = _config(args)
+    store = _open_store(cfg)
+    try:
+        parent = default_parent(store, args.parent)
+        election = store.get_election(parent)
+        if election is None:
+            print("export-results: no registered election found", file=sys.stderr)
+            return 1
+        try:
+            out = write_public_results(store, cfg, parent, args.out)
+        except ValueError as exc:
+            print(f"export-results: {exc}", file=sys.stderr)
+            return 1
+    finally:
+        store.close()
+    print(f"{out} — {election.title} (static unofficial snapshot)")
     return 0
 
 
@@ -1238,6 +1272,7 @@ def main(argv: list[str] | None = None) -> int:
     handler = {"add": _cmd_add, "watch": _cmd_watch, "replay": _cmd_replay,
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
                "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "status": _cmd_status, "tally": _cmd_tally,
+               "export-results": _cmd_export_results,
                "review": _cmd_review, "labels": _cmd_labels, "drive-auth": _cmd_drive_auth,
                "revise-viber": _cmd_revise_viber,
                "drive-root": _cmd_drive_root}[args.cmd]

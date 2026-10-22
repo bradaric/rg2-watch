@@ -10,6 +10,7 @@ from pathlib import Path
 from .analyze import stored_model
 from .config import Config
 from .models import Doc
+from .operator_corrections import OperatorCorrections
 from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
 from .rules import RULE_INFO, change_text, decision_label, decision_sort_key, evaluate_report
 from .status import _rik_link, build_status, to_belgrade
@@ -88,14 +89,15 @@ def record_review(store: Store, url: str, verdict: str, note: str | None) -> dic
 
 
 def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
-             reviews: dict | None = None) -> dict:
+             reviews: dict | None = None, corrections: dict | None = None) -> dict:
     pdf = hashlib.sha256(d["url"].encode()).hexdigest()
     f = [[x["rule"], x["severity"], x["summary"]] for x in found.get(d["id"], [])]
     f.sort(key=lambda x: -SEV_RANK.get(x[1], 0))
     return {"up": d["uploaded_at"], "seen": to_belgrade(d["first_seen_at"]), "f": f, "ast": _ast(d),
             "pdf": pdf if (cache_dir / (pdf + ".pdf")).is_file() else None,
             "rik": _rik_link(d["url"], base), "ops": opinions.get(d["id"], []),
-            "u": d["url"], "rv": (reviews or {}).get(d["url"])}
+            "u": d["url"], "rv": (reviews or {}).get(d["url"]),
+            "oc": (corrections or {}).get(d["url"])}
 
 
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
@@ -110,7 +112,17 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                          {} if cache is None else cache.setdefault("ops", {}))
     elections = {e.parent: e for e in store.elections()}
     reviews = {r["url"]: review_record(r) for r in store.latest_reviews(parent)}
-    model = stored_model((cfg or Config()).model)
+    cfg = cfg or Config()
+    model = stored_model(cfg.model)
+    corrections = {}
+    if latest := store.latest_operator_corrections(parent):
+        service = OperatorCorrections(store, cfg, model)
+        for item in latest:
+            try:
+                state = service.state(item["url"])
+                corrections[item["url"]] = {k: state[k] for k in ("status", "reason", "at")}
+            except Exception:
+                log.warning("operator correction state of %s could not be read", item["url"], exc_info=True)
     r7: dict[tuple, list[dict]] = {}  # (election, station_key, RG-2 type) -> its RG-7 decisions
     r7_docs = store.rg7_reports(parent, model, RG7_PROMPT_VERSION, analysed_only=False) if parent else [
         x for p in elections for x in store.rg7_reports(p, model, RG7_PROMPT_VERSION, analysed_only=False)]
@@ -120,7 +132,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     readers = store.rg7_readers(parent, RG7_PROMPT_VERSION)
     for d, rep in sorted(r7_docs, key=lambda x: decision_sort_key(x[0]["uploaded_at"], x[0]["id"], x[1])):
         base = elections[d["parent"]].base_url if d["parent"] in elections else None
-        x = _version(d, {}, {}, cache_dir, base)
+        x = _version(d, {}, {}, cache_dir, base, corrections=corrections)
         x.update(d=decision_label(d["uploaded_at"], rep),
                  ch=[change_text(c) for c in rep["changes"]] if rep else None,
                  by=[m for m in readers.get(d["id"], []) if m != model],  # read by other models only
@@ -136,20 +148,20 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         ds.sort(key=lambda d: (d["uploaded_at"] or "", d["id"]), reverse=True)
         main = next((d for d in ds if d["active"]), ds[0])
         base = elections[par].base_url if par in elections else None
-        row = _version(main, found, opinions, cache_dir, base, reviews)
+        row = _version(main, found, opinions, cache_dir, base, reviews, corrections)
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
             name=main["station_name"], label=main["label"],
             state="removed" if not main["active"] else "replaced" if len(ds) > 1 else "current",
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),
-            v=[_version(d, found, opinions, cache_dir, base, reviews) for d in ds if d is not main])
+            v=[_version(d, found, opinions, cache_dir, base, reviews, corrections)
+               for d in ds if d is not main])
         row["dis"] = _disagreement(row["ops"])
         row["r7"] = r7.get((par, main["station_key"], main["doc_type"]), []) if main["active"] else []
         # "to review": the active current version has stored findings and no verdict on its URL
         row["rf"] = bool(main["active"]) and bool(found.get(main["id"]))
         row["todo"] = row["rf"] and row["rv"] is None
         rows.append(row)
-    cfg = cfg or Config()
     try:
         tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
                             cache=None if cache is None else cache.setdefault("tally", {}),
@@ -157,6 +169,12 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     except Exception:
         log.exception("tally could not be built")
         tally = None
+    rec = {x["id"]: {k: x[k] for k in ("status", "rules", "details", "gap")}
+           for x in (tally or {}).pop("reconciliation", [])}
+    for row in rows:
+        row["rec"] = rec.get(row["id"], {"status": "unavailable", "rules": [],
+                                         "details": ["not available for the currently counted tally"],
+                                         "gap": 0})
     return {"db": store.name, "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
             "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally,
             "rules": RULE_INFO}
