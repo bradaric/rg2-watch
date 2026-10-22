@@ -115,6 +115,20 @@ console.log(JSON.stringify({ok:true}));
     assert json.loads(result.stdout) == {"ok": True}
 
 
+def test_public_page_uses_wide_layout_nonwrapping_ratios_and_unofficial_badge():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert "main{max-width:1600px" in html
+    assert ".ratio{" in html and "white-space:nowrap" in html
+    assert html.count('class="v ratio"') == 2
+    assert 'class="eyebrow"' not in html
+    assert 'class="status-badge">Незванични резултати</div>' in html
+    assert ".status-badge{" in html and "background:var(--badge-bg)" in html
+
+
 def test_export_refuses_directory_with_other_files(tmp_path):
     s = store()
     form(s, 1, clean_report())
