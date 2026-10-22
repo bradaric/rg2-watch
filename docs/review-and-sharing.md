@@ -13,8 +13,9 @@ See [File layout and local server](reference.md#file-layout-and-local-server) fo
 
 - **Forms table** (DataTables + jQuery, vendored in `src/rg2watch/static/`, versions and sha256 in
   `VERSIONS.txt`; no CDN, no external requests): one row per form, sortable, paged (50-500 rows),
-  with filters for election, municipality, model, severity, rule, replaced/removed, analysis failed,
-  has local copy and "models disagree"; the filters survive a refresh (URL hash / saved state). The
+  with filters for election, municipality, model, severity, rule, result inclusion, replaced/removed,
+  analysis failed, has local copy and "models disagree"; the filters survive a refresh (URL hash /
+  saved state). The
   "+" opens older versions and the findings of every stored analysis model (second opinions from
   `analyze --parent`, current rules re-applied, no API); a HIGH that another model lacks is
   highlighted. The visible **Numbers** column checks A1-A5 on the currently counted values (model
@@ -22,9 +23,11 @@ See [File layout and local server](reference.md#file-layout-and-local-server) fo
   **Unavailable** when required values/list rows cannot be checked. The separate "number check"
   filter selects those current states, nonzero turnout gaps, or A1-A5 individually. A nonzero
   `voted - valid - invalid` contribution is shown as **Gap ±N** in the Numbers column; sort that
-  column to bring the largest gaps together. The existing rule filter continues to select original
-  stored findings for audit. Station, times and status are merged columns; a
-  "columns" menu shows or hides any column. Columns "Local PDF" (only when cached under `pdfs/` next to the DB) and "RIK" open in
+  column to bring the largest gaps together. **Result inclusion** says whether list totals count with
+  corrections and as filed, with the exact omission reason in its tooltip; its filter finds forms
+  omitted from either view. The existing rule filter continues to select original stored findings for
+  audit. Station, times and status are merged columns; a "columns" menu shows or hides any column.
+  The Models column starts hidden. Columns "Local PDF" (only when cached under `pdfs/` next to the DB) and "RIK" open in
   a new tab. Times are Serbian local time, DD/MM/YYYY HH:MM.
 - **Status panel** (top of the page, updates in place, nothing reloads): watcher (running since, last
   tick, last RIK success, RIK health ok/slow/blocked/blind, rate, requests per tick, lanes, municipality
@@ -256,12 +259,13 @@ directory as a new production deployment. The timestamp and footer explicitly sa
 static unofficial snapshot and does not update automatically. Never upload the database's private page
 folder, `data.json`, `reviews.json`, PDFs, SQLite file, configuration, or credentials.
 
-## Operator-entered numeric corrections
+## Operator-entered numeric verification and corrections
 
-An analysed, active first-round RG-2 can have an audited operator correction when the corrected
-numbers are written directly on the form and no RG-7 is required. Expand the form and choose
-**Enter correction**. The dedicated dialog is outside the results table, so automatic data/review
-refreshes do not replace it or interrupt typing. An unsaved draft is also retained in browser
+An analysed, active first-round RG-2 can have audited operator-entered values when a model reading
+needs confirmation or correction and no RG-7 is required. Expand the form and choose **Verify /
+correct values**. An unchanged snapshot is shown in history as **values verified**; changed numbers
+are shown as **numbers corrected**. The dedicated dialog is outside the results table, so automatic
+data/review refreshes do not replace it or interrupt typing. An unsaved draft is also retained in browser
 `sessionStorage` for that database and exact document URL across an accidental page reload.
 
 The dialog starts with the current model-plus-RG-7 values and requires a complete snapshot:

@@ -101,9 +101,22 @@ def test_only_first_round_rg2_rows_offer_operator_corrections(tmp_path):
     by_no = {r["no"]: r for r in rows_of(out)}
     assert by_no["1"]["correctable"] is True
     assert by_no["2"]["correctable"] is False
+    assert by_no["2"]["rec"]["result"] == {
+        "corrected": {"included": None, "reason": "not part of the first-round tally"},
+        "filed": {"included": None, "reason": "not part of the first-round tally"},
+    }
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     correction_box = html[html.index("function correctionBox("):html.index("function reconciliationEl(")]
     assert 'v.ast === "done" && v.correctable' in correction_box
+
+
+def test_result_inclusion_filter_column_and_models_default_visibility_are_present():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="ri"' in html
+    assert 'title: "Result inclusion"' in html
+    assert 'data: "mods", title: "Models", visible: false' in html
+    assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
 
 
 def test_json_is_ascii_even_with_lone_surrogate():

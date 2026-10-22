@@ -107,7 +107,11 @@ def test_reconciliation_status_reports_effective_arithmetic_or_unavailable_value
     result = tally(s)
     by_no = {x["no"]: x for x in result["reconciliation"]}
     assert by_no["12"] == {"id": by_no["12"]["id"], "m": "Alpha", "no": "12",
-                            "status": "ok", "rules": [], "details": [], "gap": 0}
+                            "status": "ok", "rules": [], "details": [], "gap": 0,
+                            "result": {
+                                "corrected": {"included": True, "reason": None},
+                                "filed": {"included": True, "reason": None},
+                            }}
     assert by_no["13"]["status"] == "fail" and by_no["13"]["rules"] == ["A2", "A3"]
     assert "invalid 21 + valid 780" in by_no["13"]["details"][0]
     assert by_no["14"]["status"] == "unavailable" and by_no["14"]["rules"] == []
@@ -403,6 +407,11 @@ def test_vote_totals_only_include_reconciled_forms_but_turnout_stays_independent
     assert a["vote_forms"] == 1
     assert a["withheld_valid"] == 770
     assert t["overall"]["counted"] == 2
+    rec = {x["no"]: x["result"] for x in t["reconciliation"]}
+    assert rec["1"]["corrected"] == {"included": True, "reason": None}
+    assert rec["2"]["corrected"] == {
+        "included": False, "reason": "list votes sum 780 != valid 770"}
+    assert rec["2"]["filed"] == rec["2"]["corrected"]
     assert any(reason.startswith("arithmetic") and "A3" in reason for reason in why(t)["2"])
     text = format_tally(t)
     assert "1 of 2 selected forms contributed reconciled vote totals" in text
