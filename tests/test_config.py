@@ -21,6 +21,7 @@ def test_defaults_without_file(monkeypatch):
     assert c.watchlist == []
     assert c.ntfy_url == "https://ntfy.sh"
     assert c.ntfy_topic is None
+    assert c.ntfy_medium is True
     assert c.medium_digest_s == 600
     assert c.request_timeout_s == 20.0
     assert c.outside_share_medium == 0.10
@@ -36,6 +37,12 @@ def test_toml_overrides(tmp_path, monkeypatch):
     assert c.watchlist == ["Zaječar"]
     assert c.db_path == Path("x.sqlite")
     assert c.probe_interval_s == 30
+
+
+def test_medium_ntfy_can_be_disabled(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text("ntfy_medium = false\n", encoding="utf-8")
+    assert load_config(p).ntfy_medium is False
 
 
 def test_env_overrides_topic(tmp_path, monkeypatch):

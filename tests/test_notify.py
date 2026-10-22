@@ -19,8 +19,9 @@ class Clock:
         return self.t
 
 
-def make(handler, topic="t", clock=None):
-    cfg = Config(ntfy_topic=topic, ntfy_url="http://ntfy.test", medium_digest_s=600)
+def make(handler, topic="t", clock=None, ntfy_medium=True):
+    cfg = Config(ntfy_topic=topic, ntfy_url="http://ntfy.test", medium_digest_s=600,
+                 ntfy_medium=ntfy_medium)
     http = httpx.Client(transport=httpx.MockTransport(handler))
     out = io.StringIO()
     return Notifier(cfg, http, out, clock or Clock()), out
@@ -60,6 +61,17 @@ def test_medium_digest_waits_for_interval():
     assert len(reqs) == 1 and len(reqs[0].content.decode().splitlines()) == 3
     assert out.getvalue().count("[MEDIUM] D1") == 1  # printed once despite retries
     assert n.send([]) == []
+
+
+def test_medium_ntfy_can_be_disabled_without_suppressing_local_output():
+    reqs = []
+    n, out = make(lambda r: reqs.append(r) or httpx.Response(200), ntfy_medium=False)
+    medium = (5, fin("MEDIUM", "D1"))
+
+    assert n.send([medium]) == [5]
+    assert n.send([], flush=True) == []
+    assert reqs == []
+    assert "[MEDIUM] D1" in out.getvalue()
 
 
 def test_low_printed_not_pushed():
