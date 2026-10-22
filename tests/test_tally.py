@@ -95,6 +95,22 @@ def test_high_alert_flags_form_and_medium_does_not():
     assert t["overall"]["clean"] == 1
 
 
+def test_reconciliation_status_reports_effective_arithmetic_or_unavailable_values():
+    s = store()
+    form(s, 12, clean_report())
+    broken = report(invalid=nf(21),
+                    list_votes=[{"row": 1, "field": nf(400)}, {"row": 2, "field": nf(379)}])
+    form(s, 13, broken)
+    form(s, 14, report(valid=nf(None, legible=False)))
+
+    by_no = {x["no"]: x for x in tally(s)["reconciliation"]}
+    assert by_no["12"] == {"id": by_no["12"]["id"], "m": "Alpha", "no": "12",
+                            "status": "ok", "rules": [], "details": []}
+    assert by_no["13"]["status"] == "fail" and by_no["13"]["rules"] == ["A2", "A3"]
+    assert "invalid 21 + valid 780" in by_no["13"]["details"][0]
+    assert by_no["14"]["status"] == "unavailable" and by_no["14"]["rules"] == []
+
+
 def test_empty_outside_voted_is_not_a_reason_but_illegible_is():
     s = store()
     form(s, 12, report(outside_voted=nf(None, legible=False, mark="empty")))

@@ -171,6 +171,10 @@ button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 .ocerror{color:var(--hi);font-weight:700}.ocok{color:var(--good);font-weight:650}.ocwarn{color:var(--warn);font-weight:650}
 .ochistory{margin-top:var(--s4);border-top:1px solid var(--line);padding-top:var(--s3)}
 .ochistory li{margin-bottom:var(--s1);overflow-wrap:anywhere}
+.rec{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;white-space:nowrap;position:relative}
+.recmark{display:inline-flex;align-items:center;justify-content:center;width:1.45em;height:1.45em;border:1.5px solid currentColor;border-radius:50%;line-height:1}
+.rec-ok{color:var(--good)}.rec-fail{color:var(--hi)}.rec-unavailable{color:var(--mut)}
+.rec:focus-visible::after{content:attr(data-d);position:absolute;left:0;top:calc(100% + 6px);z-index:30;width:max-content;max-width:30em;white-space:normal;padding:5px 9px;border-radius:5px;background:var(--fg);color:var(--panel);font-size:12.5px;font-weight:500;line-height:1.35;box-shadow:0 4px 12px rgba(0,0,0,.25)}
 #texcl td button{white-space:nowrap;min-height:26px;padding:1px 10px;font-size:13px}
 /* results */
 #tctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;margin:0 0 var(--s3)}
@@ -283,6 +287,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <label>min severity <select id="sev"><option value="0">any</option><option value="1">LOW</option><option value="2">MEDIUM</option><option value="3">HIGH</option></select></label>
 <details id="rulesbox"><summary id="rulessum">rules: any</summary><div id="rules"></div></details>
 <label>review <select id="rv"><option value="">any</option><option value="todo">to review</option><option value="escalate">escalated</option><option value="unsure">unsure</option><option value="ok">ok</option></select></label>
+<label>number check <select id="nc"><option value="">any</option><option value="ok">reconcile</option><option value="fail">any failure</option><option value="A1">A1</option><option value="A2">A2</option><option value="A3">A3</option><option value="A4">A4</option><option value="A5">A5</option><option value="unavailable">unavailable</option></select></label>
 <label><input type="checkbox" id="fl"> with findings</label>
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
@@ -488,7 +493,7 @@ function renderStatus() {
 // ---- table --------------------------------------------------------------------------------
 let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
-const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "fl", "rp", "rm", "fa", "c7", "loc", "dis", "auto"];
+const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "nc", "fl", "rp", "rm", "fa", "c7", "loc", "dis", "auto"];
 
 // rule codes carry their plain-language description (data.json "rules"): a hover title, a focus
 // tooltip, and aria-describedby pointing at the legend entry
@@ -753,6 +758,21 @@ function correctionBox(v, editable) {
   box.append(line);
   return box;
 }
+function reconciliationEl(rec) {
+  const failed = rec.status === "fail", unavailable = rec.status === "unavailable";
+  const text = failed ? rec.rules.join(" · ") : unavailable ? "Unavailable" : "Reconcile";
+  const mark = failed ? "×" : unavailable ? "?" : "✓";
+  const el = mk("span", null, "rec rec-" + rec.status), icon = mk("span", mark, "recmark");
+  icon.setAttribute("aria-hidden", "true");
+  el.append(icon, mk("span", text));
+  el.tabIndex = 0;
+  const detail = rec.details.length ? rec.details.join("; ") : unavailable
+    ? "Required values or expected list rows are unavailable" : "A1-A5 checks pass for the currently counted values";
+  el.setAttribute("aria-label", (unavailable ? "Number reconciliation unavailable" :
+    failed ? "Number reconciliation failed: " + rec.rules.join(", ") : "Numbers reconcile") + ". " + detail);
+  el.title = detail; el.dataset.d = detail;
+  return el;
+}
 function ocStoredDraft(url) {
   try { return JSON.parse(sessionStorage.getItem(ocDraftKey(url)) || "null"); }
   catch (_) { return null; }
@@ -872,10 +892,8 @@ function submitCorrection(action) {
     body: JSON.stringify(request)}).then(state => {
       try { sessionStorage.removeItem(ocDraftKey(ocUrl)); } catch (_) {}
       updateCorrectionSummary(ocUrl, state);
-      renderCorrectionEditor(state);
-      $("ocmsg").textContent = action === "revoke" ? "Correction revoked." : "Correction revision saved.";
-      $("ocmsg").className = "ocok";
       dataBuilt = null;
+      $("ocdlg").close();
       loadData();
     }, e => {
       for (const b of $("ocbody").querySelectorAll("button")) b.disabled = false;
@@ -962,7 +980,8 @@ function prep(r) {
   r._rules = new Set(ofs.map(f => f[0]));
   r._models = new Set(all.flatMap(x => x.ops.map(o => o.m)));
   r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models,
-    ...r.r7.flatMap(x => x.ch || []), ...all.flatMap(v => v.oc ? [v.oc.status, v.oc.reason || ""] : [])].join("\n").toLowerCase();
+    ...r.r7.flatMap(x => x.ch || []), r.rec.status, ...r.rec.rules, ...r.rec.details,
+    ...all.flatMap(v => v.oc ? [v.oc.status, v.oc.reason || ""] : [])].join("\n").toLowerCase();
   r.mods = [...r._models].sort().join(", ") + (r.dis.length ? " - DISAGREE" : "");
   r._stn = r.muni.toLowerCase() + " " + (parseInt(r.no) || 0);
   r._st = r.state + " " + r.ast;
@@ -978,6 +997,8 @@ function keep(r) {
   const rs = chosenRules();
   const rf = sel("rv"), x = rvOf(r);
   if (rf && !(rf === "todo" ? isTodo(r) : rf === "escalate" ? isEsc(r) : x && x.v === rf)) return false;
+  const nc = sel("nc");
+  if (nc && !(nc === r.rec.status || nc[0] === "A" && r.rec.rules.includes(nc))) return false;
   return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
     && (!rs.length || rs.some(x => r._rules.has(x))) && (!$("fl").checked || r._fl)
@@ -990,8 +1011,11 @@ function initTable() {
     data: rows, deferRender: true, pageLength: 100, lengthMenu: [50, 100, 250, 500],
     order: [[6, "desc"], [4, "desc"]], stateSave: true, stateDuration: 0,
     layout: {topStart: "pageLength", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
-    stateSaveParams: (s, d) => { d.rg = readCtl(); },
-    stateLoadParams: (s, d) => { if (!location.hash.slice(1) && d.rg) setCtl(d.rg); },
+    stateSaveParams: (s, d) => { d.rg = readCtl(); d.rgColumns = 2; },
+    stateLoadParams: (s, d) => {
+      if (d.rgColumns !== 2) delete d.columns;  // one-time reset: Numbers was inserted after Findings
+      if (!location.hash.slice(1) && d.rg) setCtl(d.rg);
+    },
     columns: [
       {data: null, orderable: false, className: "dt-control", defaultContent: "",
        createdCell: td => td.setAttribute("aria-label", "details and review")},
@@ -1005,6 +1029,9 @@ function initTable() {
         esc(r.state) + "<br>" + esc("analysis " + r.ast)}},
       {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
        createdCell: (td, d, r) => { td.append(badges(r.f), rg7Badges(r)); if (r._note) td.append(mk("span", r._note, "note")); }},
+      {data: "rec", title: "Numbers", className: "nw", render: {
+        _: d => d.status + " " + d.rules.join(" "), display: () => ""},
+       createdCell: (td, d) => td.append(reconciliationEl(d))},
       {data: "u", name: "review", title: "Review", className: "nw", render: {
         _: (d, t, r) => ((rvOf(r) || {}).v || "") + (olderEsc(r).length ? " older escalate" : ""),
         display: (d, t, r) => verdictHtml(rvOf(r)) + (olderEsc(r).length && (rvOf(r) || {}).v !== "escalate"

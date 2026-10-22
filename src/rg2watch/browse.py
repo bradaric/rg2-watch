@@ -169,6 +169,11 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     except Exception:
         log.exception("tally could not be built")
         tally = None
+    rec = {x["id"]: {k: x[k] for k in ("status", "rules", "details")}
+           for x in (tally or {}).pop("reconciliation", [])}
+    for row in rows:
+        row["rec"] = rec.get(row["id"], {"status": "unavailable", "rules": [],
+                                         "details": ["not available for the currently counted tally"]})
     return {"db": store.name, "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
             "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally,
             "rules": RULE_INFO}

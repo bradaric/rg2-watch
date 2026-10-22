@@ -142,6 +142,13 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None,
     n, lists, bad = _numbers(report)
     found = evaluate_report(report, doc, cfg)  # the rules re-applied to the stored report (no D-rules)
     arith = sorted({f.rule for f in found if f.rule in ARITHMETIC})
+    arith_details = {f.rule: f.summary for f in found if f.rule in ARITHMETIC}
+    raw_nums = {k: _dash_zero(v) for k, v in report["numbers"].items() if k != "list_votes"}
+    rec_bad = any(not _ok(raw_nums[k]) for k in ("registered", "voted", "ballots_in_box", "invalid", "valid"))
+    rec_bad = rec_bad or any(not _ok(_dash_zero(x["field"])) for x in report["numbers"]["list_votes"])
+    rec_bad = rec_bad or any(not raw_nums[k]["legible"] and raw_nums[k]["mark"] != "empty"
+                             for k in ("outside_voted", "outside_confirmations"))
+    rec_bad = rec_bad or (_ok(raw_nums["outside_voted"]) and not _ok(raw_nums["outside_confirmations"]))
     high = {f.rule for f in found if f.severity == "HIGH"}
     filed = None  # the RG-2 as filed, when corrections changed anything: n, l, bad, arith, high
     if applied or operator_snapshot is not None:
@@ -155,6 +162,7 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None,
     high = sorted(high)
     return {"n": n, "l": lists, "bad": bad, "conf": report["confidence"],
             "pq": report["visual"]["page_quality"], "arith": arith, "high": high,
+            "arith_details": arith_details, "rec_bad": rec_bad,
             "rg7": applied, "rg7_bad": unverified, "operator": operator_snapshot is not None,
             "filed": filed}
 
@@ -441,6 +449,11 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         f["why"] = reasons(f["ex"], dis, f["rows"])
         fdis, _ = disagreements(as_filed(f["ex"]), {m: as_filed(e) for m, e in f["others"].items()}, model)
         f["why_f"] = reasons(as_filed(f["ex"]), fdis, f["rows"])
+        unavailable = (f["ex"]["rec_bad"] or not f["rows"]
+                       or sorted(f["ex"]["l"]) != f["rows"])
+        status = "fail" if f["ex"]["arith"] else "unavailable" if unavailable else "ok"
+        f["rec"] = {"status": status, "rules": f["ex"]["arith"],
+                    "details": [f["ex"]["arith_details"][r] for r in f["ex"]["arith"]]}
         notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
     stations = {m: n for m, n in store.station_counts(parent).items()
                 if municipalities is None or m in municipalities}
@@ -535,6 +548,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                                      "no": f["d"]["station_no"],
                                      "reason": f["operator"]["reason"], "at": f["operator"]["at"]}
                                     for f in forms if f["ex"]["operator"]],
+            "reconciliation": [{"id": f["d"]["id"], "m": f["muni"],
+                                "no": f["d"]["station_no"], **f["rec"]} for f in forms],
             "excluded": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                           "why": f["why"]} for f in forms if f["why"]],
             "excluded_filed": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],

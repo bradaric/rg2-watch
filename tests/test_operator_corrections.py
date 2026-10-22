@@ -291,6 +291,8 @@ def test_tally_uses_active_operator_snapshot_and_clears_corrected_numeric_alerts
     assert totals["clean"] == 1 and tally["excluded"] == []
     assert totals["all"]["voted"] == totals["cl"]["voted"] == 853
     assert totals["all"]["valid"] == 827 and totals["all"]["lists"] == [427, 400]
+    rec = tally["reconciliation"][0]
+    assert rec["status"] == "ok" and rec["rules"] == []
     assert tally["operator_corrected"] == [{"id": tally["operator_corrected"][0]["id"],
                                              "m": "Сечањ", "no": "1",
                                              "reason": "read corrected entries",
@@ -331,6 +333,7 @@ def test_browse_row_has_compact_operator_correction_status(tmp_path):
     row = build_data(s, tmp_path, cfg=Config(model=MODEL))["rows"][0]
     assert row["oc"] == {"status": "active", "reason": "checked against scan",
                          "at": row["oc"]["at"]}
+    assert row["rec"]["status"] == "ok"
 
 
 def correction_request(server, method, path, body=None, headers=None):
@@ -415,3 +418,9 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert failure.index("saveCorrectionDraft();") < failure.index("Not saved:")
     success = html[html.index(".then(state => {", html.index("function submitCorrection(")):html.index("}, e => {", html.index("function submitCorrection("))]
     assert success.index("dataBuilt = null;") < success.index("loadData();")
+    assert '$("ocdlg").close();' in success
+    assert '$("ocdlg").close();' not in failure
+    assert 'id="nc"' in html and "number check" in html
+    assert "function reconciliationEl(" in html
+    assert "rec-ok" in html and "rec-fail" in html and "rec-unavailable" in html
+    assert 'data: "rec", title: "Numbers"' in html and "r.rec.rules.includes(nc)" in html

@@ -17,7 +17,12 @@ See [File layout and local server](reference.md#file-layout-and-local-server) fo
   has local copy and "models disagree"; the filters survive a refresh (URL hash / saved state). The
   "+" opens older versions and the findings of every stored analysis model (second opinions from
   `analyze --parent`, current rules re-applied, no API); a HIGH that another model lacks is
-  highlighted. Station, times and status are merged columns; a "columns" menu shows or hides any column. Columns "Local PDF" (only when cached under `pdfs/` next to the DB) and "RIK" open in
+  highlighted. The visible **Numbers** column checks A1-A5 on the currently counted values (model
+  plus applicable RG-7/operator correction): green **Reconcile**, red failed rule codes, or muted
+  **Unavailable** when required values/list rows cannot be checked. The separate "number check"
+  filter selects those current states or A1-A5 individually; the existing rule filter continues to
+  select original stored findings for audit. Station, times and status are merged columns; a
+  "columns" menu shows or hides any column. Columns "Local PDF" (only when cached under `pdfs/` next to the DB) and "RIK" open in
   a new tab. Times are Serbian local time, DD/MM/YYYY HH:MM.
 - **Status panel** (top of the page, updates in place, nothing reloads): watcher (running since, last
   tick, last RIK success, RIK health ok/slow/blocked/blind, rate, requests per tick, lanes, municipality
