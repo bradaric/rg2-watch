@@ -53,6 +53,7 @@ class Config:
     tally_scope: dict[str, str] = field(default_factory=dict)  # parent -> "national" | "municipal"
     ntfy_url: str = "https://ntfy.sh"
     ntfy_topic: str | None = None
+    ntfy_medium: bool = True  # push MEDIUM digests; findings are still stored/printed when false
     medium_digest_s: int = 600
     high_push_max: int = 10  # individual HIGH pushes per window; the rest roll into a digest
     high_push_window_s: int = 300

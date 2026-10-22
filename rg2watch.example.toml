@@ -36,6 +36,8 @@ only_municipalities = []
 # ntfy server and topic (topic can also come from env RG2W_NTFY_TOPIC, which wins)
 ntfy_url = "https://ntfy.sh"
 # ntfy_topic = "my-topic"
+# Push MEDIUM findings as digests; false keeps them in the terminal/page without ntfy
+ntfy_medium = true
 # Seconds between MEDIUM-severity digests
 medium_digest_s = 600
 # HIGH findings are pushed one by one, at most high_push_max per high_push_window_s seconds; the

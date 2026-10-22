@@ -82,8 +82,9 @@ change the file or environment variable.
      replaced documents in one sweep give ONE "mass replacement" alert and a digest, not 20
      pushes; `high_push_max`, `high_push_window_s`, `mass_replace_threshold`): corrected numbers, more ballots than voters, very high outside voting (15%+),
      RG-8/RG-9 published, an RG-2 replaced or removed, the watcher itself blind or blocked.
-   - MEDIUM, every 10 minutes as one digest: missing signatures, outside voting 10-15%, committee
-     remarks, unreadable fields, arithmetic mismatches.
+   - MEDIUM, every 10 minutes as one digest (`ntfy_medium = false` disables these pushes while
+     retaining findings in the terminal and page): missing signatures, outside voting 10-15%,
+     committee remarks, unreadable fields, arithmetic mismatches.
    - LOW: terminal and page only.
 5. For each alert: open the PDF link and check it yourself. Alerts are leads, not conclusions.
 

@@ -180,7 +180,8 @@ class Notifier:
         self._flush_status()
         for fid, f in findings_with_ids:
             self._print(fid, f)
-            if f.severity == "LOW" or not push:
+            if (f.severity == "LOW" or not push
+                    or (f.severity == "MEDIUM" and not self.cfg.ntfy_medium)):
                 delivered.append(fid)
             elif f.severity == "HIGH":
                 if fid in self._high_held:
