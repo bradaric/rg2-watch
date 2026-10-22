@@ -449,11 +449,15 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         f["why"] = reasons(f["ex"], dis, f["rows"])
         fdis, _ = disagreements(as_filed(f["ex"]), {m: as_filed(e) for m, e in f["others"].items()}, model)
         f["why_f"] = reasons(as_filed(f["ex"]), fdis, f["rows"])
+        contribution = _contrib(f["ex"], f["rows"])
+        turnout_gap = (contribution.get("rv", (0, 0))[1] - contribution.get("valid", 0)
+                       - contribution.get("invalid", 0))
         unavailable = (f["ex"]["rec_bad"] or not f["rows"]
                        or sorted(f["ex"]["l"]) != f["rows"])
         status = "fail" if f["ex"]["arith"] else "unavailable" if unavailable else "ok"
         f["rec"] = {"status": status, "rules": f["ex"]["arith"],
-                    "details": [f["ex"]["arith_details"][r] for r in f["ex"]["arith"]]}
+                    "details": [f["ex"]["arith_details"][r] for r in f["ex"]["arith"]],
+                    "gap": turnout_gap}
         notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
     stations = {m: n for m, n in store.station_counts(parent).items()
                 if municipalities is None or m in municipalities}

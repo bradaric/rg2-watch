@@ -421,6 +421,8 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert '$("ocdlg").close();' in success
     assert '$("ocdlg").close();' not in failure
     assert 'id="nc"' in html and "number check" in html
+    assert '<option value="gap">turnout gap</option>' in html
     assert "function reconciliationEl(" in html
     assert "rec-ok" in html and "rec-fail" in html and "rec-unavailable" in html
     assert 'data: "rec", title: "Numbers"' in html and "r.rec.rules.includes(nc)" in html
+    assert 'nc === "gap"' in html and '"Gap " + snum(rec.gap)' in html

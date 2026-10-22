@@ -20,8 +20,10 @@ See [File layout and local server](reference.md#file-layout-and-local-server) fo
   highlighted. The visible **Numbers** column checks A1-A5 on the currently counted values (model
   plus applicable RG-7/operator correction): green **Reconcile**, red failed rule codes, or muted
   **Unavailable** when required values/list rows cannot be checked. The separate "number check"
-  filter selects those current states or A1-A5 individually; the existing rule filter continues to
-  select original stored findings for audit. Station, times and status are merged columns; a
+  filter selects those current states, nonzero turnout gaps, or A1-A5 individually. A nonzero
+  `voted - valid - invalid` contribution is shown as **Gap ±N** in the Numbers column; sort that
+  column to bring the largest gaps together. The existing rule filter continues to select original
+  stored findings for audit. Station, times and status are merged columns; a
   "columns" menu shows or hides any column. Columns "Local PDF" (only when cached under `pdfs/` next to the DB) and "RIK" open in
   a new tab. Times are Serbian local time, DD/MM/YYYY HH:MM.
 - **Status panel** (top of the page, updates in place, nothing reloads): watcher (running since, last
