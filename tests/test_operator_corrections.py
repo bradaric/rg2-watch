@@ -151,6 +151,17 @@ def test_service_saves_revision_separately_from_review_and_revokes_it():
     assert [x["action"] for x in revoked["history"]] == ["correction", "revoke"]
 
 
+def test_history_distinguishes_verified_values_from_changed_numbers():
+    s = analysed_store()
+    service = OperatorCorrections(s, Config(model=MODEL), MODEL)
+
+    verified = service.save(URL, snapshot(), "confirmed from scan", service.state(URL)["source_token"])
+    changed = snapshot(voted=799, ballots_in_box=799, invalid=19)
+    corrected = service.save(URL, changed, "changed voted total", verified["source_token"])
+
+    assert [x["kind"] for x in corrected["history"]] == ["verification", "correction"]
+
+
 def test_service_calls_refresh_after_each_successful_change():
     s = analysed_store()
     refreshed = []
@@ -293,6 +304,9 @@ def test_tally_uses_active_operator_snapshot_and_clears_corrected_numeric_alerts
     assert totals["all"]["valid"] == 827 and totals["all"]["lists"] == [427, 400]
     rec = tally["reconciliation"][0]
     assert rec["status"] == "ok" and rec["rules"] == []
+    assert rec["result"]["corrected"] == {"included": True, "reason": None}
+    assert rec["result"]["filed"]["included"] is False
+    assert "list votes sum" in rec["result"]["filed"]["reason"]
     assert tally["operator_corrected"] == [{"id": tally["operator_corrected"][0]["id"],
                                              "m": "Сечањ", "no": "1",
                                              "reason": "read corrected entries",
@@ -406,7 +420,9 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "sessionStorage.setItem(ocDraftKey" in html
     assert "source_token" in html and 'submitCorrection("correction")' in html and 'submitCorrection("revoke")' in html
     assert "var(--panel)" in html and "var(--accent)" in html and "var(--hi)" in html
-    assert "Operator correction" in html and "Validate and save revision" in html
+    assert "Operator verification / correction" in html and "Verify / correct values" in html
+    assert 'verification: "values verified"' in html
+    assert 'correction: "numbers corrected"' in html
     assert "Corrections counted (RG-7 / operator-entered)" in html
     assert "T.operator_corrected.map" in html
     # The dialog is a static body child, not a DataTable child-row element rebuilt by loadData.

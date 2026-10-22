@@ -132,15 +132,24 @@ class OperatorCorrections:
         return row, report, raw, expected
 
     @staticmethod
-    def _history(rows) -> list[dict]:
-        return [{"id": r["id"], "action": r["action"], "reason": r["reason"],
-                 "at": r["created_at"],
-                 "snapshot": json.loads(r["snapshot_json"]) if r["snapshot_json"] else None}
-                for r in rows]
+    def _history(rows, source_revision: str, source_snapshot: dict) -> list[dict]:
+        out = []
+        for r in rows:
+            values = json.loads(r["snapshot_json"]) if r["snapshot_json"] else None
+            if r["action"] == "revoke":
+                kind = "revoke"
+            elif r["source_token"] != source_revision:
+                kind = "saved"
+            else:
+                kind = "verification" if values == source_snapshot else "correction"
+            out.append({"id": r["id"], "action": r["action"], "kind": kind,
+                        "reason": r["reason"], "at": r["created_at"], "snapshot": values})
+        return out
 
     def state(self, url: str) -> dict:
         row, report, raw, expected = self._source(url)
         history_rows = self.store.operator_correction_history(url)
+        source_snapshot = snapshot_of(report, expected)
         latest = history_rows[-1] if history_rows else None
         token = self._hash({"source": raw, "revision": latest["id"] if latest else None})
         status, active = "none", None
@@ -152,11 +161,11 @@ class OperatorCorrections:
             status = "suspended"
         return {"url": url, "status": status, "source_token": token,
                 "source_revision": raw,
-                "snapshot": snapshot_of(report, expected), "expected_rows": expected,
+                "snapshot": source_snapshot, "expected_rows": expected,
                 "active_snapshot": active, "reason": latest["reason"] if latest else None,
                 "at": latest["created_at"] if latest else None, "active": bool(row["active"]),
                 "revision": latest["id"] if latest else None,
-                "history": self._history(history_rows)}
+                "history": self._history(history_rows, raw, source_snapshot)}
 
     def save(self, url: str, snapshot: dict, reason: str, source_token: str) -> dict:
         state = self.state(url)

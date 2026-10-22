@@ -276,7 +276,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 </style></head><body>
-<dialog id="ocdlg" aria-labelledby="octitle"><div class="ochead"><h2 id="octitle">Operator correction</h2><button id="occlose" type="button" aria-label="Close correction editor">Close</button></div><div id="ocbody"></div></dialog>
+<dialog id="ocdlg" aria-labelledby="octitle"><div class="ochead"><h2 id="octitle">Operator verification / correction</h2><button id="occlose" type="button" aria-label="Close correction editor">Close</button></div><div id="ocbody"></div></dialog>
 <h1>rg2-watch <span class="mut" id="ele"></span> <span class="mut" id="built"></span></h1>
 <div id="banner"></div>
 <div id="status"></div>
@@ -289,6 +289,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <details id="rulesbox"><summary id="rulessum">rules: any</summary><div id="rules"></div></details>
 <label>review <select id="rv"><option value="">any</option><option value="todo">to review</option><option value="escalate">escalated</option><option value="unsure">unsure</option><option value="ok">ok</option></select></label>
 <label>number check <select id="nc"><option value="">any</option><option value="ok">reconcile</option><option value="fail">any failure</option><option value="gap">turnout gap</option><option value="A1">A1</option><option value="A2">A2</option><option value="A3">A3</option><option value="A4">A4</option><option value="A5">A5</option><option value="unavailable">unavailable</option></select></label>
+<label>result inclusion <select id="ri"><option value="">any</option><option value="corrected">not counted with corrections</option><option value="filed">not counted as filed</option></select></label>
 <label><input type="checkbox" id="fl"> with findings</label>
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
@@ -494,7 +495,7 @@ function renderStatus() {
 // ---- table --------------------------------------------------------------------------------
 let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
-const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "nc", "fl", "rp", "rm", "fa", "c7", "loc", "dis", "auto"];
+const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "nc", "ri", "fl", "rp", "rm", "fa", "c7", "loc", "dis", "auto"];
 
 // rule codes carry their plain-language description (data.json "rules"): a hover title, a focus
 // tooltip, and aria-describedby pointing at the legend entry
@@ -744,14 +745,14 @@ function ocFetch(path, options) {
 }
 function correctionBox(v, editable) {
   const box = mk("div", null, "ocbox"), line = mk("div", null, "ocstatus");
-  line.append(mk("strong", "Operator correction"));
+  line.append(mk("strong", "Operator verification / correction"));
   if (v.oc) {
     line.append(mk("span", v.oc.status, "ocpill " + v.oc.status));
     if (v.oc.reason) line.append(mk("span", v.oc.reason, "mut"));
     if (v.oc.at) line.append(mk("span", when(v.oc.at), "mut"));
   } else line.append(mk("span", "none", "mut"));
   if (editable && HTTP && v.ast === "done" && v.correctable) {
-    const button = mk("button", v.oc ? "Open / revise" : "Enter correction");
+    const button = mk("button", v.oc ? "Open / revise" : "Verify / correct values");
     button.type = "button";
     button.onclick = () => openCorrection(v);
     line.append(button);
@@ -774,6 +775,18 @@ function reconciliationEl(rec) {
   el.setAttribute("aria-label", (unavailable ? "Number reconciliation unavailable" :
     failed ? "Number reconciliation failed: " + rec.rules.join(", ") : "Numbers reconcile") + ". " + detail);
   el.title = detail; el.dataset.d = detail;
+  return el;
+}
+function resultInclusionEl(result) {
+  const c = result.corrected, f = result.filed;
+  const text = c.included == null && f.included == null ? "Not in tally"
+    : c.included && f.included ? "Counted in both"
+    : c.included ? "Corrected only" : f.included ? "As filed only" : "Not counted";
+  const el = mk("span", text, c.included && f.included ? "good" : c.included == null ? "mut" : "warn"), details = [];
+  if (c.included === false) details.push("With corrections: " + c.reason);
+  if (f.included === false) details.push("As filed: " + f.reason);
+  if (c.included == null) details.push(c.reason);
+  el.title = details.join("; ");
   return el;
 }
 function ocStoredDraft(url) {
@@ -804,7 +817,7 @@ function ocProblem(values, reason) {
   if (values.list_votes.reduce((n, x) => n + x.value, 0) !== values.valid) return "List votes must sum to valid.";
   if (values.voted > values.registered) return "Voted cannot exceed registered.";
   if (values.outside_voted > values.outside_confirmations) return "Outside voted cannot exceed confirmations.";
-  if (!reason.trim()) return "A correction reason is required.";
+  if (!reason.trim()) return "A verification / correction reason is required.";
   return "";
 }
 function saveCorrectionDraft() {
@@ -856,9 +869,9 @@ function renderCorrectionEditor(state) {
   }
   const reasonLabel = mk("label", "Required reason", "ocreason"), reason = document.createElement("input");
   reason.id = "ocreason"; reason.maxLength = 500; reason.value = reasonValue;
-  reason.setAttribute("aria-label", "Correction reason"); reason.addEventListener("input", saveCorrectionDraft);
+  reason.setAttribute("aria-label", "Verification or correction reason"); reason.addEventListener("input", saveCorrectionDraft);
   reasonLabel.append(reason);
-  const actions = mk("div", null, "ocactions"), save = mk("button", "Validate and save revision", "ocsave");
+  const actions = mk("div", null, "ocactions"), save = mk("button", "Verify / correct values", "ocsave");
   save.id = "ocsave"; save.type = "button"; save.onclick = () => submitCorrection("correction");
   const revoke = mk("button", "Revoke correction"); revoke.type = "button";
   revoke.hidden = !["active", "suspended"].includes(state.status); revoke.onclick = () => submitCorrection("revoke");
@@ -867,7 +880,10 @@ function renderCorrectionEditor(state) {
   const history = document.createElement("details"); history.className = "ochistory";
   history.append(mk("summary", "Revision history (" + state.history.length + ")"));
   const list = document.createElement("ol");
-  for (const item of state.history) list.append(mk("li", when(item.at) + " — " + item.action + ": " + item.reason));
+  const labels = {verification: "values verified", correction: "numbers corrected",
+    saved: "saved values", revoke: "revoked"};
+  for (const item of state.history) list.append(mk("li", when(item.at) + " — " +
+    (labels[item.kind] || item.action) + ": " + item.reason));
   history.append(list);
   body.replaceChildren(meta, status, grid, reasonLabel, actions, history);
   refreshCorrectionValidation();
@@ -1002,6 +1018,8 @@ function keep(r) {
   if (rf && !(rf === "todo" ? isTodo(r) : rf === "escalate" ? isEsc(r) : x && x.v === rf)) return false;
   const nc = sel("nc");
   if (nc && !(nc === "gap" ? r.rec.gap !== 0 : nc === r.rec.status || nc[0] === "A" && r.rec.rules.includes(nc))) return false;
+  const ri = sel("ri");
+  if (ri && r.rec.result[ri].included !== false) return false;
   return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
     && (!rs.length || rs.some(x => r._rules.has(x))) && (!$("fl").checked || r._fl)
@@ -1014,9 +1032,9 @@ function initTable() {
     data: rows, deferRender: true, pageLength: 100, lengthMenu: [50, 100, 250, 500],
     order: [[6, "desc"], [4, "desc"]], stateSave: true, stateDuration: 0,
     layout: {topStart: "pageLength", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
-    stateSaveParams: (s, d) => { d.rg = readCtl(); d.rgColumns = 2; },
+    stateSaveParams: (s, d) => { d.rg = readCtl(); d.rgColumns = 3; },
     stateLoadParams: (s, d) => {
-      if (d.rgColumns !== 2) delete d.columns;  // one-time reset: Numbers was inserted after Findings
+      if (d.rgColumns !== 3) delete d.columns;  // reset once: Result inclusion added; Models hidden
       if (!location.hash.slice(1) && d.rg) setCtl(d.rg);
     },
     columns: [
@@ -1035,11 +1053,15 @@ function initTable() {
       {data: "rec", title: "Numbers", className: "nw", render: {
         _: d => d.status + " " + d.rules.join(" ") + " " + d.gap, display: () => "", sort: d => Math.abs(d.gap)},
        createdCell: (td, d) => td.append(reconciliationEl(d))},
+      {data: "rec.result", title: "Result inclusion", className: "nw", render: {
+        _: d => (d.corrected.included ? "corrected counted" : "corrected not counted " + d.corrected.reason) + " " +
+          (d.filed.included ? "filed counted" : "filed not counted " + d.filed.reason), display: () => ""},
+       createdCell: (td, d) => td.append(resultInclusionEl(d))},
       {data: "u", name: "review", title: "Review", className: "nw", render: {
         _: (d, t, r) => ((rvOf(r) || {}).v || "") + (olderEsc(r).length ? " older escalate" : ""),
         display: (d, t, r) => verdictHtml(rvOf(r)) + (olderEsc(r).length && (rvOf(r) || {}).v !== "escalate"
           ? '<span class="rv rv-escalate rv-older">older escalated</span>' : "")}},
-      {data: "mods", title: "Models", className: "nw", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
+      {data: "mods", title: "Models", visible: false, className: "nw", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
       {data: "pdf", title: "Local PDF", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},
        createdCell: (td, d, r) => { const h = localHref(r.pdf); if (h) td.append(link("Local PDF", h)); }},
       {data: "rik", title: "RIK", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},

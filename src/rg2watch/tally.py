@@ -258,6 +258,28 @@ def _contrib(ex: dict, rows: list[int]) -> dict:
     return c
 
 
+def _result_inclusion(ex: dict, rows: list[int]) -> dict:
+    """Whether one form contributes reconciled list totals, with an operator-facing reason."""
+    if not rows:
+        return {"included": False, "reason": "expected list rows are unavailable"}
+    if sorted(ex["l"]) != rows:
+        return {"included": False,
+                "reason": f"list rows differ (got {len(ex['l'])}, expected {len(rows)})"}
+    missing = [r for r in rows if ex["l"].get(r) is None]
+    if missing:
+        details = [b for b in ex["bad"] if any(b.startswith(f"list row {r} ") for r in missing)]
+        return {"included": False, "reason": ", ".join(details) or
+                "list rows unavailable: " + ", ".join(map(str, missing))}
+    valid = ex["n"]["valid"]
+    if valid is None:
+        detail = next((b for b in ex["bad"] if b.startswith("valid ")), "valid unavailable")
+        return {"included": False, "reason": detail}
+    total = sum(ex["l"][r] for r in rows)
+    if total != valid:
+        return {"included": False, "reason": f"list votes sum {total} != valid {valid}"}
+    return {"included": True, "reason": None}
+
+
 def _put(acc: dict, c: dict, terms=None) -> None:
     for t, v in c.items():
         if terms is not None and t not in terms:
@@ -456,8 +478,10 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                        or sorted(f["ex"]["l"]) != f["rows"])
         status = "fail" if f["ex"]["arith"] else "unavailable" if unavailable else "ok"
         f["rec"] = {"status": status, "rules": f["ex"]["arith"],
-                    "details": [f["ex"]["arith_details"][r] for r in f["ex"]["arith"]],
-                    "gap": turnout_gap}
+                     "details": [f["ex"]["arith_details"][r] for r in f["ex"]["arith"]],
+                     "gap": turnout_gap,
+                     "result": {"corrected": _result_inclusion(f["ex"], f["rows"]),
+                                "filed": _result_inclusion(as_filed(f["ex"]), f["rows"])}}
         notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
     stations = {m: n for m, n in store.station_counts(parent).items()
                 if municipalities is None or m in municipalities}
