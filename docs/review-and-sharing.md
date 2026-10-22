@@ -193,7 +193,9 @@ package; and confirm a completed case still displays after recording `ok`.
 (unofficial)" tab of the browse page total what the watch model (`model`, or `--model`) read from the
 first-round RG-2 forms: registered, voted, ballots in box, invalid, valid, outside voted, turnout, and
 votes and share of valid votes per list, per municipality and overall, with coverage (forms counted
-of stations known). RIK's official results are never fetched. Flagged forms are left out of the clean
+of stations known). Applied RG-7 and operator-entered corrections replace those readings in the
+corrected view; the as-filed view preserves the original RG-2 readings. RIK's official results are
+never fetched. Flagged forms are left out of the clean
 totals (`--clean` / the page switch "clean forms only (leave out flagged)" show only those; every counted form is shown by default) when the
 confidence is low, the page quality is poor or unreadable, a counted number is illegible, another
 stored model read a counted number differently, an arithmetic rule (A1-A5) fires, or the form has any
@@ -217,6 +219,35 @@ they may come from different ballots. Two `list_names` keys naming the same muni
 Cyrillic) are a config error. Any other or unknown type (also an election without a stored type) is treated as
 municipal with the warning "unknown election type - set tally_scope"; override with
 `tally_scope = {"<parent>" = "national"}` (top-level key, before any `[table]`).
+
+## Operator-entered numeric corrections
+
+An analysed, active first-round RG-2 can have an audited operator correction when the corrected
+numbers are written directly on the form and no RG-7 is required. Expand the form and choose
+**Enter correction**. The dedicated dialog is outside the results table, so automatic data/review
+refreshes do not replace it or interrupt typing. An unsaved draft is also retained in browser
+`sessionStorage` for that database and exact document URL across an accidental page reload.
+
+The dialog starts with the current model-plus-RG-7 values and requires a complete snapshot:
+registered, voted, ballots in box, invalid, valid, outside voters, outside confirmations, and every
+expected list row. It also requires a reason. A save is rejected unless all values are non-negative
+whole numbers and A1-A5 reconcile: box <= voted, invalid + valid = box, list sum = valid, voted <=
+registered, and outside voters <= confirmations. Correction and review are separate actions: saving
+numbers does not set `ok`, `escalate`, or `unsure`.
+
+History is append-only. **Open / revise** stores another complete snapshot; **Revoke correction**
+records a revocation and returns the tally to its model/RG-7 source without deleting history. Each
+entry belongs to the exact document URL, so a replacement RG-2 starts without a correction. A source
+or correction revision token prevents a stale dialog or concurrent operator from overwriting newer
+work. If the analysis changes or a new RG-7 appears (even before that decision is analysed), the
+operator snapshot is suspended and is not counted until every value is reviewed and saved as a new
+revision.
+
+An active snapshot is applied after RG-7, then the rules are rerun. Corrected V1/V12 marks and resolved
+A1-A5 arithmetic no longer exclude the form from clean-only totals. Original model readings and
+findings remain visible for audit, and unrelated HIGH findings or HIGH rules produced by the corrected
+values can still keep the form flagged. The results selectors and CLI corrected view include both
+RG-7 and active operator-entered corrections; the as-filed view includes neither.
 
 ## RG-7 correction decisions
 

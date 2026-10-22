@@ -25,11 +25,16 @@ _QUEUED = ",".join(map(str, ANALYSED_TYPES + RG7_TYPES))  # everything the analy
 VERDICTS = ("ok", "escalate", "unsure")  # operator review of one document version (URL)
 NOTE_MAX = 500
 
+
+class CorrectionRevisionConflict(ValueError):
+    pass
+
 INDEXES = """
 CREATE INDEX IF NOT EXISTS analyses_doc ON analyses(document_id, model);
 CREATE INDEX IF NOT EXISTS analyses_parent_cost ON analyses(parent, cost_usd);
 CREATE INDEX IF NOT EXISTS events_parent_kind ON events(parent, kind);
 CREATE INDEX IF NOT EXISTS reviews_url ON reviews(url, id);
+CREATE INDEX IF NOT EXISTS operator_corrections_url ON operator_corrections(url, id);
 """  # after the migrations: older DBs lack some of these columns until then
 
 SCHEMA = """
@@ -68,6 +73,10 @@ CREATE TABLE IF NOT EXISTS counts(
 CREATE TABLE IF NOT EXISTS reviews(
     id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, url TEXT NOT NULL, verdict TEXT NOT NULL,
     note TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS operator_corrections(
+    id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, url TEXT NOT NULL,
+    action TEXT NOT NULL, snapshot_json TEXT, reason TEXT NOT NULL,
+    source_token TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS publications(
     id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE, document_id INTEGER NOT NULL, parent TEXT NOT NULL,
     summary TEXT NOT NULL, summary_sha256 TEXT NOT NULL, staged_pdf_path TEXT NOT NULL,
@@ -196,6 +205,64 @@ class Store:
         with self._lock:
             r = self._db.execute("SELECT * FROM documents WHERE url=?", (url,)).fetchone()
         return (r["parent"], _doc(r)) if r else None
+
+    def add_operator_correction(self, url: str, action: str, snapshot: dict | None,
+                                reason: str, source_token: str, expected_revision=...) -> sqlite3.Row | None:
+        """Append one correction/revocation event for an exact document URL."""
+        if action not in ("correction", "revoke"):
+            raise ValueError("action must be correction or revoke")
+        if (action == "correction") != (snapshot is not None):
+            raise ValueError("a correction requires values and a revocation must not have values")
+        reason = clean_note(reason)
+        if reason is None:
+            raise ValueError("correction reason is required")
+        if not isinstance(source_token, str) or not source_token:
+            raise ValueError("source token is required")
+        blob = json.dumps(snapshot, sort_keys=True, separators=(",", ":")) if snapshot is not None else None
+        with self._lock, self._db:
+            doc = self._db.execute("SELECT id FROM documents WHERE url=?", (url,)).fetchone()
+            if doc is None:
+                return None
+            if expected_revision is not ...:
+                current = self._db.execute(
+                    "SELECT MAX(id) FROM operator_corrections WHERE url=?", (url,)).fetchone()[0]
+                if current != expected_revision:
+                    raise CorrectionRevisionConflict("operator correction revision changed")
+            cur = self._db.execute(
+                "INSERT INTO operator_corrections(document_id,url,action,snapshot_json,reason,"
+                "source_token,created_at) VALUES(?,?,?,?,?,?,?)",
+                (doc["id"], url, action, blob, reason, source_token, _now()))
+            return self._db.execute("SELECT * FROM operator_corrections WHERE id=?",
+                                    (cur.lastrowid,)).fetchone()
+
+    def operator_correction_history(self, url: str) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._db.execute(
+                "SELECT * FROM operator_corrections WHERE url=? ORDER BY id", (url,)).fetchall()
+
+    def latest_operator_corrections(self, parent: str | None = None) -> list[sqlite3.Row]:
+        args: tuple = ()
+        where = ""
+        if parent is not None:
+            where, args = "WHERE d.parent=? ", (parent,)
+        with self._lock:
+            return self._db.execute(
+                "SELECT c.* FROM operator_corrections c JOIN documents d ON d.id=c.document_id "
+                + where + "AND c.id=(SELECT MAX(x.id) FROM operator_corrections x WHERE x.url=c.url) "
+                "ORDER BY c.id", args).fetchall()
+
+    def operator_correction_source(self, url: str, model: str,
+                                   prompt_version: str) -> sqlite3.Row | None:
+        """Document plus its newest successful analysis for the correction editor."""
+        with self._lock:
+            return self._db.execute(
+                "SELECT d.*, a.id analysis_id, a.result_json FROM documents d "
+                "JOIN analyses a ON a.document_id=d.id WHERE d.url=? AND a.model=? "
+                "AND a.prompt_version=? AND a.status='done' AND a.result_json IS NOT NULL "
+                "AND a.id=(SELECT MAX(x.id) FROM analyses x WHERE x.document_id=d.id "
+                "AND x.model=? AND x.prompt_version=? AND x.status='done' "
+                "AND x.result_json IS NOT NULL)",
+                (url, model, prompt_version, model, prompt_version)).fetchone()
 
     def known_docs(self, parent: str, scope: Scope) -> dict[tuple[str, int | str], Doc]:
         sql, args = "SELECT * FROM documents WHERE parent=? AND active=1", [parent]

@@ -1,5 +1,4 @@
-"""Local web server for the browse page: 127.0.0.1, GET/HEAD on a strict allow-list, plus the one
-write endpoint POST /review (operator verdicts, same-origin only)."""
+"""Local browse server: strict GET/HEAD allow-list and same-origin review/correction/case writes."""
 import json
 import logging
 import os
@@ -11,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from .operator_corrections import CorrectionConflict
 from .store import VERDICTS
 
 log = logging.getLogger("rg2watch.server")
@@ -24,6 +24,7 @@ FILES = {
 PDF = re.compile(r"/pdfs/([0-9a-f]{64})\.pdf")
 REVIEW_MAX_BYTES = 4096
 CASE_MAX_BYTES = 8192
+CORRECTION_MAX_BYTES = 65536
 REVIEW_HEADERS = ("Host", "Origin", "Content-Length", "Content-Type", "X-RG2W", "Sec-Fetch-Site")
 LENGTH = re.compile(r"[0-9]{1,6}")
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
@@ -144,6 +145,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlsplit(self.path)
+        if parsed.path == "/correction" and not parsed.query:
+            return self._correction_post()
         if parsed.path in ("/case/prepare", "/case/publish") and not parsed.query:
             return self._case_post(parsed.path)
         if parsed.path != "/review" or parsed.query:
@@ -180,6 +183,62 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "unknown document URL"})
         log.info("review: %s %s", req["verdict"], req["url"])
         self._json(200, {"review": rec})
+
+    def _correction_post(self) -> None:
+        self.close_connection = True
+        refusal = self._correction_post_refusal()
+        if refusal:
+            return self._json(refusal[0], {"error": refusal[1]})
+        n = int(self.headers["Content-Length"])
+        try:
+            raw = self.rfile.read(n)
+        except (OSError, TimeoutError):
+            return
+        if len(raw) != n:
+            return self._json(400, {"error": "body shorter than Content-Length"})
+        try:
+            req = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return self._json(400, {"error": "body is not JSON"})
+        if not isinstance(req, dict) or req.get("action") not in ("correction", "revoke"):
+            return self._json(400, {"error": "expected a correction or revoke action"})
+        common = (isinstance(req.get("url"), str) and isinstance(req.get("reason"), str)
+                  and isinstance(req.get("source_token"), str))
+        if req["action"] == "correction":
+            valid = common and set(req) == {"url", "action", "snapshot", "reason", "source_token"}
+        else:
+            valid = common and set(req) == {"url", "action", "reason", "source_token"}
+        if not valid:
+            return self._json(400, {"error": "malformed correction request"})
+        try:
+            if req["action"] == "correction":
+                state = self.server.correction_api.save(
+                    req["url"], req["snapshot"], req["reason"], req["source_token"])
+            else:
+                state = self.server.correction_api.revoke(
+                    req["url"], req["reason"], req["source_token"])
+        except CorrectionConflict as exc:
+            return self._json(409, {"error": str(exc)})
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)[:300]})
+        except Exception:
+            log.exception("operator correction could not be stored")
+            return self._json(500, {"error": "operator correction could not be stored"})
+        self._json(200, state)
+
+    def _correction_post_refusal(self) -> tuple[int, str] | None:
+        if any(len(self.headers.get_all(h) or ()) > 1 for h in REVIEW_HEADERS):
+            return 400, "duplicate header"
+        if self.server.correction_api is None or not self._same_origin():
+            return 403, "forbidden"
+        if self.headers.get("X-RG2W") != "1":
+            return 403, "missing X-RG2W"
+        if (self.headers.get("Content-Type") or "").strip().lower() != "application/json":
+            return 400, "Content-Type must be exactly application/json"
+        n = self.headers.get("Content-Length")
+        if n is None or not LENGTH.fullmatch(n) or int(n) > CORRECTION_MAX_BYTES:
+            return 400, f"body must have a Content-Length of at most {CORRECTION_MAX_BYTES} bytes"
+        return None
 
     def _case_post(self, path: str) -> None:
         self.close_connection = True
@@ -264,7 +323,31 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": "case status could not be read"})
         return True
 
+    def _correction_get(self) -> bool:
+        parsed = urlsplit(self.path)
+        if parsed.path != "/correction":
+            return False
+        if self.server.correction_api is None:
+            return False
+        if not self._same_origin():
+            self._json(403, {"error": "forbidden"})
+            return True
+        try:
+            values = parse_qs(parsed.query, strict_parsing=True)
+            if set(values) != {"url"} or len(values["url"]) != 1:
+                self._json(400, {"error": "expected one url query parameter"})
+            else:
+                self._json(200, self.server.correction_api.state(values["url"][0]))
+        except ValueError as exc:
+            self._json(400, {"error": str(exc)[:300]})
+        except Exception:
+            log.exception("operator correction could not be read")
+            self._json(500, {"error": "operator correction could not be read"})
+        return True
+
     def do_GET(self) -> None:
+        if self._correction_get():
+            return
         if self._case_get():
             return
         self._send(True)
@@ -285,13 +368,13 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def start_server(out_dir: Path, cache_dir: Path, port: int,
-                  get_reviews: Callable[[], dict] | None = None,
-                  put_review: Callable[[str, str, str | None], dict | None] | None = None,
-                  case_api=None
+                   get_reviews: Callable[[], dict] | None = None,
+                   put_review: Callable[[str, str, str | None], dict | None] | None = None,
+                   case_api=None, correction_api=None
                  ) -> ThreadingHTTPServer | None:
     """Serve `out_dir` (+ cached PDFs) in a daemon thread; None when the port is unavailable.
-    `get_reviews` serves GET /reviews.json, `put_review(url, verdict, note)` backs POST /review
-    (returns the stored record, None for an unknown URL); without them both are refused."""
+    `get_reviews` serves GET /reviews.json, `put_review(url, verdict, note)` backs POST /review,
+    and `correction_api` backs the audited correction endpoint; absent APIs are refused."""
     try:
         server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     except OSError as exc:
@@ -301,6 +384,7 @@ def start_server(out_dir: Path, cache_dir: Path, port: int,
     server.out_dir, server.cache_dir = Path(out_dir).resolve(), Path(cache_dir).resolve()
     server.get_reviews, server.put_review = get_reviews, put_review
     server.case_api = case_api
+    server.correction_api = correction_api
     threading.Thread(target=server.serve_forever, name="web", daemon=True).start()
     log.info("browse page at http://127.0.0.1:%d", server.server_port)
     return server

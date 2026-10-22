@@ -286,7 +286,7 @@ def test_hero_markup_labelled_and_safe():
     assert "Режим презентације" not in html
     assert "помоћу АИ" not in html
     assert "само записници без уочених проблема (без оних за проверу)" in html
-    assert "са исправкама (RG-7)" in html
+    assert "са исправкама (RG-7 / ручни унос)" in html
     assert "оригинални подаци (RG-2)" in html
     assert "разлика (са исправкама − оригинални)" in html
     assert 'id="hs-valid-primary"' in html and 'id="hs-valid-context"' in html
@@ -736,7 +736,7 @@ setData(r);
 els.tview.value = "corrected";
 els.tmode.value = "all";
 renderHero();
-assert(els.herotitle.textContent.endsWith(" — са исправкама (RG-7)"));
+assert(els.herotitle.textContent.endsWith(" — са исправкама (RG-7 / ручни унос)"));
 assert.equal(els["hv-forms"].textContent, "12");
 assert.equal(els["hv-formstot"].textContent, " / 15");
 assert.equal(els["hs-forms-primary"].textContent, "урачунато у резултат");
@@ -847,7 +847,7 @@ for (const p of [r.pair.all, r.pair.cl]) {
 setData(r);
 els.tmode.value = "all";
 renderHero();
-assert(els.herotitle.textContent.endsWith(" — РАЗЛИКА (са исправкама RG-7 − оригинални RG-2)"));
+assert(els.herotitle.textContent.endsWith(" — РАЗЛИКА (са исправкама RG-7 / ручни унос − оригинални RG-2)"));
 assert.equal(els["hv-formstot"].textContent, "");
 assert.equal(els["hs-forms-primary"].textContent, "промене броја: без уочених проблема / за проверу");
 assert.equal(els["hs-forms-context"].textContent, "");

@@ -151,6 +151,26 @@ td .rv+.rv-older{margin-top:var(--s1)}
 .vb-escalate[aria-pressed=true]{background:var(--fg);border-color:var(--fg);color:var(--panel);box-shadow:none}
 button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 .rvmsg{color:var(--hi);font-weight:700}
+.ocbox{margin:var(--s2) 0;padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+.ocstatus{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s2)}
+.ocpill{display:inline-block;padding:0 8px;border:1.5px solid var(--accent);border-radius:999px;color:var(--accent);font-size:11px;line-height:17px;font-weight:750;text-transform:uppercase}
+.ocpill.suspended{border-color:var(--warn);color:var(--warn)}
+.ocpill.revoked{border-color:var(--mut);color:var(--mut)}
+#ocdlg{width:min(66rem,calc(100vw - 2 * var(--s4)));max-height:calc(100vh - 2 * var(--s4));padding:0;color:var(--fg);background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:0 18px 55px rgba(0,0,0,.35)}
+#ocdlg::backdrop{background:rgba(0,0,0,.55)}
+.ochead{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);background:var(--panel);border-bottom:1px solid var(--line)}
+.ochead h2{margin:0;font-size:17px}.ochead button{margin-left:auto}
+#ocbody{padding:var(--s4)}
+.ocmeta{margin:0 0 var(--s3);color:var(--mut);overflow-wrap:anywhere}
+.ocgrid{display:grid;grid-template-columns:minmax(10em,1fr) minmax(7em,.6fr) minmax(8em,.7fr);gap:var(--s1) var(--s3);align-items:center;margin-bottom:var(--s4)}
+.ocgrid .och{color:var(--mut);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:var(--s1)}
+.ocgrid input{width:100%;font-variant-numeric:tabular-nums}
+.ocreason{display:block;margin:var(--s3) 0}.ocreason input{display:block;width:100%;margin-top:var(--s1)}
+.ocactions{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2);margin-top:var(--s3)}
+.ocsave{background:var(--accent-bg);border-color:var(--accent)}
+.ocerror{color:var(--hi);font-weight:700}.ocok{color:var(--good);font-weight:650}.ocwarn{color:var(--warn);font-weight:650}
+.ochistory{margin-top:var(--s4);border-top:1px solid var(--line);padding-top:var(--s3)}
+.ochistory li{margin-bottom:var(--s1);overflow-wrap:anywhere}
 #texcl td button{white-space:nowrap;min-height:26px;padding:1px 10px;font-size:13px}
 /* results */
 #tctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;margin:0 0 var(--s3)}
@@ -251,6 +271,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 </style></head><body>
+<dialog id="ocdlg" aria-labelledby="octitle"><div class="ochead"><h2 id="octitle">Operator correction</h2><button id="occlose" type="button" aria-label="Close correction editor">Close</button></div><div id="ocbody"></div></dialog>
 <h1>rg2-watch <span class="mut" id="ele"></span> <span class="mut" id="built"></span></h1>
 <div id="banner"></div>
 <div id="status"></div>
@@ -281,7 +302,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <section id="hero">
 <div id="herobar"><select id="hmuni" aria-label="Општина"></select>
 <select id="hmode" aria-label="Обухваћени записници"><option value="cl">само записници без уочених проблема (без оних за проверу)</option><option value="all" selected>сви обрађени записници</option></select>
-<select id="hview" aria-label="Приказ података"><option value="corrected" selected>са исправкама (RG-7)</option><option value="filed">оригинални подаци (RG-2)</option><option value="diff">разлика (са исправкама − оригинални)</option></select>
+<select id="hview" aria-label="Приказ података"><option value="corrected" selected>са исправкама (RG-7 / ручни унос)</option><option value="filed">оригинални подаци (RG-2)</option><option value="diff">разлика (са исправкама − оригинални)</option></select>
 <button id="herobtn">Цео екран</button></div>
 <div id="herohead"><span class="kicker">НЕЗВАНИЧНО</span><div id="herotitle"></div></div>
 <div id="heronums">
@@ -298,12 +319,12 @@ body.hero #herochart{margin:var(--s2) 0 0}
 <p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
 <p id="tscope" class="warnbox" hidden></p>
 <div id="tctl"><label>totals over <select id="tmode"><option value="cl">clean forms only (leave out flagged)</option><option value="all" selected>all counted forms</option></select></label>
-<label>numbers: <select id="tview"><option value="corrected" selected>with RG-7 corrections</option><option value="filed">as filed on RG-2 forms</option><option value="diff">difference (corrected − as filed)</option></select></label>
+<label>numbers: <select id="tview"><option value="corrected" selected>with RG-7 / operator corrections</option><option value="filed">as filed on RG-2 forms</option><option value="diff">difference (corrected − as filed)</option></select></label>
 <button id="csv">Download CSV</button></div>
 <h3>Overall</h3><div id="toverall"></div>
 <h3>Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
 <h3>Flagged forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
-<h3 id="tcorhead" hidden>Corrected by RG-7 (corrected numbers are counted)</h3><ul id="tcor"></ul>
+<h3 id="tcorhead" hidden>Corrections counted (RG-7 / operator-entered)</h3><ul id="tcor"></ul>
 <h3 id="tnoteshead" hidden>Notes (not flagged)</h3><ul id="tnotes"></ul>
 </div>
 <script src="jquery.min.js"></script>
@@ -702,6 +723,168 @@ function loadReviews() {
       renderStatus();
     }, e => console.error("fetching reviews.json failed", e));
 }
+
+// ---- audited operator-entered numeric corrections -----------------------------------------
+const OC_FIELDS = [["registered", "Registered"], ["voted", "Voted"],
+  ["ballots_in_box", "Ballots in box"], ["invalid", "Invalid"], ["valid", "Valid"],
+  ["outside_voted", "Outside voted"], ["outside_confirmations", "Outside confirmations"]];
+let ocState = null, ocUrl = null;
+const ocDraftKey = url => "rg2watch:operator-correction:" + D.db + ":" + url;
+function ocFetch(path, options) {
+  return fetch(path, {cache: "no-store", ...options}).then(res => res.json().catch(() => ({})).then(data => {
+    if (!res.ok) throw new Error(data.error || "HTTP " + res.status);
+    return data;
+  }));
+}
+function correctionBox(v, editable) {
+  const box = mk("div", null, "ocbox"), line = mk("div", null, "ocstatus");
+  line.append(mk("strong", "Operator correction"));
+  if (v.oc) {
+    line.append(mk("span", v.oc.status, "ocpill " + v.oc.status));
+    if (v.oc.reason) line.append(mk("span", v.oc.reason, "mut"));
+    if (v.oc.at) line.append(mk("span", when(v.oc.at), "mut"));
+  } else line.append(mk("span", "none", "mut"));
+  if (editable && HTTP && v.ast === "done") {
+    const button = mk("button", v.oc ? "Open / revise" : "Enter correction");
+    button.type = "button";
+    button.onclick = () => openCorrection(v);
+    line.append(button);
+  }
+  box.append(line);
+  return box;
+}
+function ocStoredDraft(url) {
+  try { return JSON.parse(sessionStorage.getItem(ocDraftKey(url)) || "null"); }
+  catch (_) { return null; }
+}
+function ocStartingSnapshot(state) {
+  const old = [...state.history].reverse().find(x => x.action === "correction");
+  return state.active_snapshot || (state.status === "suspended" && old ? old.snapshot : null) || state.snapshot;
+}
+function ocReadSnapshot() {
+  const values = {};
+  for (const [key] of OC_FIELDS) {
+    const raw = document.querySelector('#ocbody input[data-oc-field="' + key + '"]').value;
+    values[key] = raw === "" ? null : Number(raw);
+  }
+  values.list_votes = ocState.expected_rows.map(row => {
+    const raw = document.querySelector('#ocbody input[data-oc-row="' + row + '"]').value;
+    return {row, value: raw === "" ? null : Number(raw)};
+  });
+  return values;
+}
+function ocProblem(values, reason) {
+  const nums = [...OC_FIELDS.map(x => values[x[0]]), ...values.list_votes.map(x => x.value)];
+  if (nums.some(x => !Number.isSafeInteger(x) || x < 0)) return "Every value must be a non-negative whole number.";
+  if (values.ballots_in_box > values.voted) return "Ballots in box cannot exceed voted.";
+  if (values.invalid + values.valid !== values.ballots_in_box) return "Invalid plus valid must equal ballots in box.";
+  if (values.list_votes.reduce((n, x) => n + x.value, 0) !== values.valid) return "List votes must sum to valid.";
+  if (values.voted > values.registered) return "Voted cannot exceed registered.";
+  if (values.outside_voted > values.outside_confirmations) return "Outside voted cannot exceed confirmations.";
+  if (!reason.trim()) return "A correction reason is required.";
+  return "";
+}
+function saveCorrectionDraft() {
+  if (!ocState || !ocUrl) return;
+  const reason = $("ocreason").value, values = ocReadSnapshot();
+  try { sessionStorage.setItem(ocDraftKey(ocUrl), JSON.stringify({
+    source_token: ocState.source_token, snapshot: values, reason})); } catch (_) {}
+  refreshCorrectionValidation();
+}
+function refreshCorrectionValidation() {
+  const reason = $("ocreason").value, values = ocReadSnapshot();
+  const problem = ocProblem(values, reason), msg = $("ocmsg");
+  msg.textContent = problem || "Values reconcile and are ready to save.";
+  msg.className = problem ? "ocerror" : "ocok";
+  $("ocsave").disabled = !!problem;
+}
+function ocInput(label, value, attr, key) {
+  const input = document.createElement("input");
+  input.type = "number"; input.min = "0"; input.step = "1"; input.value = value == null ? "" : String(value);
+  input.setAttribute(attr, key); input.setAttribute("aria-label", label + " operator value");
+  input.addEventListener("input", saveCorrectionDraft);
+  return input;
+}
+function renderCorrectionEditor(state) {
+  ocState = state;
+  const body = $("ocbody"), draft = ocStoredDraft(ocUrl), start = draft && draft.snapshot || ocStartingSnapshot(state);
+  const reasonValue = draft ? draft.reason || "" : "";
+  const meta = mk("p", "Exact document version: " + ocUrl, "ocmeta");
+  const status = mk("p", null, state.status === "suspended" ? "ocwarn" : "mut");
+  status.textContent = state.status === "suspended"
+    ? "Suspended: the analysis or RG-7 source changed. Review every value and save a new revision to reconfirm."
+    : "Status: " + state.status + ". Review verdicts remain separate.";
+  if (draft && draft.source_token !== state.source_token) {
+    status.textContent += " This recovered draft was started against an older source and must be reviewed.";
+    status.className = "ocwarn";
+  }
+  const grid = mk("div", null, "ocgrid");
+  grid.append(mk("div", "Field", "och"), mk("div", "Current source", "och"), mk("div", "Operator value", "och"));
+  for (const [key, label] of OC_FIELDS) {
+    grid.append(mk("label", label), mk("span", state.snapshot[key] == null ? "—" : num(state.snapshot[key]), "mut"),
+      ocInput(label, start[key], "data-oc-field", key));
+  }
+  const byRow = Object.fromEntries((start.list_votes || []).map(x => [x.row, x.value]));
+  const sourceRows = Object.fromEntries(state.snapshot.list_votes.map(x => [x.row, x.value]));
+  for (const row of state.expected_rows) {
+    const label = "List row " + row;
+    grid.append(mk("label", label), mk("span", sourceRows[row] == null ? "—" : num(sourceRows[row]), "mut"),
+      ocInput(label, byRow[row], "data-oc-row", row));
+  }
+  const reasonLabel = mk("label", "Required reason", "ocreason"), reason = document.createElement("input");
+  reason.id = "ocreason"; reason.maxLength = 500; reason.value = reasonValue;
+  reason.setAttribute("aria-label", "Correction reason"); reason.addEventListener("input", saveCorrectionDraft);
+  reasonLabel.append(reason);
+  const actions = mk("div", null, "ocactions"), save = mk("button", "Validate and save revision", "ocsave");
+  save.id = "ocsave"; save.type = "button"; save.onclick = () => submitCorrection("correction");
+  const revoke = mk("button", "Revoke correction"); revoke.type = "button";
+  revoke.hidden = !["active", "suspended"].includes(state.status); revoke.onclick = () => submitCorrection("revoke");
+  const msg = mk("span", "", "ocerror"); msg.id = "ocmsg";
+  actions.append(save, revoke, msg);
+  const history = document.createElement("details"); history.className = "ochistory";
+  history.append(mk("summary", "Revision history (" + state.history.length + ")"));
+  const list = document.createElement("ol");
+  for (const item of state.history) list.append(mk("li", when(item.at) + " — " + item.action + ": " + item.reason));
+  history.append(list);
+  body.replaceChildren(meta, status, grid, reasonLabel, actions, history);
+  refreshCorrectionValidation();
+  reason.focus();
+}
+function openCorrection(v) {
+  ocUrl = v.u;
+  $("ocbody").replaceChildren(mk("p", "Loading correction data…", "mut"));
+  $("ocdlg").showModal();
+  ocFetch("correction?url=" + encodeURIComponent(v.u)).then(renderCorrectionEditor,
+    e => $("ocbody").replaceChildren(mk("p", "Correction unavailable: " + e.message, "ocerror")));
+}
+function updateCorrectionSummary(url, state) {
+  for (const r of rows) for (const v of [r, ...r.v]) if (v.u === url) {
+    v.oc = {status: state.status, reason: state.reason, at: state.at};
+    if (v === r) refreshRow(r.id);
+  }
+}
+function submitCorrection(action) {
+  const reason = $("ocreason").value, request = {url: ocUrl, action, reason, source_token: ocState.source_token};
+  if (action === "correction") request.snapshot = ocReadSnapshot();
+  for (const b of $("ocbody").querySelectorAll("button")) b.disabled = true;
+  $("ocmsg").textContent = "Saving…"; $("ocmsg").className = "mut";
+  ocFetch("correction", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
+    body: JSON.stringify(request)}).then(state => {
+      try { sessionStorage.removeItem(ocDraftKey(ocUrl)); } catch (_) {}
+      updateCorrectionSummary(ocUrl, state);
+      renderCorrectionEditor(state);
+      $("ocmsg").textContent = action === "revoke" ? "Correction revoked." : "Correction revision saved.";
+      $("ocmsg").className = "ocok";
+      dataBuilt = null;
+      loadData();
+    }, e => {
+      for (const b of $("ocbody").querySelectorAll("button")) b.disabled = false;
+      saveCorrectionDraft();
+      $("ocmsg").textContent = "Not saved: " + e.message; $("ocmsg").className = "ocerror";
+    });
+}
+$("occlose").onclick = () => $("ocdlg").close();
+
 function escalatedCsv() {  // one line per escalated version, current or older
   const head = ["Municipality", "BM", "Station", "Document", "Version", "RIK link", "Findings", "Note", "Verdict time (RS)"];
   const out = [];
@@ -738,7 +921,7 @@ function rg7Badges(r) {
 }
 function child(r) {
   const box = mk("div");
-  box.append(reviewBox(r));
+  box.append(reviewBox(r), correctionBox(r, r.state !== "removed"));
   for (const x of r.r7) {
     const d = mk("div", null, "sub");
     d.append(mk("strong", rg7Text(x)), " ", linksOf(x), x.f.length ? badges(x.f) : "");
@@ -753,6 +936,7 @@ function child(r) {
     const d = mk("div", null, "sub mut"), x = rvOf(v);
     d.append("older version: uploaded " + when(v.up) + ", first seen " + when(v.seen) + ", analysis " + v.ast + " ", linksOf(v));
     if (x) d.append(" ", verdictEl(x), x.n ? " " + x.n : "");
+    if (v.oc) d.append(correctionBox(v, false));
     d.append(caseBox(v));
     d.append(badges(v.f));
     for (const o of v.ops) {
@@ -777,7 +961,8 @@ function prep(r) {
   r._fl = ofs.length > 0;
   r._rules = new Set(ofs.map(f => f[0]));
   r._models = new Set(all.flatMap(x => x.ops.map(o => o.m)));
-  r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models, ...r.r7.flatMap(x => x.ch || [])].join("\n").toLowerCase();
+  r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models,
+    ...r.r7.flatMap(x => x.ch || []), ...all.flatMap(v => v.oc ? [v.oc.status, v.oc.reason || ""] : [])].join("\n").toLowerCase();
   r.mods = [...r._models].sort().join(", ") + (r.dis.length ? " - DISAGREE" : "");
   r._stn = r.muni.toLowerCase() + " " + (parseInt(r.no) || 0);
   r._st = r.state + " " + r.ast;
@@ -890,8 +1075,8 @@ const num = v => v == null ? "-" : nf.format(v);
 const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
 const ratio = (a, b) => b ? a / b : null;
 const NV = () => $("tview").value;  // numbers: corrected | filed | diff
-const NV_LABEL = {corrected: "With RG-7 corrections.", filed: "As filed on the RG-2 forms (RG-7 corrections not applied).",
-  diff: "Difference: with RG-7 corrections minus as filed, over comparable terms. Forms with terms only in corrected/filed view are shown separately; unmatched terms are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)."};
+const NV_LABEL = {corrected: "With RG-7 and operator-entered corrections.", filed: "As filed on the RG-2 forms (RG-7 and operator corrections not applied).",
+  diff: "Difference: with RG-7/operator corrections minus as filed, over comparable terms. Forms with terms only in corrected/filed view are shown separately; unmatched terms are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)."};
 const dnum = v => v == null ? "-" : v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + nf.format(Math.abs(v));
 const snum = v => v == null ? "-" : v === 0 ? "0" : (v > 0 ? "+" : "\u2212") + nf.format(Math.abs(v));
 const dpp = x => { if (x == null) return "-"; const v = Math.round(x * 1000) / 10; return v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + Math.abs(v).toFixed(1); };
@@ -1068,7 +1253,7 @@ function renderTally() {
   }
   $("tnotes").replaceChildren(...T.notes.map(n => mk("li", n.m + " BM " + n.no + ": " + n.note)));
   $("tnoteshead").hidden = !T.notes.length;
-  $("tcor").replaceChildren(...T.corrected.map(c => {
+  const rg7Items = T.corrected.map(c => {
     const li = mk("li", c.m + " BM " + c.no + ": "), row = D.rows.find(r => r.id === c.id);
     c.rg7.forEach((d, i) => {
       li.append((i ? "; " : "") + "RG-7 " + d.d + ": " + d.ch.join(", "));
@@ -1080,8 +1265,15 @@ function renderTally() {
     sp.append(b);
     li.append(sp);
     return li;
-  }));
-  $("tcorhead").hidden = $("tcor").hidden = !T.corrected.length || NV() === "filed";
+  });
+  const operatorItems = T.operator_corrected.map(c => {
+    const li = mk("li", c.m + " BM " + c.no + ": operator correction — " + c.reason + " (" + when(c.at) + ")");
+    const b = mk("button", "show", "chip"); b.onclick = () => showForm(c.id, c.m + " BM " + c.no);
+    const sp = mk("span", null, "lk"); sp.append(b); li.append(sp);
+    return li;
+  });
+  $("tcor").replaceChildren(...rg7Items, ...operatorItems);
+  $("tcorhead").hidden = $("tcor").hidden = !(rg7Items.length + operatorItems.length) || NV() === "filed";
 }
 
 // ---- hero display -------------------------------------------------------------------------
@@ -1163,7 +1355,7 @@ function renderHero() {
   const warn = [T.scope_note, muniScope ? r.names_note : T.names_note].filter(Boolean);
   $("heronames").hidden = !warn.length;
   $("heronames").textContent = warn.length ? "Упозорење: " + warn.map(heroWarning).join(". ") : "";
-  const titleSuffix = NV() === "corrected" ? " — са исправкама (RG-7)" : dg ? " — РАЗЛИКА (са исправкама RG-7 − оригинални RG-2)" : "";
+  const titleSuffix = NV() === "corrected" ? " — са исправкама (RG-7 / ручни унос)" : dg ? " — РАЗЛИКА (са исправкама RG-7 / ручни унос − оригинални RG-2)" : "";
   put("herotitle", none ? "" : (allMunis ? "Све општине" : heroMuniName(raw)) + " — " + shortTitle(T.title) + titleSuffix);
   put("hv-turn", none ? "-" : dg ? dpp(t.turnout) : pc(t.turnout));
   put("hs-turn", none ? "" : dg ? "разлика у излазности, процентни поени" : num(t.voted) + " од " + num(t.registered) + " уписаних");

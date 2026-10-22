@@ -28,6 +28,7 @@ from .findings import findings_for
 from .models import Doc, Event, Finding
 from .names import MunicipalityError, resolve_municipalities
 from .notify import Notifier
+from .operator_corrections import OperatorCorrections
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from .render import RenderError, render_tiles
 from .replay import fetch_fixtures, make_replay_server
@@ -313,8 +314,14 @@ def _publication_api(store: Store, cfg: Config):
 def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Config | None = None):
     """Serve the page on `port`, else the next free port up to +10; None when none is free."""
     case_api = _publication_api(store, cfg) if cfg is not None else None
+    correction_api = (OperatorCorrections(
+        store, cfg, stored_model(cfg.model),
+        on_change=lambda: build_page(store, page_dir / "index.html", cache_dir, cfg=cfg,
+                                     interval=cfg.browse_interval_s, with_status=False))
+                      if cfg is not None else None)
     for p in range(port, min(port + PORT_TRIES, 65536)):
-        server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api)
+        server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
+                              correction_api)
         if server is not None:
             if p != port:
                 log.warning("port %d busy, using %d", port, p)
