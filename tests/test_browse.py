@@ -90,6 +90,22 @@ def test_pdf_link_only_when_cached(tmp_path):
     assert rows_of(out)[0]["pdf"] == hashlib.sha256(d.url.encode()).hexdigest()
 
 
+def test_only_first_round_rg2_rows_offer_operator_corrections(tmp_path):
+    s = store()
+    add(s, doc(BASE + "/e/first.pdf", no="1", dt=6))
+    add(s, doc(BASE + "/e/repeat.pdf", no="2", dt=10))
+    out = tmp_path / "index.html"
+
+    build_page(s, out, tmp_path / "pdfs")
+
+    by_no = {r["no"]: r for r in rows_of(out)}
+    assert by_no["1"]["correctable"] is True
+    assert by_no["2"]["correctable"] is False
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    correction_box = html[html.index("function correctionBox("):html.index("function reconciliationEl(")]
+    assert 'v.ast === "done" && v.correctable' in correction_box
+
+
 def test_json_is_ascii_even_with_lone_surrogate():
     from rg2watch.browse import _json
     blob = _json({"x": "a\ud800b\u2028</script>"})

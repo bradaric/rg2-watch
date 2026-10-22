@@ -750,7 +750,7 @@ function correctionBox(v, editable) {
     if (v.oc.reason) line.append(mk("span", v.oc.reason, "mut"));
     if (v.oc.at) line.append(mk("span", when(v.oc.at), "mut"));
   } else line.append(mk("span", "none", "mut"));
-  if (editable && HTTP && v.ast === "done") {
+  if (editable && HTTP && v.ast === "done" && v.correctable) {
     const button = mk("button", v.oc ? "Open / revise" : "Enter correction");
     button.type = "button";
     button.onclick = () => openCorrection(v);
