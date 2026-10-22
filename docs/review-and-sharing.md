@@ -227,6 +227,35 @@ Cyrillic) are a config error. Any other or unknown type (also an election withou
 municipal with the warning "unknown election type - set tally_scope"; override with
 `tally_scope = {"<parent>" = "national"}` (top-level key, before any `[table]`).
 
+### Public results snapshot
+
+Create a standalone public presentation page from the newest registered election (or select one with
+`--parent`):
+
+```sh
+scripts/export.sh <id>
+```
+
+Extra arguments pass through, for example `scripts/export.sh <id> --out another-directory`. The
+equivalent direct command is `uv run rg2watch export-results --parent <id> --db
+data/election-<id>.sqlite --out public-results`.
+
+The command writes only `public-results/index.html`. Open it locally before publishing and verify the
+election title, snapshot time, municipality choices, totals and disclaimer. The page contains corrected,
+all-counted aggregate values and aggregate review counts, with only a municipality selector. It contains
+no form/document identifiers or links, findings, review notes, PDFs, database name, model name, audit
+history, write controls, external assets or network requests. For safety, the command refuses an output
+directory containing anything except an older `index.html`; do not point it at the private browse-page
+directory.
+
+For a manual Cloudflare Pages Direct Upload, create a Pages project and upload the `public-results`
+directory. Cloudflare provides a stable production URL such as `https://rg2-rezultati.pages.dev/` and a
+unique URL for each deployment; its deployment history can roll back a bad upload. A custom domain is
+optional. Every update is manual: run `export-results` again, inspect the local page, then upload that
+directory as a new production deployment. The timestamp and footer explicitly say that the page is a
+static unofficial snapshot and does not update automatically. Never upload the database's private page
+folder, `data.json`, `reviews.json`, PDFs, SQLite file, configuration, or credentials.
+
 ## Operator-entered numeric corrections
 
 An analysed, active first-round RG-2 can have an audited operator correction when the corrected

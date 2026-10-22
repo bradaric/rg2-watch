@@ -1,0 +1,189 @@
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+
+from rg2watch.config import Config
+from rg2watch.cli import main
+from rg2watch.models import Election
+from rg2watch.public_results import build_public_results, render_public_results, write_public_results
+from rg2watch.store import Store
+from test_browse import BASE, P, add, doc, store
+from test_rules import clean_report, nf
+from test_tally import M, form, put, report
+
+
+ROOT = Path(__file__).parents[1]
+
+
+def config(**kw):
+    return Config(model=M, tally_scope={P: "national"}, list_names={P: ["Листа А", "Листа Б"]}, **kw)
+
+
+def test_public_payload_has_only_aggregate_corrected_results_and_review_counts():
+    s = store()
+    form(s, 1, clean_report())
+    flagged = form(s, 2, report(ballots_in_box=nf(900)))
+    s.set_review(flagged.url, "ok", "private operator note")
+
+    data = build_public_results(s, config(), P)
+
+    assert data["version"] == 1 and data["title"] == "Title" and data["scope"] == "national"
+    assert data["names"] == ["Листа А", "Листа Б"]
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", data["built"])
+    row = data["overall"]
+    assert row["counted"] == 2 and row["clean"] == 1 and row["flagged"] == 1
+    assert row["review"] == {"ok": 1, "escalate": 0, "unsure": 0, "undecided": 0}
+    assert row["totals"]["voted"] == 1600 and row["totals"]["valid"] == 1560
+    assert row["totals"]["lists"] == [800, 760]
+    assert data["municipalities"][0]["m"] == "Alpha"
+
+    blob = json.dumps(data, ensure_ascii=False)
+    for private in (BASE, flagged.url, "private operator note", "claude", "A1", "arithmetic",
+                    '"id"', '"no"', '"db"', '"model"', '"operator_corrected"'):
+        assert private not in blob
+
+
+def test_public_review_breakdown_uses_current_version_and_marks_missing_verdict_undecided():
+    s = store()
+    old = form(s, 1, report(ballots_in_box=nf(900)))
+    s.set_review(old.url, "ok")
+    new = doc(BASE + "/new.pdf", muni="Alpha", no="1", up="2026-10-20T22:00")
+    add(s, new, "replaced", old.url)
+    put(s, new, report(ballots_in_box=nf(900)))
+
+    data = build_public_results(s, config(), P)
+
+    assert data["overall"]["flagged"] == 1
+    assert data["overall"]["review"] == {"ok": 0, "escalate": 0, "unsure": 0, "undecided": 1}
+
+
+def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
+    s = store()
+    s.upsert_election(Election(P, "1", "t", "</script><b>Избори", BASE))
+    form(s, 1, clean_report())
+    data = build_public_results(s, config(), P)
+
+    html = render_public_results(data)
+    assert "</script><b>" not in html
+    assert "\\u003c/script>" in html
+    assert "fetch(" not in html and "XMLHttpRequest" not in html
+    assert "<script src=" not in html and "<link rel=\"stylesheet\"" not in html
+    assert "default-src 'none'" in html and "connect-src 'none'" in html
+    assert "Општина" in html and "НЕЗВАНИЧНО" in html and "Стање у" in html
+    assert "corrected" not in html.lower() and "review note" not in html.lower()
+
+    out = write_public_results(s, config(), P, tmp_path / "public-results")
+    assert out == tmp_path / "public-results" / "index.html"
+    assert out.read_text(encoding="utf-8").startswith("<!doctype html>")
+    assert out.stat().st_mode & 0o777 == 0o644
+    assert [p.name for p in out.parent.iterdir()] == ["index.html"]
+    script = out.read_text(encoding="utf-8").rsplit("<script>", 1)[1].split("</script>", 1)[0]
+    checked = subprocess.run(["node", "--check"], input=script, text=True, capture_output=True)
+    assert checked.returncode == 0, checked.stderr
+
+
+def test_public_page_renders_controls_summary_and_top_eight_lists():
+    s = store()
+    form(s, 1, clean_report())
+    data = build_public_results(s, config(), P)
+    data["names"] = [f"Листа {i}" for i in range(1, 11)]
+    data["fallback_name_indices"] = []
+    data["overall"]["totals"]["lists"] = list(range(1, 11))
+    data["overall"]["totals"]["lists_valid"] = 55
+    html = render_public_results(data)
+    script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+    harness = r'''
+const assert=require("assert"),els={};
+class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className=""}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(){}}
+global.document={getElementById:id=>els[id]??=(new El()),createElement:()=>new El()};
+global.Option=function(text,value){const x=new El();x.textContent=text;x.value=value;return x};
+''' + script + r'''
+assert.equal(els.title.textContent,"Title");
+assert.equal(els.municipality.children.length,2);
+assert.equal(els.chart.children.length,9);
+assert.equal(els.chart.children[8].children[0].textContent,"Остале (2 листе)");
+assert(els.footer.textContent.includes("статичан снимак"));
+DATA.scope_note="unknown election type - set tally_scope";render();
+assert(els.warning.textContent.includes("Непозната врста избора"));
+assert(!els.warning.textContent.includes("unknown election type"));
+console.log(JSON.stringify({ok:true}));
+'''
+    result = subprocess.run(["node", "-e", harness], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"ok": True}
+
+
+def test_export_refuses_directory_with_other_files(tmp_path):
+    s = store()
+    form(s, 1, clean_report())
+    out = tmp_path / "public-results"
+    out.mkdir()
+    (out / "private-data.json").write_text("secret", encoding="utf-8")
+
+    try:
+        write_public_results(s, config(), P, out)
+    except ValueError as exc:
+        assert "must contain only index.html" in str(exc)
+    else:
+        raise AssertionError("mixed public/private directory was accepted")
+    assert (out / "private-data.json").read_text(encoding="utf-8") == "secret"
+    assert not (out / "index.html").exists()
+
+
+def test_export_results_cli_writes_default_directory_and_replaces_snapshot(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "election.sqlite"
+    s = Store(db)
+    s.upsert_election(Election(P, "1", "2", "Јавни резултати", BASE))
+    s.upsert_election(Election("999999", "1", "2", "Новији избори", BASE))
+    s.close()
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["export-results", "--db", str(db)]) == 0
+    out = tmp_path / "public-results" / "index.html"
+    first = out.read_text(encoding="utf-8")
+    assert json.dumps("Новији избори", ensure_ascii=True)[1:-1] in first
+    assert str(out.relative_to(tmp_path)) in capsys.readouterr().out
+
+    out.write_text("old export", encoding="utf-8")
+    assert main(["export-results", "--db", str(db), "--parent", P,
+                 "--out", str(tmp_path / "site")]) == 0
+    selected = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    assert selected.startswith("<!doctype html>")
+    assert json.dumps("Јавни резултати", ensure_ascii=True)[1:-1] in selected
+
+
+def test_export_results_cli_rejects_database_without_registered_election(tmp_path, capsys):
+    db = tmp_path / "empty.sqlite"
+    Store(db).close()
+    out = tmp_path / "site"
+
+    assert main(["export-results", "--db", str(db), "--out", str(out)]) == 1
+    assert "no registered election" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_export_results_cli_refuses_mixed_output_directory(tmp_path, capsys):
+    db = tmp_path / "election.sqlite"
+    s = Store(db)
+    s.upsert_election(Election(P, "1", "2", "Јавни резултати", BASE))
+    s.close()
+    out = tmp_path / "site"
+    out.mkdir()
+    (out / "data.json").write_text("private", encoding="utf-8")
+
+    assert main(["export-results", "--db", str(db), "--out", str(out)]) == 1
+    assert "must contain only index.html" in capsys.readouterr().err
+    assert (out / "data.json").read_text(encoding="utf-8") == "private"
+
+
+def test_export_wrapper_is_executable_and_only_runs_local_export():
+    script = ROOT / "scripts" / "export.sh"
+    assert script.is_file() and os.access(script, os.X_OK)
+    text = script.read_text(encoding="utf-8")
+    assert 'election_id "$@"; shift' in text and "require_db" in text
+    assert 'rg2watch export-results --parent "$ID" --db "$DB"' in text
+    assert all(command not in text for command in ("wrangler", "aws ", "curl ", "scp ", "rsync "))
+    result = subprocess.run([script], cwd=ROOT, text=True, capture_output=True)
+    assert result.returncode == 2 and "usage: scripts/export.sh" in result.stderr

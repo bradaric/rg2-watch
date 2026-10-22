@@ -78,6 +78,9 @@ See the [operator runbook](docs/runbook.md) for preparation and recovery, and
   disable analysis charges. It is refused on an election database that already contains documents
   unless explicitly forced.
 - The review server binds to localhost. `view.sh` needs an existing election database.
+- `scripts/export.sh <id>` (`rg2watch export-results`) creates a sanitized standalone
+  unofficial-results snapshot for manual static hosting; it does not upload anything. See
+  [Review and sharing](docs/review-and-sharing.md#public-results-snapshot).
 - Scan analysis sends rendered document images to the selected model provider. Treat API keys, ntfy topics and
   Google OAuth files as secrets; see [privacy details](docs/reference.md#privacy).
 
