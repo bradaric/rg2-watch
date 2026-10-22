@@ -1364,7 +1364,7 @@ function flaggedReviewSummary(flagged) {
   if (counts.escalate) parts.push(num(counts.escalate) + " ескалирано");
   if (counts.unsure) parts.push(num(counts.unsure) + " несигурно");
   if (counts.undecided) parts.push(num(counts.undecided) + " без одлуке");
-  return "Преглед означених: " + parts.join(" · ");
+  return num(seen.size) + " за проверу: " + parts.join(" · ");
 }
 function initHero() {
   for (let i = 0; i <= TOP_LISTS; i++) {
@@ -1426,12 +1426,11 @@ function renderHero() {
   } else {
     const selected = mode === "cl" ? r.clean : r.counted;
     const cleanContributing = r.cl.vote_forms;
-    const flaggedContributing = Math.max(0, t.vote_forms - cleanContributing);
     put("hv-forms", num(t.vote_forms));
     put("hv-formstot", " / " + num(selected));
     put("hs-forms-primary", "урачунато у резултат");
-    const formContext = [num(cleanContributing) + " без уочених проблема · " + num(flaggedContributing) +
-      " означених за проверу", flaggedReviewSummary(heroFlagged(raw))];
+    const formContext = [num(cleanContributing) + " без уочених проблема",
+      flaggedReviewSummary(heroFlagged(raw))];
     if (selected > t.vote_forms) formContext.push("Није урачунато: " + num(selected - t.vote_forms) +
       " записника — подаци по листама нису потпуни или усаглашени");
     put("hs-forms-context", formContext.join("\n"));
@@ -1456,7 +1455,7 @@ function renderHero() {
     put("hs-valid-context", "");
   } else {
     const primary = ["Неважећи: " + num(t.invalid),
-      "Неусаглашена разлика излазности: " + snum(gap)];
+      "Неусаглашено: " + snum(gap)];
     const context = [];
     if (t.withheld_valid > 0) context.push("Није урачунато: " + num(t.withheld_valid) +
       " важећих гласова — подаци по листама нису потпуни или усаглашени");
