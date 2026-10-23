@@ -327,7 +327,7 @@ stroke-width:2.5;
 <label><input type="checkbox" id="fl"> with findings</label>
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
-<label><input type="checkbox" id="fa"> analysis failed</label>
+<label>analysis status <select id="ast"><option value="">any</option><option value="pending">pending</option><option value="done">done</option><option value="failed">failed</option><option value="off">off</option></select></label>
 <label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by RG-7</label>
 <label><input type="checkbox" id="loc"> has local copy</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
@@ -549,7 +549,7 @@ function tickStatus() {
 // ---- table --------------------------------------------------------------------------------
 let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
-const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "nc", "ri", "fl", "rp", "rm", "fa", "c7", "loc", "dis", "auto"];
+const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "nc", "ri", "ast", "fl", "rp", "rm", "c7", "loc", "dis", "auto"];
 
 // rule codes carry their plain-language description (data.json "rules"): a hover title, a focus
 // tooltip, and aria-describedby pointing at the legend entry
@@ -1076,9 +1076,9 @@ function keep(r) {
   if (ri && r.rec.result[ri].included !== false) return false;
   return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
-    && (!rs.length || rs.some(x => r._rules.has(x))) && (!$("fl").checked || r._fl)
+    && (!rs.length || rs.some(x => r._rules.has(x))) && (!sel("ast") || r.ast === sel("ast")) && (!$("fl").checked || r._fl)
     && (!$("rp").checked || r.state === "replaced") && (!$("rm").checked || r.state === "removed")
-    && (!$("fa").checked || r.ast === "failed") && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
+    && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
 }
 function initTable() {
   DataTable.ext.search.push((s, _d, _i, row) => s.nTable.id !== "forms" || keep(row));

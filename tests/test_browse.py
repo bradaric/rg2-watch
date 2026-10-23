@@ -111,10 +111,15 @@ def test_only_first_round_rg2_rows_offer_operator_corrections(tmp_path):
     assert 'v.ast === "done" && v.correctable' in correction_box
 
 
-def test_result_inclusion_filter_column_and_models_default_visibility_are_present():
+def test_result_inclusion_analysis_status_filter_and_models_column_are_present():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert 'id="ri"' in html
+    assert ('analysis status <select id="ast"><option value="">any</option>' in html and
+            all(f'<option value="{status}">{status}</option>' in html
+                for status in ("pending", "done", "failed", "off")))
+    assert '"nc", "ri", "ast", "fl"' in html
+    assert '(!sel("ast") || r.ast === sel("ast"))' in html
     assert 'title: "Result inclusion"' in html
     assert 'data: "mods", title: "Models", visible: false' in html
     assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
