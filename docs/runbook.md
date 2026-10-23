@@ -68,7 +68,22 @@ change the file or environment variable.
 
        uv run --env-file .env rg2watch watch --parent <parent> --config rg2watch.toml --analyze
 
-   (or `scripts/night.sh <parent>`)
+    (or `scripts/night.sh <parent>`)
+
+   On the election-night workstation, prefer the supervised user service after completing the
+   preflight checks. Its locally installed unit is fixed to election `779676`, restarts the watcher
+   after crashes or reboots, allows up to 100 seconds for a graceful stop, and inhibits automatic
+   sleep while it runs:
+
+       loginctl enable-linger "$USER"                     # once, before election night
+       systemctl --user enable --now rg2watch-night.service
+       systemctl --user status rg2watch-night.service
+       journalctl --user -u rg2watch-night.service -f
+
+   Start it deliberately around 19:15-19:30, only after confirming the RIK page, credentials,
+   Ollama/Bonsai, ntfy, disk space and local page. Keep the machine plugged in: sleep inhibition
+   prevents suspend but cannot prevent power or network loss. Do not also run `scripts/night.sh`
+   in a terminal; that would create a competing watcher.
 
    - Leave out `--analyze` to only watch for new/replaced/removed documents (free).
    - Started late, with forms already published? Add `--baseline`: what is already there is
@@ -89,8 +104,14 @@ change the file or environment variable.
    - LOW: terminal and page only.
 5. For each alert: open the PDF link and check it yourself. Alerts are leads, not conclusions.
 
-Stop with Ctrl-C (waits up to 80 s for analyses in flight). Restarting the same command resumes
-from the database without re-alerting.
+Stop a terminal-run watcher with Ctrl-C (waits up to 80 s for analyses in flight). Restarting the
+same command resumes from the database without re-alerting. For the supervised service, inspect the
+final database and public export on Monday, then stop and remove its reboot activation with:
+
+    systemctl --user disable --now rg2watch-night.service
+
+Disable lingering afterwards only if no other user services need to survive logout. The local
+backup and publication timers also depend on the user service manager during their election window.
 
 ## 3. When something goes wrong
 
