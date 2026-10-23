@@ -142,6 +142,13 @@ def test_analysis_status_uses_compact_grouped_labels():
     assert '"queued / running"' not in html and '"time to clear queue"' not in html
 
 
+def test_review_and_alert_status_share_one_card():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'card("Review & alerts"' in html
+    assert 'card("Review"' not in html and 'card("Alerts"' not in html
+
+
 def test_non_default_form_select_filters_use_active_filter_colors():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 

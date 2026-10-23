@@ -529,13 +529,15 @@ function renderStatus() {
     ["pace", a.avg_s == null ? "-" : a.avg_s + " s/form"], ["ETA", dur(a.eta_s)]]
     : [["state", "off"], ["done / failed", a.done + " / " + a.failed], ["spend", "$" + a.spend.toFixed(2)]]));
   const n = S.ntfy;
+  const reviewAlerts = [];
   if (rows.length) {
     const c = reviewCounts();
-    cards.push(card("Review", [["to review", String(c.todo), c.todo ? "warn" : "good"],
-      ["escalated", String(c.escalate), c.escalate ? "bad" : ""], ["unsure", String(c.unsure)], ["ok", String(c.ok)]]));
+    reviewAlerts.push(["to review", String(c.todo), c.todo ? "warn" : "good"],
+      ["escalated", String(c.escalate), c.escalate ? "bad" : ""], ["unsure", String(c.unsure)], ["ok", String(c.ok)]);
   }
-  cards.push(card("Alerts", n ? [["ntfy", !n.enabled ? "not configured (terminal only)" : n.failing ? "failing, last ok " + ago(n.last_ok) : "delivering, last ok " + ago(n.last_ok), n.failing ? "bad" : ""],
+  reviewAlerts.push(...(n ? [["ntfy", !n.enabled ? "not configured (terminal only)" : n.failing ? "failing, last ok " + ago(n.last_ok) : "delivering, last ok " + ago(n.last_ok), n.failing ? "bad" : ""],
     ["waiting to send", n.queued]] : [["ntfy", "-"]]));
+  cards.push(card("Review & alerts", reviewAlerts));
   box.replaceChildren(...cards);
   renderAlerts();
   paintHero();
