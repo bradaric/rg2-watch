@@ -6,7 +6,7 @@ import logging
 from collections import Counter
 
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
-from .rules import decision_sort_key
+from .rules import _list_zero, decision_sort_key
 from .store import CorrectionRevisionConflict
 
 
@@ -66,7 +66,7 @@ def apply_operator_snapshot(report: dict, snapshot: dict) -> dict:
 
 def snapshot_of(report: dict, expected_rows: list[int] | None = None) -> dict:
     nums = report["numbers"]
-    by_row = {x["row"]: x["field"]["value"] for x in nums["list_votes"]}
+    by_row = {x["row"]: _list_zero(x["field"])["value"] for x in nums["list_votes"]}
     rows = sorted(by_row) if expected_rows is None else expected_rows
     return {**{key: nums[key]["value"] for key in FIELDS},
             "list_votes": [{"row": row, "value": by_row.get(row)} for row in rows]}

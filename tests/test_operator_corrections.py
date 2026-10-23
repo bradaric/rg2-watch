@@ -262,6 +262,17 @@ def test_editor_uses_ballot_rows_even_when_target_model_read_omitted_one():
                                                   {"row": 2, "value": None}]
 
 
+def test_editor_prefills_empty_list_vote_as_zero():
+    report = clean_report()
+    report["numbers"]["list_votes"][1]["field"].update(
+        value=None, legible=False, mark="empty")
+
+    state = OperatorCorrections(analysed_store(report), Config(model=MODEL), MODEL).state(URL)
+
+    assert state["snapshot"]["list_votes"] == [{"row": 1, "value": 400},
+                                                  {"row": 2, "value": 0}]
+
+
 def test_replacement_url_starts_without_correction_and_old_history_is_retained():
     s = analysed_store()
     service = OperatorCorrections(s, Config(model=MODEL), MODEL)
