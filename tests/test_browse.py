@@ -133,6 +133,13 @@ def test_operator_page_uses_adaptive_navy_serbian_theme():
     assert "@media (prefers-color-scheme:dark)" in html
 
 
+def test_non_default_form_select_filters_use_active_filter_colors():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    active = "#ctl select:has(option:not(:first-child):checked)"
+    assert active + "{background:var(--accent-bg);border-color:var(--accent)}" in html
+
+
 def test_operator_page_uses_official_static_flag_background():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
