@@ -63,6 +63,11 @@ def _dash_zero(f: dict) -> dict:
     return {**f, "value": 0, "legible": True} if f["mark"] == "dash" else f
 
 
+def _list_zero(f: dict) -> dict:
+    """A blank list-vote field, like a dash, conventionally means 0."""
+    return {**f, "value": 0, "legible": True} if f["mark"] in ("dash", "empty") else f
+
+
 def _ok(f: dict) -> bool:
     return bool(f["legible"]) and f["value"] is not None
 
@@ -95,7 +100,7 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
 
     hdr, yn = report["header"], report["yesno"]
     times, sig, vis = report["times"], report["signatures"], report["visual"]
-    lists = [{**r, "field": _dash_zero(r["field"])} for r in report["numbers"]["list_votes"]]
+    lists = [{**r, "field": _list_zero(r["field"])} for r in report["numbers"]["list_votes"]]
     nums = {k: _dash_zero(f) for k, f in report["numbers"].items() if k != "list_votes"}
 
     # unreliable reads must not produce false HIGH
@@ -224,7 +229,7 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
             and n["invalid"] + n["valid"] != n["ballots_in_box"]:
         add("A2", "MEDIUM", f"invalid {n['invalid']} + valid {n['valid']} != ballots in box {n['ballots_in_box']}")
     list_vals = [r["field"]["value"] for r in lists] if lists and all(_ok(r["field"]) for r in lists) else None
-    if list_vals is not None and "valid" in n and sum(list_vals) != n["valid"]:
+    if list_vals is not None and "valid" in n and not unreliable and sum(list_vals) != n["valid"]:
         add("A3", "MEDIUM", f"list votes sum {sum(list_vals)} != valid {n['valid']}")
     if "voted" in n and "registered" in n and n["voted"] > n["registered"]:
         add("A4", "HIGH", f"voted {n['voted']} > registered {n['registered']}")
@@ -302,7 +307,7 @@ def rg2_value(rg2: dict, item: str) -> int | None:
         f = _dash_zero(rg2["numbers"][item])
     elif item.startswith("list:") and item[5:].isdigit():
         row = int(item[5:])
-        f = next((_dash_zero(r["field"]) for r in rg2["numbers"]["list_votes"] if r["row"] == row), None)
+        f = next((_list_zero(r["field"]) for r in rg2["numbers"]["list_votes"] if r["row"] == row), None)
     else:
         return None
     return f["value"] if f is not None and _ok(f) else None
