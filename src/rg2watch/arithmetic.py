@@ -42,8 +42,9 @@ def reconciles(read: dict) -> bool:
             and sum(rows.values()) == summary["valid"])
 
 
-def adoptable_merge(primary: dict, candidate: dict, model: str) -> dict | None:
-    """Merge one independently-read value only when every other value agrees and A1-A3 reconcile."""
+def adoptable_merge(primary: dict, candidate: dict, model: str,
+                    max_changes: int = 1) -> dict | None:
+    """Merge a bounded number of independent reads when all others agree and A1-A3 reconcile."""
     original = arithmetic_read(primary)
     left, right = _values(original), _values(candidate)
     if left is None or right is None or set(left[1]) != set(right[1]) or not reconciles(candidate):
@@ -52,15 +53,26 @@ def adoptable_merge(primary: dict, candidate: dict, model: str) -> dict | None:
              if left[0][key] != right[0][key]]
     diffs += [(f"list:{row}", left[1][row], right[1][row]) for row in left[1]
               if left[1][row] != right[1][row]]
-    if len(diffs) != 1:
+    if not 1 <= len(diffs) <= max_changes:
         return None
-    key, old, new = diffs[0]
     merged = copy.deepcopy(primary)
-    if key.startswith("list:"):
-        row = int(key.split(":", 1)[1])
-        next(item["field"] for item in merged["numbers"]["list_votes"]
-             if item["row"] == row)["value"] = new
-    else:
-        merged["numbers"][key]["value"] = new
-    merged["arithmetic_recheck"] = {"model": model, "field": key, "from": old, "to": new}
+    changes = []
+    for key, old, new in diffs:
+        if key.startswith("list:"):
+            row = int(key.split(":", 1)[1])
+            field = next(item["field"] for item in merged["numbers"]["list_votes"]
+                         if item["row"] == row)
+            field["value"] = new
+            if new != 0 and field.get("mark") in ("dash", "empty"):
+                field["mark"] = "clean"
+        else:
+            field = merged["numbers"][key]
+            field["value"] = new
+            if new != 0 and field.get("mark") == "dash":
+                field["mark"] = "clean"
+        changes.append({"field": key, "from": old, "to": new})
+    provenance = {"model": model, "changes": changes}
+    if len(changes) == 1:  # retain the original provenance shape for existing consumers
+        provenance.update(changes[0])
+    merged["arithmetic_recheck"] = provenance
     return merged

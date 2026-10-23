@@ -19,6 +19,7 @@ from rg2watch.models import Doc, Election, Event
 from rg2watch.notify import Notifier
 from rg2watch.pipeline import PROMPT_VERSION, RIK_RETRY_S, AnalysisPipeline
 from rg2watch.rik_client import AdaptiveLimiter, RikClient
+from rg2watch.rules import evaluate_report
 from rg2watch.store import Store
 from test_rules import clean_report, nf, to_wire
 
@@ -155,6 +156,40 @@ def test_arithmetic_merge_requires_one_change_and_full_reconciliation():
     assert adoptable_merge(primary, candidate, "bonsai-2:27b") is None
 
 
+def test_arithmetic_merge_allows_at_most_configured_changes_with_provenance():
+    primary = clean_report()
+    primary["numbers"]["valid"] = nf(785)
+    primary["numbers"]["list_votes"][0]["field"] = nf(403)
+    primary["numbers"]["list_votes"][1]["field"] = nf(382)
+    candidate = arithmetic_read(clean_report())
+
+    merged = adoptable_merge(primary, candidate, "claude-sonnet-5-5", max_changes=3)
+
+    assert merged is not None
+    assert merged["numbers"]["valid"]["value"] == 780
+    assert [x["field"]["value"] for x in merged["numbers"]["list_votes"]] == [400, 380]
+    assert merged["arithmetic_recheck"]["changes"] == [
+        {"field": "valid", "from": 785, "to": 780},
+        {"field": "list:1", "from": 403, "to": 400},
+        {"field": "list:2", "from": 382, "to": 380},
+    ]
+
+    primary["numbers"]["ballots_in_box"] = nf(801)
+    assert adoptable_merge(primary, candidate, "claude-sonnet-5-5", max_changes=3) is None
+
+
+def test_arithmetic_merge_replaces_zero_semantic_mark_when_adopting_nonzero_value():
+    primary = clean_report()
+    primary["numbers"]["list_votes"][0]["field"] = nf(0, mark="empty")
+    candidate = arithmetic_read(clean_report())
+
+    merged = adoptable_merge(primary, candidate, "claude-sonnet-5-5", max_changes=3)
+
+    assert merged is not None
+    assert merged["numbers"]["list_votes"][0]["field"]["mark"] == "clean"
+    assert "A3" not in {f.rule for f in evaluate_report(merged, doc(), Config())}
+
+
 def test_arithmetic_merge_rejects_agreement_that_still_fails():
     primary = clean_report()
     primary["numbers"]["ballots_in_box"] = nf(799)
@@ -237,6 +272,48 @@ def test_unresolved_local_arithmetic_spills_to_sonnet(tmp_path, monkeypatch):
     assert fixed["numbers"]["ballots_in_box"]["value"] == 800
     assert fixed["arithmetic_recheck"]["model"] == "claude-sonnet-5-5"
     assert sonnet_prices == [(None, None)]  # use Sonnet's built-in rates, not primary overrides
+
+
+def test_sonnet_promotes_three_changes_but_local_still_requires_one(tmp_path, monkeypatch):
+    from rg2watch.analyze import AnalysisResult
+    from rg2watch import pipeline
+
+    primary = clean_report()
+    primary["numbers"]["valid"] = nf(785)
+    primary["numbers"]["list_votes"][0]["field"] = nf(403)
+    primary["numbers"]["list_votes"][1]["field"] = nf(382)
+    targeted = arithmetic_read(clean_report())
+    e = Env(tmp_path, resp(primary), arithmetic_recheck_enabled=True)
+    real = pipeline.analyze_document
+
+    def analyze(tiles, client, cfg, kind="rg2"):
+        if kind != "arithmetic":
+            return real(tiles, client, cfg, kind)
+        return AnalysisResult(targeted, 0, 0, 0.0, cfg.model, "stop")
+
+    monkeypatch.setattr(pipeline, "analyze_document", analyze)
+    d = doc()
+    e.publish(d)
+    e.drain()
+
+    assert e.pipe.process_arithmetic_next("local") is True
+    assert e.store.arithmetic_recheck_counts(P)["sonnet"] == 1
+    assert e.pipe.process_arithmetic_next("sonnet") is True
+    fixed = e.store.latest_report(d.url, "claude-opus-5-5", PROMPT_VERSION)
+    assert fixed["numbers"]["valid"]["value"] == 780
+    assert len(fixed["arithmetic_recheck"]["changes"]) == 3
+
+
+def test_start_requeues_results_rejected_by_old_single_change_policy(tmp_path, monkeypatch):
+    e = Env(tmp_path, resp(clean_report()), arithmetic_recheck_enabled=True)
+    calls = []
+    monkeypatch.setattr(e.store, "requeue_arithmetic_errors",
+                        lambda parent, error: calls.append((parent, error)) or 0)
+
+    e.pipe.start()
+    e.pipe.stop()
+
+    assert (P, "no single-value reconciled read") in calls
 
 
 def test_arithmetic_recheck_does_not_supersede_operator_correction(tmp_path, monkeypatch):

@@ -114,8 +114,9 @@ The watcher can run these reads automatically with `arithmetic_recheck_enabled =
 reports enter a persistent recheck queue. One local worker uses `arithmetic_local_model`; when 10
 uncached local jobs are already queued/running (`arithmetic_local_queue_limit`), new jobs spill
 directly to `arithmetic_sonnet_model`. Local reads that are incomplete, still fail A1-A3, or differ
-in more than one value also go to Sonnet. A result changes the primary report only when it is
-complete, differs in exactly one result value, agrees everywhere else and makes A1-A3 reconcile.
+in more than one value also go to Sonnet. A local result changes the primary report only when it is
+complete and differs in exactly one result value. A Sonnet result may differ in up to three values.
+In both cases every other value must agree and the candidate must make A1-A3 reconcile.
 Otherwise the original report remains flagged for manual review. Raw reads and promotion provenance
 are retained. Sonnet calls count against the election's `max_spend_usd`; when the cap is reached the
 form remains for manual review. Recheck workers are separate from primary analysis workers, so slow

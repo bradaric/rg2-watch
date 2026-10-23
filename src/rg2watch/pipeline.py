@@ -137,6 +137,11 @@ class AnalysisPipeline:
                 self.parent, "minimum' is not supported")
             if repaired:
                 log.info("requeued %d arithmetic recheck(s) rejected by the old schema", repaired)
+            relaxed = self.store.requeue_arithmetic_errors(
+                self.parent, "no single-value reconciled read")
+            if relaxed:
+                log.info("requeued %d arithmetic recheck(s) rejected by the old one-change policy",
+                         relaxed)
             for doc, analysis_id in self.store.arithmetic_backlog(
                     self.parent, stored_model(self.cfg.model), PROMPT_VERSION, self.municipalities):
                 cached = self.store.latest_report(
@@ -431,14 +436,15 @@ class AnalysisPipeline:
                     report={**result.report, "responding_model": result.model})
                 self.store.save_analysis(doc.url, stored, ARITHMETIC_PROMPT_VERSION)
                 candidate = result.report
-            merged = adoptable_merge(primary, candidate, requested)
+            merged = adoptable_merge(primary, candidate, requested,
+                                      max_changes=3 if stage == "sonnet" else 1)
             if merged is None:
                 if stage == "local":
                     self.store.finish_arithmetic_recheck(doc.url, "new", stage="sonnet")
                     self._wake.set()
                 else:
                     self.store.finish_arithmetic_recheck(doc.url, "manual",
-                                                         "no single-value reconciled read")
+                                                         "no safely bounded reconciled read")
                 return True
             promoted = AnalysisResult(merged, 0, 0, 0.0, source["model"], "promoted")
             if not self.store.promote_analysis_if_current(
