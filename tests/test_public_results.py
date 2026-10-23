@@ -84,7 +84,7 @@ def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
     assert checked.returncode == 0, checked.stderr
 
 
-def test_public_page_renders_controls_summary_and_top_eight_lists():
+def test_public_page_renders_controls_summary_and_every_list():
     s = store()
     form(s, 1, clean_report())
     data = build_public_results(s, config(), P)
@@ -102,8 +102,10 @@ global.Option=function(text,value){const x=new El();x.textContent=text;x.value=v
 ''' + script + r'''
 assert.equal(els.title.textContent,"Title");
 assert.equal(els.municipality.children.length,2);
-assert.equal(els.chart.children.length,9);
-assert.equal(els.chart.children[8].children[0].textContent,"Остале (2 листе)");
+assert.equal(els.chart.children.length,10);
+assert.equal(els.chart.children[0].children[0].textContent,"Листа 10");
+assert.equal(els.chart.children[9].children[0].textContent,"Листа 1");
+assert(!els.chart.children.some(x=>x.children[0].textContent.startsWith("Остале")));
 assert.equal(els.footer.textContent,"НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а.");
 DATA.scope_note="unknown election type - set tally_scope";render();
 assert(els.warning.textContent.includes("Непозната врста избора"));
@@ -124,9 +126,20 @@ def test_public_page_uses_wide_layout_nonwrapping_ratios_and_unofficial_badge():
     assert "main{max-width:1600px" in html
     assert ".ratio{" in html and "white-space:nowrap" in html
     assert html.count('class="v ratio"') == 2
-    assert 'class="eyebrow"' not in html
     assert 'class="status-badge">Незванични резултати</div>' in html
     assert ".status-badge{" in html and "background:var(--badge-bg)" in html
+
+
+def test_public_page_uses_restrained_editorial_accents():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert "header{display:flex" in html and "border-bottom:2px solid var(--accent)" in html
+    assert ".tiles .tile:first-child{box-shadow:inset 0 3px var(--accent)}" in html
+    assert ".chart-eyebrow{" in html
+    assert '<span class="chart-eyebrow">Пресек резултата</span>' in html
 
 
 def test_public_page_aligns_chart_bars_and_values_in_shared_columns():
