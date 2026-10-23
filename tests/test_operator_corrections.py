@@ -350,6 +350,20 @@ def test_browse_row_has_compact_operator_correction_status(tmp_path):
     assert row["rec"]["status"] == "ok"
 
 
+def test_old_prompt_correction_is_quietly_skipped_until_current_analysis(tmp_path, caplog):
+    s = analysed_store()
+    service = OperatorCorrections(s, Config(model=MODEL), MODEL)
+    service.save(URL, snapshot(), "checked against scan", service.state(URL)["source_token"])
+    s._db.execute("UPDATE analyses SET prompt_version='old-version'")
+    s._db.commit()
+
+    tally = build_tally(s, Config(model=MODEL, tally_scope={P: "national"}), P, MODEL)
+    row = build_data(s, tmp_path, cfg=Config(model=MODEL))["rows"][0]
+
+    assert tally["operator_corrected"] == [] and row["oc"] is None
+    assert "operator correction state" not in caplog.text
+
+
 def correction_request(server, method, path, body=None, headers=None):
     host = f"127.0.0.1:{server.server_port}"
     base = {"Host": host, "Origin": f"http://{host}", "Sec-Fetch-Site": "same-origin"}
