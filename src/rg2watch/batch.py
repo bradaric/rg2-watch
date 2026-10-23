@@ -9,7 +9,8 @@ from pathlib import Path
 import anthropic
 import httpx
 
-from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
+from .analyze import (ARITHMETIC_PROMPT_VERSION, AnalysisError, OllamaUnavailable, analyze_document,
+                      is_ollama, stored_model)
 from .browse import SEV_RANK
 from .config import Config
 from .evaluate import TOKENS_PER_TILE, count_tiles, usd_for
@@ -24,7 +25,6 @@ from .store import Store, _doc
 
 log = logging.getLogger("rg2watch.batch")
 ADHOC = "adhoc"  # parent that `analyze` records its spend under
-ARITHMETIC_PROMPT_VERSION = "a1"
 BACKOFF_S = (10, 60)  # waits before the retries of one form
 ASSUMED_TILES = 4  # per form whose PDF is not cached yet (estimate only)
 MAX_WAIT_S = 1800  # cumulative overload backoff per batch before giving up

@@ -26,6 +26,10 @@ def test_defaults_without_file(monkeypatch):
     assert c.request_timeout_s == 20.0
     assert c.outside_share_medium == 0.10
     assert c.browse_interval_s == 120
+    assert c.arithmetic_recheck_enabled is False
+    assert c.arithmetic_local_model == "ollama:bonsai-2:27b"
+    assert c.arithmetic_sonnet_model == "claude-sonnet-5-5"
+    assert c.arithmetic_local_queue_limit == 10
 
 
 def test_toml_overrides(tmp_path, monkeypatch):

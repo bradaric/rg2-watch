@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_TOKENS = 16000
+ARITHMETIC_PROMPT_VERSION = "a1"
 
 
 class AnalysisError(Exception):

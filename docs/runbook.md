@@ -130,6 +130,10 @@ shared layout and safe to delete.
 
   This asks the local model only for voted, box, invalid, valid and every list-vote row, then prints
   A1-A3 reconciliation. It is useful when a full local second opinion skips a long list table.
+  To run the conservative local-to-Sonnet cascade continuously during `watch`, set
+  `arithmetic_recheck_enabled = true`; the status panel shows local/Sonnet queues, running jobs,
+  unresolved manual cases and promoted fixes. Sonnet spillover is paid and shares the election
+  `max_spend_usd` cap.
 - **A local PDF:** `uv run --env-file .env rg2watch analyze path/to/form.pdf`.
 - **Review the alerts on the night:** in the page choose review "to review" (forms with findings and
   no verdict yet; the status panel counts them). For each: open the row (arrow), open the PDF,

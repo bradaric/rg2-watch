@@ -518,9 +518,12 @@ function renderStatus() {
     ["RG-7 decisions", d.rg7 ? "read " + d.rg7.read + " / pending " + d.rg7.pending : "-"],
     ["rare types", Object.entries(d.rare).map(([k, v]) => k + ": " + v).join(", ") || "none"]]));
   const p = a.paused;
+  const ar = a.arithmetic;
   cards.push(card("Analysis", a.on ? [
     ["model", a.model], ["queued / running", a.queued + " / " + a.running],
     ["done / failed / retrying", a.done + " / " + a.failed + " / " + a.retrying],
+    ...(ar ? [["arithmetic local / Sonnet", ar.local + " / " + ar.sonnet],
+      ["arithmetic running / manual / fixed", ar.running + " / " + ar.manual + " / " + ar.done]] : []),
     ["state", p ? "paused: " + p[0] + (p[1] ? " since " + epoch(p[1]) : "") : "running", p ? "bad" : "good"],
     ["spend", "$" + a.spend.toFixed(2) + " of $" + a.cap.toFixed(2)],
     ["avg per form", a.avg_s == null ? "-" : a.avg_s + " s"], ["time to clear queue", dur(a.eta_s)]]

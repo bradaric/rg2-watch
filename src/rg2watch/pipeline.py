@@ -1,5 +1,6 @@
 """Background analysis of newly published RG-2 forms: fetch -> render -> analyze -> rules."""
 import dataclasses
+import json
 import logging
 import threading
 import time
@@ -10,7 +11,9 @@ from pathlib import Path
 
 import anthropic
 
-from .analyze import AnalysisError, AnalysisRefused, OllamaUnavailable, analyze_document, stored_model
+from .analyze import (ARITHMETIC_PROMPT_VERSION, AnalysisError, AnalysisRefused, AnalysisResult,
+                      OllamaUnavailable, analyze_document, stored_model)
+from .arithmetic import adoptable_merge
 from .config import Config
 from .fetch import fetch_pdf
 from .models import Doc, Event, Finding
@@ -126,6 +129,17 @@ class AnalysisPipeline:
         for doc in self.store.requeue_running(self.parent, self.municipalities):
             self._emit([Finding("X2", "LOW", doc, f"analysis failed after {MAX_ANALYSIS_ATTEMPTS} "
                                 "attempts: interrupted every time (crash or shutdown)")])
+        if self.cfg.arithmetic_recheck_enabled:
+            recovered = self.store.requeue_arithmetic_running(self.parent)
+            if recovered:
+                log.info("requeued %d interrupted arithmetic recheck(s)", recovered)
+            for doc, analysis_id in self.store.arithmetic_backlog(
+                    self.parent, stored_model(self.cfg.model), PROMPT_VERSION):
+                cached = self.store.latest_report(
+                    doc.url, stored_model(self.cfg.arithmetic_local_model),
+                    ARITHMETIC_PROMPT_VERSION) is not None
+                self.store.queue_arithmetic_recheck(
+                    doc.url, analysis_id, self.cfg.arithmetic_local_queue_limit, cached)
         log.info("analysis on for election %s: spend cap $%.2f, $%.2f spent so far on this election, "
                  "%d form(s) queued, %d form(s) seen before analysis was enabled not analysed "
                  "(--analyze-backlog to include)", self.parent, self.cfg.max_spend_usd,
@@ -136,6 +150,16 @@ class AnalysisPipeline:
             t = threading.Thread(target=self._loop, name=f"analysis-{i}", daemon=True)
             t.start()
             self._threads.append(t)
+        if self.cfg.arithmetic_recheck_enabled:
+            t = threading.Thread(target=self._arithmetic_loop, args=("local",),
+                                 name="arithmetic-local", daemon=True)
+            t.start()
+            self._threads.append(t)
+            for i in range(self.cfg.arithmetic_sonnet_workers):
+                t = threading.Thread(target=self._arithmetic_loop, args=("sonnet",),
+                                     name=f"arithmetic-sonnet-{i}", daemon=True)
+                t.start()
+                self._threads.append(t)
 
     def stop(self) -> None:
         """Stop taking work and wait up to `stop_wait_s` for in-flight analyses to be recorded."""
@@ -171,7 +195,9 @@ class AnalysisPipeline:
             paused = ["RIK blocked, downloads paused", None]
         return {"model": self.cfg.model, "workers": max(1, self.cfg.analysis_workers),
                 "paused": paused, "avg_s": round(sum(d) / len(d), 1) if d else None,
-                "cap": self.cfg.max_spend_usd}
+                "cap": self.cfg.max_spend_usd,
+                "arithmetic": self.store.arithmetic_recheck_counts(self.parent)
+                if self.cfg.arithmetic_recheck_enabled else None}
 
     # work -------------------------------------------------------------------
     def process_next(self) -> bool:
@@ -315,7 +341,7 @@ class AnalysisPipeline:
         self._form_overloads.pop(doc.url, None)
         try:  # first write after a billed call: never lose its cost
             # keyed by the requested model (cache lookups hit); the responding one stays in the report
-            self.store.save_analysis(
+            analysis_id = self.store.save_analysis(
                 doc.url, dataclasses.replace(result, model=stored_model(self.cfg.model),
                                              report={**result.report, "responding_model": result.model}),
                 version)
@@ -343,11 +369,96 @@ class AnalysisPipeline:
                 found += self._rg7_rechecks(doc, result.report)
             except Exception:
                 log.exception("RG-7 cross-check after %s failed", doc.url)
+        if (not rg7 and self.cfg.arithmetic_recheck_enabled
+                and any(f.rule in ("A2", "A3") for f in found)):
+            cached = self.store.latest_report(
+                doc.url, stored_model(self.cfg.arithmetic_local_model),
+                ARITHMETIC_PROMPT_VERSION) is not None
+            stage = self.store.queue_arithmetic_recheck(
+                doc.url, analysis_id, self.cfg.arithmetic_local_queue_limit, cached)
+            log.info("queued arithmetic recheck for %s via %s", doc.url, stage)
         self._emit(found)
         self.store.mark_analysis(doc.url, "done")
         log.info("analysed %s BM %s: %d finding(s), $%.3f", doc.municipality, doc.station_no,
                  len(found), result.cost_usd)
         return "api"
+
+    def _arithmetic_loop(self, stage: str) -> None:
+        while not self._stop.is_set():
+            try:
+                busy = self.process_arithmetic_next(stage)
+            except Exception:
+                log.exception("%s arithmetic worker error; continuing", stage)
+                busy = False
+            if not busy and not self._stop.is_set():
+                self._wake.wait(IDLE_POLL_S)
+                self._wake.clear()
+
+    def process_arithmetic_next(self, stage: str) -> bool:
+        item = self.store.next_arithmetic_recheck(self.parent, stage)
+        if item is None:
+            return False
+        doc, queued = item
+        source = self.store.analysis_by_id(queued["source_analysis_id"])
+        if source is None or not source["result_json"]:
+            self.store.finish_arithmetic_recheck(doc.url, "manual", "primary analysis missing")
+            return True
+        primary = json.loads(source["result_json"])
+        model = (self.cfg.arithmetic_local_model if stage == "local"
+                 else self.cfg.arithmetic_sonnet_model)
+        requested = stored_model(model)
+        candidate = self.store.latest_report(doc.url, requested, ARITHMETIC_PROMPT_VERSION)
+        try:
+            if candidate is None:
+                if stage == "sonnet" and self.store.total_spend(self.parent) >= self.cfg.max_spend_usd:
+                    self.store.finish_arithmetic_recheck(doc.url, "manual", "spend cap reached")
+                    return True
+                path = fetch_pdf(self.client, doc.url, self.cache_dir)
+                with _RENDER_LOCK:
+                    tiles = render_tiles(path)
+                cfg = dataclasses.replace(
+                    self.cfg, model=model,
+                    price_in_per_mtok=None if stage == "sonnet" else self.cfg.price_in_per_mtok,
+                    price_out_per_mtok=None if stage == "sonnet" else self.cfg.price_out_per_mtok)
+                result = analyze_document(tiles, None if stage == "local" else self.anthropic,
+                                          cfg, "arithmetic")
+                stored = dataclasses.replace(
+                    result, model=requested,
+                    report={**result.report, "responding_model": result.model})
+                self.store.save_analysis(doc.url, stored, ARITHMETIC_PROMPT_VERSION)
+                candidate = result.report
+            merged = adoptable_merge(primary, candidate, requested)
+            if merged is None:
+                if stage == "local":
+                    self.store.finish_arithmetic_recheck(doc.url, "new", stage="sonnet")
+                    self._wake.set()
+                else:
+                    self.store.finish_arithmetic_recheck(doc.url, "manual",
+                                                         "no single-value reconciled read")
+                return True
+            promoted = AnalysisResult(merged, 0, 0, 0.0, source["model"], "promoted")
+            if not self.store.promote_analysis_if_current(
+                    doc.url, queued["source_analysis_id"], promoted, PROMPT_VERSION):
+                self.store.finish_arithmetic_recheck(
+                    doc.url, "manual", "primary analysis changed or operator correction is active")
+                return True
+            self.store.delete_arithmetic_findings(doc.url)
+            final = [f for f in evaluate_report(merged, doc, self.cfg)
+                     if f.rule in ("A1", "A2", "A3")]
+            self._emit(final)
+            self.store.finish_arithmetic_recheck(doc.url, "done")
+            log.info("promoted arithmetic recheck for %s from %s", doc.url, requested)
+        except Exception as exc:
+            self._record_cost(doc, exc, ARITHMETIC_PROMPT_VERSION, requested)
+            if stage == "local":
+                log.warning("local arithmetic recheck failed for %s; spilling to Sonnet: %s",
+                            doc.url, _short(exc))
+                self.store.finish_arithmetic_recheck(doc.url, "new", _short(exc), stage="sonnet")
+                self._wake.set()
+            else:
+                log.warning("Sonnet arithmetic recheck failed for %s: %s", doc.url, _short(exc))
+                self.store.finish_arithmetic_recheck(doc.url, "manual", _short(exc))
+        return True
 
     def _station_decisions(self, doc: Doc, types: tuple[int, ...]) -> list[tuple[dict, dict]]:
         """(row, report) of the station's analysed RG-7 decisions of `types`, in decision order."""
@@ -477,12 +588,13 @@ class AnalysisPipeline:
             self._wake.set()
 
     # outcomes ---------------------------------------------------------------
-    def _record_cost(self, doc: Doc, exc: BaseException, version: str = PROMPT_VERSION) -> None:
+    def _record_cost(self, doc: Doc, exc: BaseException, version: str = PROMPT_VERSION,
+                     model: str | None = None) -> None:
         cost = getattr(exc, "cost_usd", 0.0) or 0.0
         if not cost:
             return
         try:
-            self.store.save_failed_analysis(doc.url, stored_model(self.cfg.model), version, cost,
+            self.store.save_failed_analysis(doc.url, model or stored_model(self.cfg.model), version, cost,
                                             _short(exc))
         except Exception:
             log.error("billed failure of %s ($%.3f) could not be recorded", doc.url, cost)

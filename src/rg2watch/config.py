@@ -71,6 +71,11 @@ class Config:
     price_in_per_mtok: float | None = None  # override of the built-in table (PRICES); None = table
     price_out_per_mtok: float | None = None
     analysis_workers: int = 4
+    arithmetic_recheck_enabled: bool = False
+    arithmetic_local_model: str = "ollama:bonsai-2:27b"
+    arithmetic_sonnet_model: str = "claude-sonnet-5-5"
+    arithmetic_local_queue_limit: int = 10
+    arithmetic_sonnet_workers: int = 2
     browse_interval_s: int = 120  # rebuild the browse page this often in `watch`; 0 = off
     serve_port: int = 8770  # local web server of `watch` (127.0.0.1); 0 = off
     drive_client_secrets: Path | None = None  # installed-app OAuth JSON; never served
@@ -147,6 +152,13 @@ def load_config(path: Path | None) -> Config:
         raise ValueError("high_push_max, high_push_window_s and mass_replace_threshold must be >= 1")
     if cfg.browse_interval_s < 0:
         raise ValueError(f"browse_interval_s must be >= 0: {cfg.browse_interval_s}")
+    if cfg.arithmetic_local_queue_limit < 0 or cfg.arithmetic_sonnet_workers < 1:
+        raise ValueError("arithmetic_local_queue_limit must be >= 0 and "
+                         "arithmetic_sonnet_workers must be >= 1")
+    if not cfg.arithmetic_local_model.startswith("ollama:"):
+        raise ValueError("arithmetic_local_model must be an ollama: model")
+    if cfg.arithmetic_sonnet_model.startswith("ollama:"):
+        raise ValueError("arithmetic_sonnet_model must be a paid API model")
     if not 0 <= cfg.serve_port <= 65535:
         raise ValueError(f"serve_port must be 0-65535: {cfg.serve_port}")
     topic = os.environ.get("RG2W_NTFY_TOPIC")
