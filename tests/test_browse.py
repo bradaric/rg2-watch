@@ -336,6 +336,31 @@ def test_second_opinions_merged_per_model_with_disagreement(tmp_path):
     assert r["dis"] and r["dis"] == sorted({f[0] for f in by["opus"]["f"] if f[1] == "HIGH"})
 
 
+def test_targeted_arithmetic_models_are_listed_separately_and_wrap(tmp_path):
+    s = store()
+    d = doc(BASE + "/e/a.pdf", no="12")
+    add(s, d)
+    _analysis(s, d, "claude-haiku-5-5", clean_report())
+    arithmetic = {
+        "voted": {"value": 800, "legible": True},
+        "ballots_in_box": {"value": 800, "legible": True},
+        "invalid": {"value": 20, "legible": True},
+        "valid": {"value": 780, "legible": True},
+        "list_votes": [{"row": 1, "value": 780, "legible": True}],
+    }
+    s.save_analysis(d.url, AnalysisResult(arithmetic, 0, 0, 0, "bonsai-2:27b", "stop"), "a1")
+
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs")
+    (row,) = rows_of(out)
+    html = STATIC.joinpath("index.html").read_text(encoding="utf-8")
+
+    assert [x["m"] for x in row["ars"]] == ["bonsai-2:27b"]
+    assert [x["m"] for x in row["ops"]] == ["claude-haiku-5-5"]
+    assert 'className: "models"' in html
+    assert '.models{white-space:normal;max-width:' in html
+
+
 def test_no_disagreement_when_models_agree_or_single(tmp_path):
     s = store()
     d = doc(BASE + "/e/a.pdf", no="12")

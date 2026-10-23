@@ -125,6 +125,7 @@ table.dataTable td.scol{min-width:11em}
 table.dataTable td.scol::first-line{font-weight:650}
 table.dataTable td.nw{white-space:nowrap}
 #forms td.nw{font-variant-numeric:tabular-nums}
+#forms td.models{white-space:normal;max-width:14rem;overflow-wrap:anywhere}
 table.dataTable td.fcol{min-width:24em;width:40%;white-space:normal;overflow-wrap:anywhere}
 table.dataTable th.dt-orderable-none .dt-column-order{display:none}
 .f{display:flex;align-items:baseline;margin:0 0 var(--s1)}
@@ -1030,6 +1031,11 @@ function child(r) {
     d.append(mk("strong", o.m), mk("span", " (" + when(o.at) + ") ", "mut"), o.f.length ? badges(o.f, r.dis) : mk("span", "no findings", "mut"));
     box.append(d);
   }
+  for (const a of r.ars) {
+    const d = mk("div", null, "sub");
+    d.append(mk("strong", a.m), mk("span", " (arithmetic, " + when(a.at) + ") targeted numbers only", "mut"));
+    box.append(d);
+  }
   for (const v of r.v) {
     const d = mk("div", null, "sub mut"), x = rvOf(v);
     d.append("older version: uploaded " + when(v.up) + ", first seen " + when(v.seen) + ", analysis " + v.ast + " ", linksOf(v));
@@ -1058,7 +1064,8 @@ function prep(r) {
   const ofs = all.flatMap(x => [...x.f, ...x.ops.flatMap(o => o.f)]);
   r._fl = ofs.length > 0;
   r._rules = new Set(ofs.map(f => f[0]));
-  r._models = new Set(all.flatMap(x => x.ops.map(o => o.m)));
+  r._models = new Set(all.flatMap(x => [
+    ...x.ops.map(o => o.m), ...x.ars.map(a => a.m + " (arithmetic)")]));
   r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models,
     ...r.r7.flatMap(x => x.ch || []), r.rec.status, ...r.rec.rules, ...r.rec.details,
     ...all.flatMap(v => v.oc ? [v.oc.status, v.oc.reason || ""] : [])].join("\n").toLowerCase();
@@ -1123,7 +1130,7 @@ function initTable() {
         _: (d, t, r) => ((rvOf(r) || {}).v || "") + (olderEsc(r).length ? " older escalate" : ""),
         display: (d, t, r) => verdictHtml(rvOf(r)) + (olderEsc(r).length && (rvOf(r) || {}).v !== "escalate"
           ? '<span class="rv rv-escalate rv-older">older escalated</span>' : "")}},
-      {data: "mods", title: "Models", visible: false, className: "nw", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
+      {data: "mods", title: "Models", visible: false, className: "models", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
       {data: "pdf", title: "Local PDF", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},
        createdCell: (td, d, r) => { const h = localHref(r.pdf); if (h) td.append(link("Local PDF", h)); }},
       {data: "rik", title: "RIK", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},

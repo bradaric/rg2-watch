@@ -860,6 +860,20 @@ class Store:
                 "AND b.result_json IS NOT NULL ORDER BY b.prompt_version IS ? DESC, b.id DESC LIMIT 1) "
                 "ORDER BY a.id", (*args, prompt_version)).fetchall()
 
+    def arithmetic_analyses(self, parent: str | None, prompt_version: str) -> list[sqlite3.Row]:
+        """Newest successful targeted arithmetic read of each RG-2 document/model."""
+        where, args = f"d.doc_type IN ({_ANALYSED})", []
+        if parent is not None:
+            where, args = where + " AND d.parent=?", [parent]
+        with self._lock:
+            return self._db.execute(
+                "SELECT a.id,a.document_id,a.model,a.created_at FROM analyses a "
+                f"JOIN documents d ON d.id=a.document_id WHERE {where} AND a.prompt_version=? "
+                "AND a.status='done' AND a.result_json IS NOT NULL AND a.id=(SELECT MAX(b.id) "
+                "FROM analyses b WHERE b.document_id=a.document_id AND b.model=a.model "
+                "AND b.prompt_version=? AND b.status='done' AND b.result_json IS NOT NULL) "
+                "ORDER BY a.id", (*args, prompt_version, prompt_version)).fetchall()
+
     def analysis_reports(self, ids: list[int]) -> dict[int, str]:
         """result_json by analysis id, fetched in small chunks."""
         out: dict[int, str] = {}
