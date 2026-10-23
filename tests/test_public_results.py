@@ -140,6 +140,18 @@ def test_public_page_aligns_chart_bars_and_values_in_shared_columns():
     assert ".row{grid-template-columns:1fr auto}" in html
 
 
+def test_public_page_uses_adaptive_navy_serbian_theme():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert "--bg:#eaf0f6" in html and "--bg:#061321" in html
+    assert "--flag-red:" in html and "--flag-blue:" in html and "--flag-white:" in html
+    assert "linear-gradient(to bottom,var(--flag-red) 0 33.333%" in html
+    assert "background-attachment:fixed" in html
+
+
 def test_export_refuses_directory_with_other_files(tmp_path):
     s = store()
     form(s, 1, clean_report())

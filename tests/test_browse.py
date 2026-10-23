@@ -119,6 +119,15 @@ def test_result_inclusion_filter_column_and_models_default_visibility_are_presen
     assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
 
 
+def test_operator_page_uses_adaptive_navy_serbian_theme():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "--bg:#eaf0f6" in html and "--bg:#061321" in html
+    assert "--flag-red:" in html and "--flag-blue:" in html and "--flag-white:" in html
+    assert "linear-gradient(to bottom,var(--flag-red) 0 33.333%" in html
+    assert "background-attachment:fixed" in html
+
+
 def test_json_is_ascii_even_with_lone_surrogate():
     from rg2watch.browse import _json
     blob = _json({"x": "a\ud800b\u2028</script>"})
