@@ -310,14 +310,17 @@ def test_no_non_streamed_call_above_sdk_limit():
 
 def test_prompt_distinguishes_slashes_from_ones_before_names():
     para = ('A dash or slash written in a numeric field means 0: report value 0 with mark "dash". '
-            'In particular, an isolated diagonal stroke like "/" is a slash, not the digit 1, '
-            'even when 1 would make the arithmetic work; report a clean 1 only when the mark '
-            'visibly has the form of a numeral 1. '
+            'In a list-vote table, compare all one-stroke entries with each other: repeated diagonal '
+            'strokes of the same shape are slashes, while a clean 1 must be visibly distinct as a '
+            'numeral 1, for example by a more vertical stem, hook or base. After reading every list '
+            'row, sum the votes and compare the result with the valid-ballot count. If they differ, '
+            're-examine every 1/dash classification. Arithmetic is a reason to look again, not '
+            'permission to change a visually clear entry or invent a value. '
             "A lone slash or dash in item 15 means no remarks (remarks_text_present=false).")
     assert para in analyze.PROMPT
     assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
     from rg2watch.pipeline import PROMPT_VERSION
-    assert PROMPT_VERSION == "v8"
+    assert PROMPT_VERSION == "v9"
 
 
 def _priced(model, resp_model=None, **cfg):
