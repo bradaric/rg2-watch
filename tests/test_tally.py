@@ -581,6 +581,20 @@ def test_page_handles_municipal_scope():
     assert '"Share %"' in html and "listsOf(" in html and 'id="tscope"' in html
 
 
+def test_operator_short_title_removes_records_prefix_with_or_without_separator():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    helper = next(line for line in html.splitlines() if line.startswith("const shortTitle ="))
+    script = helper + r'''
+const assert = require("assert");
+assert.equal(shortTitle("Записници Парламентарни избори 2026"), "Парламентарни избори 2026");
+assert.equal(shortTitle("Записници - Локални избори 2026"), "Локални избори 2026");
+assert.equal(shortTitle("Zapisnici: Parliamentary election 2026"), "Parliamentary election 2026");
+assert.equal(shortTitle("Парламентарни избори 2026"), "Парламентарни избори 2026");
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_operator_results_use_editorial_accents():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 

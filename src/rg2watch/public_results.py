@@ -1,5 +1,6 @@
 """Sanitized, self-contained public export of the unofficial corrected tally."""
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +14,11 @@ from .tally import build_tally
 TOTAL_KEYS = ("registered", "voted", "turnout", "ballots_in_box", "invalid", "valid",
               "outside_voted", "vote_forms", "withheld_valid", "lists", "lists_valid")
 REVIEW_KEYS = ("ok", "escalate", "unsure", "undecided")
+RECORDS_TITLE_PREFIX = re.compile(r"^(?:записници|zapisnici)(?:\s*[-–—:]\s*|\s+|$)", re.I)
+
+
+def _display_title(title: str) -> str:
+    return RECORDS_TITLE_PREFIX.sub("", title).strip()
 
 
 def _review_counts(items: list[dict], verdicts: dict[int, str]) -> dict[str, int]:
@@ -59,7 +65,7 @@ def build_public_results(store: Store, cfg: Config, parent: str) -> dict:
     return {
         "version": 1,
         "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "title": tally["title"],
+        "title": _display_title(tally["title"]),
         "scope": tally["scope"],
         "scope_note": tally["scope_note"],
         "names": tally["names"],

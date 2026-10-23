@@ -132,7 +132,8 @@ def test_operator_page_uses_official_static_flag_background():
     assert 'class="serbian-flag-bg" aria-hidden="true"' in html
     assert 'class="serbian-flag-art"' in html and "Flag_of_Serbia.svg" in html
     assert "pointer-events:none" in html
-    assert "mask-image:linear-gradient(135deg" in html
+    assert "mask-image:linear-gradient(90deg" in html
+    assert "mask-image:linear-gradient(135deg" not in html
     assert "linear-gradient(to bottom,var(--flag-red)" not in html
 
 

@@ -22,7 +22,7 @@
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;padding:var(--s4) var(--s5) var(--s6);background:var(--bg);color:var(--fg);font:14px/1.45 var(--font);isolation:isolate}
-.serbian-flag-bg{position:fixed;z-index:-1;left:-12vw;top:-24vh;width:min(92vw,1350px);aspect-ratio:3/2;pointer-events:none;opacity:.16;transform:rotate(-10deg) skewY(-1deg);transform-origin:top left;mask-image:linear-gradient(135deg,#000 0%,rgba(0,0,0,.78) 34%,rgba(0,0,0,.22) 62%,transparent 80%);-webkit-mask-image:linear-gradient(135deg,#000 0%,rgba(0,0,0,.78) 34%,rgba(0,0,0,.22) 62%,transparent 80%)}
+.serbian-flag-bg{position:fixed;z-index:-1;left:-12vw;top:-24vh;width:min(92vw,1350px);aspect-ratio:3/2;pointer-events:none;opacity:.16;transform:rotate(-10deg) skewY(-1deg);transform-origin:top left;mask-image:linear-gradient(90deg,#000 0%,rgba(0,0,0,.78) 34%,rgba(0,0,0,.22) 62%,transparent 80%);-webkit-mask-image:linear-gradient(90deg,#000 0%,rgba(0,0,0,.78) 34%,rgba(0,0,0,.22) 62%,transparent 80%)}
 .serbian-flag-art{display:block;width:100%;height:100%;filter:drop-shadow(0 18px 30px rgba(0,0,0,.18))}
 @media (prefers-color-scheme:dark){.serbian-flag-bg{opacity:.23}}
 a{color:var(--link);text-underline-offset:2px}
@@ -425,8 +425,8 @@ function card(title, pairs, cls) {
   return c;
 }
 // tab title "[N] <election> - <id> | rg2-watch"; N = forms to review; pause-sign prefix when the watcher is down
-// one shared shortener: drops the " - Записници" / " - Zapisnici" segment wherever it sits
-const shortTitle = t => (t || "").split(" - ").filter(s => !/^(записници|zapisnici)$/i.test(s.trim())).join(" - ");
+// one shared shortener: drops a leading "Записници" / "Zapisnici" label and optional separator
+const shortTitle = t => (t || "").replace(/^(?:записници|zapisnici)(?:\s*[-–—:]\s*|\s+|$)/i, "").trim();
 const cutTitle = s => {  // tab title only: at most ~50 chars, cut at a word boundary
   if (s.length <= 50) return s;
   const cut = s.slice(0, 50), sp = cut.lastIndexOf(" ");

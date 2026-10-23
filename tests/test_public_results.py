@@ -45,6 +45,16 @@ def test_public_payload_has_only_aggregate_corrected_results_and_review_counts()
         assert private not in blob
 
 
+def test_public_payload_removes_records_prefix_from_election_title():
+    s = store()
+    s.upsert_election(Election(P, "1", "t", "Записници Парламентарни избори 2026", BASE))
+    form(s, 1, clean_report())
+
+    data = build_public_results(s, config(), P)
+
+    assert data["title"] == "Парламентарни избори 2026"
+
+
 def test_public_review_breakdown_uses_current_version_and_marks_missing_verdict_undecided():
     s = store()
     old = form(s, 1, report(ballots_in_box=nf(900)))
@@ -172,7 +182,8 @@ def test_public_page_uses_official_static_flag_background():
     assert 'class="serbian-flag-bg" aria-hidden="true"' in html
     assert 'class="serbian-flag-art"' in html and "Flag_of_Serbia.svg" in html
     assert "pointer-events:none" in html
-    assert "mask-image:linear-gradient(135deg" in html
+    assert "mask-image:linear-gradient(90deg" in html
+    assert "mask-image:linear-gradient(135deg" not in html
     assert "linear-gradient(to bottom,var(--flag-red)" not in html
 
 
