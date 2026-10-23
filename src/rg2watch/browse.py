@@ -89,12 +89,24 @@ def record_review(store: Store, url: str, verdict: str, note: str | None) -> dic
 
 
 def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
-             reviews: dict | None = None, corrections: dict | None = None) -> dict:
+             reviews: dict | None = None, corrections: dict | None = None,
+             analysed_at: dict[int, str | None] | None = None) -> dict:
     pdf = hashlib.sha256(d["url"].encode()).hexdigest()
+    path = cache_dir / (pdf + ".pdf")
+    cached = None
+    try:
+        if path.is_file():
+            modified = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+            cached = to_belgrade(modified.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    except OSError:
+        pass
     f = [[x["rule"], x["severity"], x["summary"]] for x in found.get(d["id"], [])]
     f.sort(key=lambda x: -SEV_RANK.get(x[1], 0))
-    return {"up": d["uploaded_at"], "seen": to_belgrade(d["first_seen_at"]), "f": f, "ast": _ast(d),
-            "pdf": pdf if (cache_dir / (pdf + ".pdf")).is_file() else None,
+    analysis_status = _ast(d)
+    done = (analysed_at or {}).get(d["id"]) if analysis_status == "done" else None
+    return {"up": d["uploaded_at"], "seen": to_belgrade(d["first_seen_at"]),
+            "cache": cached, "done": done, "f": f, "ast": analysis_status,
+            "pdf": pdf if cached is not None else None,
             "rik": _rik_link(d["url"], base), "ops": opinions.get(d["id"], []),
             "u": d["url"], "rv": (reviews or {}).get(d["url"]),
             "oc": (corrections or {}).get(d["url"]), "correctable": d["doc_type"] == 6}
@@ -103,17 +115,19 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                cfg: Config | None = None, interval: int = 0, cache: dict | None = None) -> dict:
     cache_dir = Path(cache_dir).resolve()
+    cfg = cfg or Config()
+    model = stored_model(cfg.model)
     docs, findings = store.browse_rows(parent)
     found: dict[int, list] = {}
     for f in findings:
         found.setdefault(f["document_id"], []).append(f)
     arows = store.browse_analyses(parent, PROMPT_VERSION)
-    opinions = _opinions(store, {d["id"]: _doc(d) for d in docs}, arows, cfg or Config(),
-                         {} if cache is None else cache.setdefault("ops", {}))
+    opinions = _opinions(store, {d["id"]: _doc(d) for d in docs}, arows, cfg,
+                          {} if cache is None else cache.setdefault("ops", {}))
+    analysed_at = {a["document_id"]: to_belgrade(a["created_at"]) for a in arows
+                   if a["model"] == model and a["prompt_version"] == PROMPT_VERSION}
     elections = {e.parent: e for e in store.elections()}
     reviews = {r["url"]: review_record(r) for r in store.latest_reviews(parent)}
-    cfg = cfg or Config()
-    model = stored_model(cfg.model)
     corrections = {}
     if latest := store.latest_operator_corrections(parent):
         service = OperatorCorrections(store, cfg, model)
@@ -136,7 +150,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     readers = store.rg7_readers(parent, RG7_PROMPT_VERSION)
     for d, rep in sorted(r7_docs, key=lambda x: decision_sort_key(x[0]["uploaded_at"], x[0]["id"], x[1])):
         base = elections[d["parent"]].base_url if d["parent"] in elections else None
-        x = _version(d, {}, {}, cache_dir, base, corrections=corrections)
+        x = _version(d, {}, {}, cache_dir, base, corrections=corrections, analysed_at=analysed_at)
         x.update(d=decision_label(d["uploaded_at"], rep),
                  ch=[change_text(c) for c in rep["changes"]] if rep else None,
                  by=[m for m in readers.get(d["id"], []) if m != model],  # read by other models only
@@ -152,13 +166,13 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         ds.sort(key=lambda d: (d["uploaded_at"] or "", d["id"]), reverse=True)
         main = next((d for d in ds if d["active"]), ds[0])
         base = elections[par].base_url if par in elections else None
-        row = _version(main, found, opinions, cache_dir, base, reviews, corrections)
+        row = _version(main, found, opinions, cache_dir, base, reviews, corrections, analysed_at)
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
             name=main["station_name"], label=main["label"],
             state="removed" if not main["active"] else "replaced" if len(ds) > 1 else "current",
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),
-            v=[_version(d, found, opinions, cache_dir, base, reviews, corrections)
+            v=[_version(d, found, opinions, cache_dir, base, reviews, corrections, analysed_at)
                for d in ds if d is not main])
         row["dis"] = _disagreement(row["ops"])
         row["r7"] = r7.get((par, main["station_key"], main["doc_type"]), []) if main["active"] else []

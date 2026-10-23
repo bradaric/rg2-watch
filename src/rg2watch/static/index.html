@@ -327,7 +327,7 @@ stroke-width:2.5;
 <label><input type="checkbox" id="fl"> with findings</label>
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
-<label><input type="checkbox" id="fa"> analysis failed</label>
+<label>analysis status <select id="ast"><option value="">any</option><option value="pending">pending</option><option value="done">done</option><option value="failed">failed</option><option value="off">off</option></select></label>
 <label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by RG-7</label>
 <label><input type="checkbox" id="loc"> has local copy</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
@@ -387,6 +387,7 @@ function when(s) {
   const m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)/.exec(s || "");
   return m ? m[3] + "/" + m[2] + "/" + m[1] + " " + m[4] + ":" + m[5] : s || "";
 }
+const stamp = s => String(s || "").replace("T", " ");
 const fmtEpoch = new Intl.DateTimeFormat("en-GB", {timeZone: TZ, day: "2-digit", month: "2-digit",
   year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
 function epoch(t) {
@@ -549,7 +550,7 @@ function tickStatus() {
 // ---- table --------------------------------------------------------------------------------
 let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
-const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "nc", "ri", "fl", "rp", "rm", "fa", "c7", "loc", "dis", "auto"];
+const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "nc", "ri", "ast", "fl", "rp", "rm", "c7", "loc", "dis", "auto"];
 
 // rule codes carry their plain-language description (data.json "rules"): a hover title, a focus
 // tooltip, and aria-describedby pointing at the legend entry
@@ -1076,9 +1077,9 @@ function keep(r) {
   if (ri && r.rec.result[ri].included !== false) return false;
   return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
-    && (!rs.length || rs.some(x => r._rules.has(x))) && (!$("fl").checked || r._fl)
+    && (!rs.length || rs.some(x => r._rules.has(x))) && (!sel("ast") || r.ast === sel("ast")) && (!$("fl").checked || r._fl)
     && (!$("rp").checked || r.state === "replaced") && (!$("rm").checked || r.state === "removed")
-    && (!$("fa").checked || r.ast === "failed") && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
+    && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
 }
 function initTable() {
   DataTable.ext.search.push((s, _d, _i, row) => s.nTable.id !== "forms" || keep(row));
@@ -1099,7 +1100,8 @@ function initTable() {
         esc((r.no ? "BM " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""))}},
       {data: "label", title: "Document", render: txt(), defaultContent: ""},
       {data: "up", title: "Times (RS)", className: "nw", render: {_: d => d || "", display: (d, t, r) =>
-        esc((d ? "up " + when(d) : "") ) + (d ? "<br>" : "") + esc("seen " + when(r.seen))}},
+        [["up", d], ["seen", r.seen], ["cache", r.cache], ["done", r.done]].filter(x => x[1])
+          .map(x => esc(x[0] + " " + stamp(x[1]))).join("<br>")}},
       {data: "_st", title: "Status", className: "nw", render: {_: d => d, display: (d, t, r) =>
         esc(r.state) + "<br>" + esc("analysis " + r.ast)}},
       {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
@@ -1546,7 +1548,7 @@ function renderHero() {
     : [dg ? "Ставке присутне само у приказу са исправкама / оригиналном приказу: " + dnum(r.nin) + " / " + dnum(r.nout) +
         "; неупарене ставке су изостављене (можда се променила читљивост, избор записника без уочених проблема или прихватљивост усаглашених гласова)." : "",
       muniScope && allMunis ? "Локални избори — листе се разликују по општинама; изаберите општину за резултате по листама." : "",
-      cover != null && cover < 0.1 ? "Први подаци: обрађен је мали број бирачких места, па се проценти још могу знатно променити." : ""].filter(Boolean).join(" ");
+      cover != null && cover < 0.1 ? "Рани резултати — обрађено је мало бирачких места; проценти се могу знатно променити." : ""].filter(Boolean).join(" ");
   const noChartLists = !t.lists || (dg ? !t.sh || t.sh.every(x => x == null) : !t.lists_valid);
   const rows = none || (muniScope && allMunis) || noChartLists ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
     .sort((a, b) => dg ? Math.abs(b.v) - Math.abs(a.v) || a.i - b.i : b.v - a.v || a.i - b.i);

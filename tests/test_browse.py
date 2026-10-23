@@ -11,6 +11,7 @@ from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.analyze import AnalysisResult
 from rg2watch.browse import STATIC, STATIC_FILES, build_page
 from rg2watch.cli import main
+from rg2watch.config import Config
 from rg2watch.models import Doc, Election, Event, Finding
 from rg2watch.store import Store
 from test_rules import clean_report, nf
@@ -111,10 +112,15 @@ def test_only_first_round_rg2_rows_offer_operator_corrections(tmp_path):
     assert 'v.ast === "done" && v.correctable' in correction_box
 
 
-def test_result_inclusion_filter_column_and_models_default_visibility_are_present():
+def test_result_inclusion_analysis_status_filter_and_models_column_are_present():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert 'id="ri"' in html
+    assert ('analysis status <select id="ast"><option value="">any</option>' in html and
+            all(f'<option value="{status}">{status}</option>' in html
+                for status in ("pending", "done", "failed", "off")))
+    assert '"nc", "ri", "ast", "fl"' in html
+    assert '(!sel("ast") || r.ast === sel("ast"))' in html
     assert 'title: "Result inclusion"' in html
     assert 'data: "mods", title: "Models", visible: false' in html
     assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
@@ -230,16 +236,31 @@ def test_null_station_key_and_municipality(tmp_path):
     assert len({r["id"] for r in rows_of(out)}) == 2
 
 
-def test_seen_and_uploaded_are_both_serbian_local_time(tmp_path):
+def test_document_times_include_upload_seen_cache_and_current_analysis(tmp_path):
     s = store()
     d = doc(BASE + "/e/a.pdf", up="2026-10-19T20:15")
     add(s, d)
     s._db.execute("UPDATE documents SET first_seen_at='2026-10-19T18:30:00Z'")  # UTC, CEST = +2
+    cfg = Config()
+    s.save_analysis(d.url, AnalysisResult(clean_report(), 0, 0, 0.0, cfg.model, "stop"),
+                    PROMPT_VERSION, parent=P)
+    s.mark_analysis(d.url, "done")
+    s._db.execute("UPDATE analyses SET created_at='2026-10-19T18:35:00Z'")
     s._db.commit()
     out = tmp_path / "index.html"
-    build_page(s, out, tmp_path / "pdfs")
+    cache = tmp_path / "pdfs"
+    cache.mkdir()
+    cached = cache / (hashlib.sha256(d.url.encode()).hexdigest() + ".pdf")
+    cached.write_bytes(b"%PDF")
+    timestamp = 1792434600  # 2026-10-19T18:30:00Z
+    os.utime(cached, (timestamp, timestamp))
+    build_page(s, out, cache, cfg=cfg)
     (r,) = rows_of(out)
     assert r["up"] == "2026-10-19T20:15" and r["seen"] == "2026-10-19T20:30"
+    assert r["cache"] == "2026-10-19T20:30" and r["done"] == "2026-10-19T20:35"
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert '[["up", d], ["seen", r.seen], ["cache", r.cache], ["done", r.done]]' in html
+    assert 'x[0] + " " + stamp(x[1])' in html
 
 
 def test_retrying_is_distinct_from_failed(tmp_path):
