@@ -167,6 +167,16 @@ def test_public_page_uses_wide_layout_nonwrapping_ratios_and_unofficial_badge():
     assert ".status-badge{" in html and "background:var(--badge-bg)" in html
 
 
+def test_public_page_uses_compact_municipality_select_text():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert "select{display:block" in html
+    assert "font:inherit;font-size:.9rem" in html
+
+
 def test_public_page_uses_restrained_editorial_accents():
     s = store()
     form(s, 1, clean_report())
