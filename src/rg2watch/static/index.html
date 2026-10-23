@@ -1546,7 +1546,7 @@ function renderHero() {
     : [dg ? "Ставке присутне само у приказу са исправкама / оригиналном приказу: " + dnum(r.nin) + " / " + dnum(r.nout) +
         "; неупарене ставке су изостављене (можда се променила читљивост, избор записника без уочених проблема или прихватљивост усаглашених гласова)." : "",
       muniScope && allMunis ? "Локални избори — листе се разликују по општинама; изаберите општину за резултате по листама." : "",
-      cover != null && cover < 0.1 ? "Први подаци: обрађен је мали број бирачких места, па се проценти још могу знатно променити." : ""].filter(Boolean).join(" ");
+      cover != null && cover < 0.1 ? "Рани резултати — обрађено је мало бирачких места; проценти се могу знатно променити." : ""].filter(Boolean).join(" ");
   const noChartLists = !t.lists || (dg ? !t.sh || t.sh.every(x => x == null) : !t.lists_valid);
   const rows = none || (muniScope && allMunis) || noChartLists ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
     .sort((a, b) => dg ? Math.abs(b.v) - Math.abs(a.v) || a.i - b.i : b.v - a.v || a.i - b.i);
