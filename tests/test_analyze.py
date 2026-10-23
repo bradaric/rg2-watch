@@ -100,6 +100,11 @@ def test_arithmetic_request_only_reads_result_numbers():
     assert res.report == raw
 
 
+def test_arithmetic_schema_uses_only_anthropic_supported_integer_constraints():
+    row = ARITHMETIC_SCHEMA["properties"]["list_votes"]["items"]["properties"]["row"]
+    assert row == {"type": "integer"}
+
+
 def test_fallbacks_disabled_omits_params():
     c = FakeClient(_resp())
     analyze_document(TILES, c, Config(fallbacks=False))

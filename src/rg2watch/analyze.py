@@ -117,7 +117,7 @@ ARITHMETIC_SCHEMA: dict = _obj({
     "invalid": _ARITHMETIC_FIELD,
     "valid": _ARITHMETIC_FIELD,
     "list_votes": {"type": "array", "items": _obj({
-        "row": {"type": "integer", "minimum": 1},
+        "row": {"type": "integer"},
         "value": _NULLABLE_INT,
         "legible": _BOOL,
     })},

@@ -133,6 +133,10 @@ class AnalysisPipeline:
             recovered = self.store.requeue_arithmetic_running(self.parent)
             if recovered:
                 log.info("requeued %d interrupted arithmetic recheck(s)", recovered)
+            repaired = self.store.requeue_arithmetic_errors(
+                self.parent, "minimum' is not supported")
+            if repaired:
+                log.info("requeued %d arithmetic recheck(s) rejected by the old schema", repaired)
             for doc, analysis_id in self.store.arithmetic_backlog(
                     self.parent, stored_model(self.cfg.model), PROMPT_VERSION, self.municipalities):
                 cached = self.store.latest_report(

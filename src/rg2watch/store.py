@@ -690,6 +690,13 @@ class Store:
         return self._write("UPDATE arithmetic_rechecks SET status='new',updated_at=? "
                            "WHERE parent=? AND status='running'", (_now(), parent)).rowcount
 
+    def requeue_arithmetic_errors(self, parent: str, error_substring: str) -> int:
+        """Retry only jobs affected by a now-fixed implementation error, not manual outcomes."""
+        return self._write(
+            "UPDATE arithmetic_rechecks SET status='new',error=NULL,updated_at=? "
+            "WHERE parent=? AND status='manual' AND instr(error,?)>0",
+            (_now(), parent, error_substring)).rowcount
+
     def latest_report(self, url: str, model: str, prompt_version: str) -> dict | None:
         """Report of the newest successful analysis of a document by this model and prompt version."""
         with self._lock:
