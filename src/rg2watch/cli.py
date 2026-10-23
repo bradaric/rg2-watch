@@ -666,22 +666,25 @@ class _UntilDone:
         self.remaining = 0
         self.why = ""
         self._ok_since: float | None = None
-        self._progress: int | None = None  # forms in a terminal state, when last seen changing
+        self._progress: tuple[int, int] | None = None  # primary finished / arithmetic remaining
         self._progress_at = clock()
         self._lanes: list[str] | None = None  # first-pass lanes left / last RIK success, when last changed
         self._ok_at = None
         self._lanes_at = clock()
 
     def step(self) -> int | None:
-        self.remaining = (0 if self.pipeline is None
-                          else self.store.unfinished_analysis(self.parent, self.only))
+        primary = (0 if self.pipeline is None
+                   else self.store.unfinished_analysis(self.parent, self.only))
+        arithmetic = (0 if self.pipeline is None
+                      else self.store.unfinished_arithmetic_rechecks(self.parent, self.only))
+        self.remaining = primary + arithmetic
         now = self.clock()
         if self.remaining == 0:
             self._progress = None
         else:
-            terminal = self.store.finished_analysis(self.parent, self.only)
-            if terminal != self._progress:
-                self._progress, self._progress_at = terminal, now
+            progress = (self.store.finished_analysis(self.parent, self.only), arithmetic)
+            if progress != self._progress:
+                self._progress, self._progress_at = progress, now
         left, ok = self.watcher.first_pass_left, self.watcher.client.last_ok
         if (left, ok) != (self._lanes, self._ok_at):
             self._lanes, self._ok_at, self._lanes_at = left, ok, now

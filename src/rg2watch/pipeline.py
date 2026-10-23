@@ -134,7 +134,7 @@ class AnalysisPipeline:
             if recovered:
                 log.info("requeued %d interrupted arithmetic recheck(s)", recovered)
             for doc, analysis_id in self.store.arithmetic_backlog(
-                    self.parent, stored_model(self.cfg.model), PROMPT_VERSION):
+                    self.parent, stored_model(self.cfg.model), PROMPT_VERSION, self.municipalities):
                 cached = self.store.latest_report(
                     doc.url, stored_model(self.cfg.arithmetic_local_model),
                     ARITHMETIC_PROMPT_VERSION) is not None

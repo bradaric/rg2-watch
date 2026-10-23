@@ -732,8 +732,10 @@ class Store:
             "DELETE FROM findings WHERE document_id=(SELECT id FROM documents WHERE url=?) "
             "AND rule IN ('A1','A2','A3')", (url,)).rowcount
 
-    def arithmetic_backlog(self, parent: str, model: str, prompt_version: str) -> list[tuple[Doc, int]]:
+    def arithmetic_backlog(self, parent: str, model: str, prompt_version: str,
+                           municipalities: Collection[str] | None = None) -> list[tuple[Doc, int]]:
         """Active primary-model A2/A3 findings not already represented in the recheck queue."""
+        where, extra = _in_municipalities(municipalities)
         with self._lock:
             rows = self._db.execute(
                 "SELECT d.*,a.id analysis_id FROM documents d JOIN analyses a ON a.document_id=d.id "
@@ -742,9 +744,18 @@ class Store:
                 "AND a.id=(SELECT MAX(x.id) FROM analyses x WHERE x.document_id=d.id AND x.model=? "
                 "AND x.prompt_version=? AND x.status='done' AND x.result_json IS NOT NULL) "
                 "AND EXISTS (SELECT 1 FROM findings f WHERE f.document_id=d.id AND f.rule IN ('A2','A3')) "
-                "AND NOT EXISTS (SELECT 1 FROM arithmetic_rechecks q WHERE q.document_id=d.id)",
-                (parent, model, prompt_version, model, prompt_version)).fetchall()
+                "AND NOT EXISTS (SELECT 1 FROM arithmetic_rechecks q WHERE q.document_id=d.id)" + where,
+                (parent, model, prompt_version, model, prompt_version, *extra)).fetchall()
         return [(_doc(row), row["analysis_id"]) for row in rows]
+
+    def unfinished_arithmetic_rechecks(self, parent: str,
+                                       municipalities: Collection[str] | None = None) -> int:
+        where, extra = _in_municipalities(municipalities)
+        with self._lock:
+            return self._db.execute(
+                "SELECT COUNT(*) FROM arithmetic_rechecks q JOIN documents d ON d.id=q.document_id "
+                "WHERE q.parent=? AND q.status IN ('new','running')" + where,
+                (parent, *extra)).fetchone()[0]
 
     def rg7_reports(self, parent: str, model: str, prompt_version: str,
                     analysed_only: bool = True,
