@@ -259,6 +259,80 @@ directory as a new production deployment. The timestamp and footer explicitly sa
 static unofficial snapshot and does not update automatically. Never upload the database's private page
 folder, `data.json`, `reviews.json`, PDFs, SQLite file, configuration, or credentials.
 
+#### Optional scheduled Cloudflare Pages updates
+
+Automatic publication removes the manual inspection gate: every successful deployment immediately
+changes the public site. Set it up only after manually exporting, inspecting and deploying one snapshot.
+Disable it during prompt-version migrations, bulk reanalysis or operator-correction review; otherwise a
+valid but temporary intermediate tally may become public. Cloudflare deployment limits also apply. Since
+the snapshot time changes on every export, even unchanged totals produce a new deployment.
+
+Use one guarded job for export and deployment, rather than separate cron jobs. This prevents a failed
+export from being followed by an upload and `flock` prevents overlapping runs. Install Cloudflare's
+`wrangler` CLI, create the Pages project, and confirm a manual deployment first. Give its API token only
+the account/project permissions needed to deploy Pages; never put the token in the repository or directly
+in the crontab.
+
+Store the noninteractive credentials outside the repository:
+
+```sh
+install -d -m 700 ~/.config/rg2-watch
+install -m 600 /dev/null ~/.config/rg2-watch/cloudflare.env
+$EDITOR ~/.config/rg2-watch/cloudflare.env
+```
+
+The file should contain only the values required by Wrangler:
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=replace-me
+CLOUDFLARE_API_TOKEN=replace-me
+```
+
+Create a private wrapper such as `~/.local/bin/rg2watch-publish-results` and replace the three
+placeholders. Use the absolute Wrangler path printed by `command -v wrangler`; cron may not have the
+interactive shell's `PATH`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+ROOT=/home/replace-me/rg2-watch
+ELECTION=replace-me
+PROJECT=replace-me
+WRANGLER=/absolute/path/to/wrangler
+
+exec 9>"$ROOT/data/public-results-publish.lock"
+flock -n 9 || exit 0
+
+set -a
+source "$HOME/.config/rg2-watch/cloudflare.env"
+set +a
+
+cd "$ROOT"
+scripts/export.sh "$ELECTION" --out "$ROOT/public-results"
+"$WRANGLER" pages deploy "$ROOT/public-results" --project-name "$PROJECT"
+```
+
+Make it executable, run it once manually, inspect the production URL, and check Cloudflare's deployment
+history before scheduling it:
+
+```sh
+chmod 700 ~/.local/bin/rg2watch-publish-results
+~/.local/bin/rg2watch-publish-results
+```
+
+For example, run every 15 minutes and keep a private local log:
+
+```cron
+*/15 * * * * /home/replace-me/.local/bin/rg2watch-publish-results >>/home/replace-me/rg2-watch/data/public-results-publish.log 2>&1
+```
+
+After adding the entry with `crontab -e`, verify both the log and the public snapshot time. On failure,
+disable the cron entry first, inspect the local export and log, and use Cloudflare Pages deployment history
+to roll back if necessary. Token rotation, project changes and resuming after bulk reanalysis should always
+be tested with one manual wrapper run before cron is re-enabled.
+
 ## Operator-entered numeric verification and corrections
 
 An analysed, active first-round RG-2 can have audited operator-entered values when a model reading

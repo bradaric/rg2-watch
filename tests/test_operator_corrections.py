@@ -262,6 +262,17 @@ def test_editor_uses_ballot_rows_even_when_target_model_read_omitted_one():
                                                   {"row": 2, "value": None}]
 
 
+def test_editor_prefills_empty_list_vote_as_zero():
+    report = clean_report()
+    report["numbers"]["list_votes"][1]["field"].update(
+        value=None, legible=False, mark="empty")
+
+    state = OperatorCorrections(analysed_store(report), Config(model=MODEL), MODEL).state(URL)
+
+    assert state["snapshot"]["list_votes"] == [{"row": 1, "value": 400},
+                                                  {"row": 2, "value": 0}]
+
+
 def test_replacement_url_starts_without_correction_and_old_history_is_retained():
     s = analysed_store()
     service = OperatorCorrections(s, Config(model=MODEL), MODEL)
@@ -348,6 +359,20 @@ def test_browse_row_has_compact_operator_correction_status(tmp_path):
     assert row["oc"] == {"status": "active", "reason": "checked against scan",
                          "at": row["oc"]["at"]}
     assert row["rec"]["status"] == "ok"
+
+
+def test_old_prompt_correction_is_quietly_skipped_until_current_analysis(tmp_path, caplog):
+    s = analysed_store()
+    service = OperatorCorrections(s, Config(model=MODEL), MODEL)
+    service.save(URL, snapshot(), "checked against scan", service.state(URL)["source_token"])
+    s._db.execute("UPDATE analyses SET prompt_version='old-version'")
+    s._db.commit()
+
+    tally = build_tally(s, Config(model=MODEL, tally_scope={P: "national"}), P, MODEL)
+    row = build_data(s, tmp_path, cfg=Config(model=MODEL))["rows"][0]
+
+    assert tally["operator_corrected"] == [] and row["oc"] is None
+    assert "operator correction state" not in caplog.text
 
 
 def correction_request(server, method, path, body=None, headers=None):

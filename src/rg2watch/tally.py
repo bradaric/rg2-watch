@@ -10,8 +10,8 @@ from .models import Doc
 from .names import to_cyrillic
 from .operator_corrections import OperatorCorrections, apply_operator_snapshot
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
-from .rules import (RG7_FIELDS, _dash_zero, _ok, change_text, decision_label, decision_sort_key, evaluate_report,
-                    repeats, rg2_value, rg7_field, rg7_mismatch)
+from .rules import (RG7_FIELDS, _dash_zero, _list_zero, _ok, change_text, decision_label,
+                    decision_sort_key, evaluate_report, repeats, rg2_value, rg7_field, rg7_mismatch)
 from .store import Store, _doc
 
 log = logging.getLogger("rg2watch.tally")
@@ -92,7 +92,7 @@ def apply_rg7(report: dict, decisions: list[dict]) -> tuple[dict, list[dict], li
             row = int(item[5:])
             old = next((r for r in nums["list_votes"] if r["row"] == row), None)
             if old is not None:
-                if not table and not _ok(_dash_zero(old["field"])):
+                if not table and not _ok(_list_zero(old["field"])):
                     return False
                 old["field"] = done
             elif table:
@@ -145,7 +145,7 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None,
     arith_details = {f.rule: f.summary for f in found if f.rule in ARITHMETIC}
     raw_nums = {k: _dash_zero(v) for k, v in report["numbers"].items() if k != "list_votes"}
     rec_bad = any(not _ok(raw_nums[k]) for k in ("registered", "voted", "ballots_in_box", "invalid", "valid"))
-    rec_bad = rec_bad or any(not _ok(_dash_zero(x["field"])) for x in report["numbers"]["list_votes"])
+    rec_bad = rec_bad or any(not _ok(_list_zero(x["field"])) for x in report["numbers"]["list_votes"])
     rec_bad = rec_bad or any(not raw_nums[k]["legible"] and raw_nums[k]["mark"] != "empty"
                              for k in ("outside_voted", "outside_confirmations"))
     rec_bad = rec_bad or (_ok(raw_nums["outside_voted"]) and not _ok(raw_nums["outside_confirmations"]))
@@ -182,7 +182,7 @@ def _numbers(report: dict) -> tuple[dict, dict, list[str]]:
             bad.append(f"{k} {'illegible' if not f['legible'] else 'empty'}")
     lists: dict[int, int | None] = {}
     for r in report["numbers"]["list_votes"]:
-        f = _dash_zero(r["field"])
+        f = _list_zero(r["field"])
         lists[r["row"]] = f["value"] if _ok(f) else None
         if not _ok(f):
             bad.append(f"list row {r['row']} {'illegible' if not f['legible'] else 'empty'}")
@@ -384,6 +384,9 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         service = OperatorCorrections(store, cfg, model)
         for d in mains:
             if d["url"] not in latest_operator:
+                continue
+            source = by_doc.get(d["id"], {}).get(model)
+            if source is None or source["prompt_version"] != PROMPT_VERSION:
                 continue
             try:
                 operator_states[d["id"]] = service.state(d["url"])

@@ -133,6 +133,15 @@ def test_unreadable_list_row_excludes_form():
     assert "list row 2 illegible" in why(tally(s))["12"][0]
 
 
+def test_empty_list_row_counts_as_zero_when_reconciled():
+    rep = report(list_votes=[{"row": 1, "field": nf(780)},
+                             {"row": 2, "field": nf(None, legible=False, mark="empty")}])
+    ex = extract(rep, doc(BASE + "/blank.pdf", no="12"), Config())
+    assert ex["l"] == {1: 780, 2: 0}
+    assert ex["bad"] == [] and not ex["rec_bad"]
+    assert _contrib(ex, [1, 2])["lists"] == ([780, 0], 780)
+
+
 def test_disagreement_between_models_marks_form_and_shows_values():
     s = store()
     d = form(s, 12, clean_report())

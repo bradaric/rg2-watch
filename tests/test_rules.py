@@ -308,6 +308,20 @@ def test_dash_means_zero():
     assert "invalid 0 + valid 780 != ballots in box 800" in found["A2"].summary
 
 
+def test_empty_list_vote_means_zero_when_lists_reconcile():
+    def blank(r, first):
+        r["numbers"]["list_votes"][0]["field"].update(value=first)
+        r["numbers"]["list_votes"][1]["field"].update(
+            value=None, legible=False, mark="empty")
+
+    found = rules(mutated(lambda r: blank(r, 780)))
+    assert not {"V8", "A3"} & set(found)
+
+    found = rules(mutated(lambda r: blank(r, 779)))
+    assert "V8" not in found and "A3" in found
+    assert found["A3"].summary == "list votes sum 779 != valid 780"
+
+
 def test_v11_none_on_follow_up_not_anomalous_when_parent_is_ne():
     def fn(r):
         r["yesno"]["control_sheet_found"]["answer"] = "NE"

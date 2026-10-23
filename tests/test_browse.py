@@ -2,6 +2,7 @@ import copy
 import hashlib
 import json
 import os
+import subprocess
 import threading
 import time
 
@@ -335,6 +336,66 @@ def test_status_for_browse_says_watcher_not_running_with_db_counts(tmp_path):
 def test_page_marks_stale_status():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "STALE_S = 60" in html and "watcher not running / stalled since" in html
+
+
+def test_status_refresh_preserves_unchanged_alerts_and_skips_static_repaints():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    status = html[html.index("function paintHero"):html.index("// ---- table")]
+    script = r'''
+const assert = require("assert");
+const els = {};
+function el(id) { return els[id] ||= {children: [], style: {}, textContent: "", replaceCount: 0,
+  append(...x) { this.children.push(...x); },
+  replaceChildren(...x) { this.children = x; this.replaceCount++; }}; }
+const $ = el;
+function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "",
+  children: [], append(...x) { this.children.push(...x); }}; }
+function card(title) { return mk("div", title, "card"); }
+function setTitle() {}
+function epoch() { return "20:00"; }
+function ago() { return "now"; }
+function dur() { return "-"; }
+function reviewCounts() { return {todo: 0, escalate: 0, unsure: 0, ok: 0}; }
+function ruleEl(code) { return mk("span", code); }
+function when(x) { return x; }
+function alertForm() { return null; }
+function localHref() { return null; }
+function rikHref() { return null; }
+function link() { return mk("a"); }
+function showForm() {}
+const STALE_S = 60, SEV = ["HIGH", "MEDIUM", "LOW"];
+let slots = [], rows = [], D = {db: "db", built: "one"}, S = null;
+''' + status + r'''
+const view = {
+  ts: 1, watching: false, db: "db", watcher: null,
+  docs: {rg2_seen: 1, stations: 1, rg2_rik: null, new10: 0, new60: 0, replaced: 0, removed: 0, rg7: null, rare: {}},
+  analysis: {on: false, paused: null, done: 0, failed: 0, spend: 0},
+  ntfy: null, alerts: []
+};
+S = view;
+renderStatus();
+const alertCard = els["status-alerts"].children[0];
+assert(alertCard, "alerts render in their own stable container");
+const alertReplaces = els["status-alerts"].replaceCount;
+renderStatus();
+assert.strictEqual(els["status-alerts"].children[0], alertCard, "unchanged alerts keep the same DOM node");
+assert.equal(els["status-alerts"].replaceCount, alertReplaces, "unchanged alerts are not replaced");
+
+let paints = 0;
+renderStatus = () => { paints++; };
+applyStatus(view);
+applyStatus(JSON.parse(JSON.stringify(view)));
+assert.equal(paints, 1, "an unchanged fetched view snapshot is not repainted");
+tickStatus();
+assert.equal(paints, 1, "the clock does not repaint a non-watching snapshot");
+S = {...view, watching: true};
+tickStatus();
+assert.equal(paints, 2, "the clock still repaints live watcher status");
+console.log(JSON.stringify({ok: true}));
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"ok": True}
 
 
 def test_page_sets_tab_title_from_status_and_data():

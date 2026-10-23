@@ -119,7 +119,7 @@ For section V: count committee rows, rows with a written name, rows with a signa
 
 Also report whether the results block (10.1-10.5) looks written with a different pen or by a different hand than the rest of the form, any pasted or patched paper, and the scan quality.
 
-A dash or slash written in a numeric field means 0: report value 0 with mark "dash". A lone slash or dash in item 15 means no remarks (remarks_text_present=false).
+A dash or slash written in a numeric field means 0: report value 0 with mark "dash". In a list-vote table, compare all one-stroke entries with each other: repeated diagonal strokes of the same shape are slashes, while a clean 1 must be visibly distinct as a numeral 1, for example by a more vertical stem, hook or base. After reading every list row, sum the votes and compare the result with the valid-ballot count. If they differ, re-examine every 1/dash classification. Arithmetic is a reason to look again, not permission to change a visually clear entry or invent a value. A lone slash or dash in item 15 means no remarks (remarks_text_present=false).
 
 Report numbers as a list: one entry per numeric item (registered, first_voter_number, voted, ballots_in_box, invalid, valid, assisted, outside_voted, outside_confirmations), and one entry with field \"list_row\" and its row number for each electoral list in 10.5. Report every yes/no item once in the yesno list.
 
