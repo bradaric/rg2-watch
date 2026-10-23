@@ -1,6 +1,7 @@
 """Sanitized, self-contained public export of the unofficial corrected tally."""
 
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,10 +16,19 @@ TOTAL_KEYS = ("registered", "voted", "turnout", "ballots_in_box", "invalid", "va
               "outside_voted", "vote_forms", "withheld_valid", "lists", "lists_valid")
 REVIEW_KEYS = ("ok", "escalate", "unsure", "undecided")
 RECORDS_TITLE_PREFIX = re.compile(r"^(?:записници|zapisnici)(?:\s*[-–—:]\s*|\s+|$)", re.I)
+SERBIAN_CYRILLIC = "абвгдђежзијклљмнњопрстћуфхцчџш"
+_SERBIAN_ORDER = {char: index for index, char in enumerate(SERBIAN_CYRILLIC)}
 
 
 def _display_title(title: str) -> str:
     return RECORDS_TITLE_PREFIX.sub("", title).strip()
+
+
+def _serbian_sort_key(text: str) -> tuple[int, ...]:
+    """Deterministic Serbian Cyrillic collation without relying on an installed OS locale."""
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return tuple(-1 if char.isspace() else _SERBIAN_ORDER.get(char, 1000 + ord(char))
+                 for char in normalized)
 
 
 def _review_counts(items: list[dict], verdicts: dict[int, str]) -> dict[str, int]:
@@ -72,7 +82,8 @@ def build_public_results(store: Store, cfg: Config, parent: str) -> dict:
         "fallback_name_indices": tally["fallback_name_indices"],
         "names_note": tally["names_note"],
         "overall": _public_row(tally["overall"], flagged_for(tally["overall"]), verdicts),
-        "municipalities": [_public_row(row, flagged_for(row), verdicts) for row in tally["munis"]],
+        "municipalities": [_public_row(row, flagged_for(row), verdicts)
+                           for row in sorted(tally["munis"], key=lambda x: _serbian_sort_key(x["m"]))],
     }
 
 

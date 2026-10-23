@@ -69,6 +69,7 @@ input[type=search]{width:15em}
 #ctl>label{white-space:nowrap;display:inline-flex;align-items:center;gap:6px;color:var(--mut)}
 #ctl>label:has(>input[type=checkbox]){min-height:30px;padding:0 10px;border:1px solid var(--line2);border-radius:15px;color:var(--fg);cursor:pointer;user-select:none}
 #ctl>label:has(>input:checked){background:var(--accent-bg);border-color:var(--accent)}
+#ctl select:has(option:not(:first-child):checked){background:var(--accent-bg);border-color:var(--accent)}
 #ctl>label:has(>input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 #ctl>label[hidden]{display:none}
 #rulesbox,#colbox{position:relative}
@@ -124,6 +125,7 @@ table.dataTable td.scol{min-width:11em}
 table.dataTable td.scol::first-line{font-weight:650}
 table.dataTable td.nw{white-space:nowrap}
 #forms td.nw{font-variant-numeric:tabular-nums}
+#forms td.models{white-space:normal;max-width:14rem;overflow-wrap:anywhere}
 table.dataTable td.fcol{min-width:24em;width:40%;white-space:normal;overflow-wrap:anywhere}
 table.dataTable th.dt-orderable-none .dt-column-order{display:none}
 .f{display:flex;align-items:baseline;margin:0 0 var(--s1)}
@@ -517,21 +519,26 @@ function renderStatus() {
     ["RG-7 decisions", d.rg7 ? "read " + d.rg7.read + " / pending " + d.rg7.pending : "-"],
     ["rare types", Object.entries(d.rare).map(([k, v]) => k + ": " + v).join(", ") || "none"]]));
   const p = a.paused;
+  const ar = a.arithmetic;
   cards.push(card("Analysis", a.on ? [
-    ["model", a.model], ["queued / running", a.queued + " / " + a.running],
-    ["done / failed / retrying", a.done + " / " + a.failed + " / " + a.retrying],
+    ["model", a.model], ["primary queue", a.queued + " waiting · " + a.running + " running"],
+    ["primary results", a.done + " done · " + a.failed + " failed · " + a.retrying + " retrying"],
+    ...(ar ? [["arithmetic", ar.local + " local · " + ar.sonnet + " Sonnet · " + ar.running + " running"],
+      ["arithmetic results", ar.done + " fixed · " + ar.manual + " manual"]] : []),
     ["state", p ? "paused: " + p[0] + (p[1] ? " since " + epoch(p[1]) : "") : "running", p ? "bad" : "good"],
     ["spend", "$" + a.spend.toFixed(2) + " of $" + a.cap.toFixed(2)],
-    ["avg per form", a.avg_s == null ? "-" : a.avg_s + " s"], ["time to clear queue", dur(a.eta_s)]]
+    ["pace", a.avg_s == null ? "-" : a.avg_s + " s/form"], ["ETA", dur(a.eta_s)]]
     : [["state", "off"], ["done / failed", a.done + " / " + a.failed], ["spend", "$" + a.spend.toFixed(2)]]));
   const n = S.ntfy;
+  const reviewAlerts = [];
   if (rows.length) {
     const c = reviewCounts();
-    cards.push(card("Review", [["to review", String(c.todo), c.todo ? "warn" : "good"],
-      ["escalated", String(c.escalate), c.escalate ? "bad" : ""], ["unsure", String(c.unsure)], ["ok", String(c.ok)]]));
+    reviewAlerts.push(["to review", String(c.todo), c.todo ? "warn" : "good"],
+      ["escalated", String(c.escalate), c.escalate ? "bad" : ""], ["unsure", String(c.unsure)], ["ok", String(c.ok)]);
   }
-  cards.push(card("Alerts", n ? [["ntfy", !n.enabled ? "not configured (terminal only)" : n.failing ? "failing, last ok " + ago(n.last_ok) : "delivering, last ok " + ago(n.last_ok), n.failing ? "bad" : ""],
+  reviewAlerts.push(...(n ? [["ntfy", !n.enabled ? "not configured (terminal only)" : n.failing ? "failing, last ok " + ago(n.last_ok) : "delivering, last ok " + ago(n.last_ok), n.failing ? "bad" : ""],
     ["waiting to send", n.queued]] : [["ntfy", "-"]]));
+  cards.push(card("Review & alerts", reviewAlerts));
   box.replaceChildren(...cards);
   renderAlerts();
   paintHero();
@@ -1024,6 +1031,11 @@ function child(r) {
     d.append(mk("strong", o.m), mk("span", " (" + when(o.at) + ") ", "mut"), o.f.length ? badges(o.f, r.dis) : mk("span", "no findings", "mut"));
     box.append(d);
   }
+  for (const a of r.ars) {
+    const d = mk("div", null, "sub");
+    d.append(mk("strong", a.m), mk("span", " (arithmetic, " + when(a.at) + ") targeted numbers only", "mut"));
+    box.append(d);
+  }
   for (const v of r.v) {
     const d = mk("div", null, "sub mut"), x = rvOf(v);
     d.append("older version: uploaded " + when(v.up) + ", first seen " + when(v.seen) + ", analysis " + v.ast + " ", linksOf(v));
@@ -1052,7 +1064,8 @@ function prep(r) {
   const ofs = all.flatMap(x => [...x.f, ...x.ops.flatMap(o => o.f)]);
   r._fl = ofs.length > 0;
   r._rules = new Set(ofs.map(f => f[0]));
-  r._models = new Set(all.flatMap(x => x.ops.map(o => o.m)));
+  r._models = new Set(all.flatMap(x => [
+    ...x.ops.map(o => o.m), ...x.ars.map(a => a.m + " (arithmetic)")]));
   r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models,
     ...r.r7.flatMap(x => x.ch || []), r.rec.status, ...r.rec.rules, ...r.rec.details,
     ...all.flatMap(v => v.oc ? [v.oc.status, v.oc.reason || ""] : [])].join("\n").toLowerCase();
@@ -1117,7 +1130,7 @@ function initTable() {
         _: (d, t, r) => ((rvOf(r) || {}).v || "") + (olderEsc(r).length ? " older escalate" : ""),
         display: (d, t, r) => verdictHtml(rvOf(r)) + (olderEsc(r).length && (rvOf(r) || {}).v !== "escalate"
           ? '<span class="rv rv-escalate rv-older">older escalated</span>' : "")}},
-      {data: "mods", title: "Models", visible: false, className: "nw", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
+      {data: "mods", title: "Models", visible: false, className: "models", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
       {data: "pdf", title: "Local PDF", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},
        createdCell: (td, d, r) => { const h = localHref(r.pdf); if (h) td.append(link("Local PDF", h)); }},
       {data: "rik", title: "RIK", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},

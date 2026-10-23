@@ -52,6 +52,10 @@ CREATE TABLE IF NOT EXISTS analyses(
     id INTEGER PRIMARY KEY, document_id INTEGER, model TEXT, prompt_version TEXT,
     result_json TEXT, created_at TEXT, cost_usd REAL, status TEXT, error TEXT, parent TEXT);
 CREATE TABLE IF NOT EXISTS analysis_state(parent TEXT PRIMARY KEY, enabled_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS arithmetic_rechecks(
+    document_id INTEGER PRIMARY KEY, parent TEXT NOT NULL, source_analysis_id INTEGER NOT NULL,
+    stage TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS findings(
     id INTEGER PRIMARY KEY, document_id INTEGER, parent TEXT, municipality TEXT,
     station_no TEXT, rule TEXT, severity TEXT, summary TEXT, details_json TEXT,
@@ -608,10 +612,10 @@ class Store:
         return self._write(sql, args).rowcount
 
     def save_analysis(self, url: str, result: "AnalysisResult", prompt_version: str,
-                      parent: str | None = None) -> None:
+                      parent: str | None = None) -> int:
         """`parent` defaults to the document's election (whose spend cap it counts against)."""
-        self._insert_analysis(url, result.model, prompt_version, json.dumps(result.report),
-                              result.cost_usd, "done", None, parent)
+        return self._insert_analysis(url, result.model, prompt_version, json.dumps(result.report),
+                                     result.cost_usd, "done", None, parent)
 
     def save_failed_analysis(self, url: str, model: str, prompt_version: str, cost_usd: float,
                              error: str, parent: str | None = None) -> None:
@@ -622,11 +626,76 @@ class Store:
                          parent):
         with self._lock, self._db:
             row = self._db.execute("SELECT id, parent FROM documents WHERE url=?", (url,)).fetchone()
-            self._db.execute(
+            cur = self._db.execute(
                 "INSERT INTO analyses(document_id, model, prompt_version, result_json, created_at, "
                 "cost_usd, status, error, parent) VALUES(?,?,?,?,?,?,?,?,?)",
                 (row["id"] if row else None, model, prompt_version, result_json, _now(), cost_usd,
                  status, error, parent if parent is not None else row["parent"] if row else None))
+            return cur.lastrowid
+
+    def queue_arithmetic_recheck(self, url: str, source_analysis_id: int, local_limit: int,
+                                 local_cached: bool = False) -> str:
+        """Persist a recheck; at most `local_limit` uncached jobs use the local lane."""
+        now = _now()
+        with self._lock, self._db:
+            row = self._db.execute("SELECT id,parent FROM documents WHERE url=?", (url,)).fetchone()
+            if row is None:
+                raise KeyError(url)
+            local = self._db.execute(
+                "SELECT COUNT(*) FROM arithmetic_rechecks WHERE parent=? AND stage='local' "
+                "AND status IN ('new','running')", (row["parent"],)).fetchone()[0]
+            stage = "local" if local_cached or local < local_limit else "sonnet"
+            self._db.execute(
+                "INSERT INTO arithmetic_rechecks(document_id,parent,source_analysis_id,stage,status,"
+                "created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET "
+                "source_analysis_id=excluded.source_analysis_id,stage=excluded.stage,status='new',"
+                "attempts=0,error=NULL,updated_at=excluded.updated_at",
+                (row["id"], row["parent"], source_analysis_id, stage, "new", now, now))
+        return stage
+
+    def next_arithmetic_recheck(self, parent: str, stage: str) -> tuple[Doc, sqlite3.Row] | None:
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT q.*,d.* FROM arithmetic_rechecks q JOIN documents d ON d.id=q.document_id "
+                "WHERE q.parent=? AND q.stage=? AND q.status='new' AND d.active=1 "
+                "ORDER BY q.created_at,q.document_id LIMIT 1", (parent, stage)).fetchone()
+            if row is None:
+                return None
+            self._db.execute("UPDATE arithmetic_rechecks SET status='running',attempts=attempts+1,"
+                             "updated_at=? WHERE document_id=?", (_now(), row["document_id"]))
+        return _doc(row), row
+
+    def finish_arithmetic_recheck(self, url: str, status: str, error: str | None = None,
+                                  stage: str | None = None) -> None:
+        sets, args = ["status=?", "error=?", "updated_at=?"], [status, error, _now()]
+        if stage is not None:
+            sets.append("stage=?")
+            args.append(stage)
+        self._write("UPDATE arithmetic_rechecks SET " + ",".join(sets)
+                    + " WHERE document_id=(SELECT id FROM documents WHERE url=?)", [*args, url])
+
+    def arithmetic_recheck_counts(self, parent: str) -> dict[str, int]:
+        with self._lock:
+            rows = self._db.execute("SELECT stage,status,COUNT(*) n FROM arithmetic_rechecks "
+                                    "WHERE parent=? GROUP BY stage,status", (parent,)).fetchall()
+        return {
+            "local": sum(r["n"] for r in rows if r["stage"] == "local" and r["status"] == "new"),
+            "sonnet": sum(r["n"] for r in rows if r["stage"] == "sonnet" and r["status"] == "new"),
+            "running": sum(r["n"] for r in rows if r["status"] == "running"),
+            "manual": sum(r["n"] for r in rows if r["status"] == "manual"),
+            "done": sum(r["n"] for r in rows if r["status"] == "done"),
+        }
+
+    def requeue_arithmetic_running(self, parent: str) -> int:
+        return self._write("UPDATE arithmetic_rechecks SET status='new',updated_at=? "
+                           "WHERE parent=? AND status='running'", (_now(), parent)).rowcount
+
+    def requeue_arithmetic_errors(self, parent: str, error_substring: str) -> int:
+        """Retry only jobs affected by a now-fixed implementation error, not manual outcomes."""
+        return self._write(
+            "UPDATE arithmetic_rechecks SET status='new',error=NULL,updated_at=? "
+            "WHERE parent=? AND status='manual' AND instr(error,?)>0",
+            (_now(), parent, error_substring)).rowcount
 
     def latest_report(self, url: str, model: str, prompt_version: str) -> dict | None:
         """Report of the newest successful analysis of a document by this model and prompt version."""
@@ -637,6 +706,63 @@ class Store:
                 "AND a.result_json IS NOT NULL ORDER BY a.id DESC LIMIT 1",
                 (url, model, prompt_version)).fetchone()
         return json.loads(row["result_json"]) if row else None
+
+    def analysis_by_id(self, analysis_id: int) -> sqlite3.Row | None:
+        with self._lock:
+            return self._db.execute("SELECT * FROM analyses WHERE id=?", (analysis_id,)).fetchone()
+
+    def promote_analysis_if_current(self, url: str, source_analysis_id: int,
+                                    result: "AnalysisResult", prompt_version: str) -> bool:
+        """Atomically promote a recheck unless its source changed or a human correction is active."""
+        with self._lock, self._db:
+            doc = self._db.execute("SELECT id,parent FROM documents WHERE url=?", (url,)).fetchone()
+            if doc is None:
+                return False
+            latest = self._db.execute(
+                "SELECT MAX(id) FROM analyses WHERE document_id=? AND model=? AND prompt_version=? "
+                "AND status='done' AND result_json IS NOT NULL",
+                (doc["id"], result.model, prompt_version)).fetchone()[0]
+            correction = self._db.execute(
+                "SELECT action FROM operator_corrections WHERE url=? ORDER BY id DESC LIMIT 1",
+                (url,)).fetchone()
+            if latest != source_analysis_id or (correction and correction["action"] == "correction"):
+                return False
+            self._db.execute(
+                "INSERT INTO analyses(document_id,model,prompt_version,result_json,created_at,cost_usd,"
+                "status,error,parent) VALUES(?,?,?,?,?,?,?,?,?)",
+                (doc["id"], result.model, prompt_version, json.dumps(result.report), _now(),
+                 result.cost_usd, "done", None, doc["parent"]))
+            return True
+
+    def delete_arithmetic_findings(self, url: str) -> int:
+        return self._write(
+            "DELETE FROM findings WHERE document_id=(SELECT id FROM documents WHERE url=?) "
+            "AND rule IN ('A1','A2','A3')", (url,)).rowcount
+
+    def arithmetic_backlog(self, parent: str, model: str, prompt_version: str,
+                           municipalities: Collection[str] | None = None) -> list[tuple[Doc, int]]:
+        """Active primary-model A2/A3 findings not already represented in the recheck queue."""
+        where, extra = _in_municipalities(municipalities)
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT d.*,a.id analysis_id FROM documents d JOIN analyses a ON a.document_id=d.id "
+                "WHERE d.parent=? AND d.active=1 AND d.doc_type IN (6,10,15,16) "
+                "AND a.model=? AND a.prompt_version=? AND a.status='done' AND a.result_json IS NOT NULL "
+                "AND a.id=(SELECT MAX(x.id) FROM analyses x WHERE x.document_id=d.id AND x.model=? "
+                "AND x.prompt_version=? AND x.status='done' AND x.result_json IS NOT NULL) "
+                "AND EXISTS (SELECT 1 FROM findings f WHERE f.document_id=d.id AND f.rule IN ('A2','A3')) "
+                "AND NOT EXISTS (SELECT 1 FROM arithmetic_rechecks q WHERE q.document_id=d.id)" + where,
+                (parent, model, prompt_version, model, prompt_version, *extra)).fetchall()
+        return [(_doc(row), row["analysis_id"]) for row in rows]
+
+    def unfinished_arithmetic_rechecks(self, parent: str,
+                                       municipalities: Collection[str] | None = None) -> int:
+        where, extra = _in_municipalities(municipalities)
+        with self._lock:
+            return self._db.execute(
+                "SELECT COUNT(*) FROM arithmetic_rechecks q JOIN documents d ON d.id=q.document_id "
+                "WHERE q.parent=? AND q.status IN ('new','running')" + where,
+                (parent, *extra)).fetchone()[0]
 
     def rg7_reports(self, parent: str, model: str, prompt_version: str,
                     analysed_only: bool = True,
@@ -733,6 +859,20 @@ class Store:
                 "WHERE b.document_id=a.document_id AND b.model IS a.model AND b.status='done' "
                 "AND b.result_json IS NOT NULL ORDER BY b.prompt_version IS ? DESC, b.id DESC LIMIT 1) "
                 "ORDER BY a.id", (*args, prompt_version)).fetchall()
+
+    def arithmetic_analyses(self, parent: str | None, prompt_version: str) -> list[sqlite3.Row]:
+        """Newest successful targeted arithmetic read of each RG-2 document/model."""
+        where, args = f"d.doc_type IN ({_ANALYSED})", []
+        if parent is not None:
+            where, args = where + " AND d.parent=?", [parent]
+        with self._lock:
+            return self._db.execute(
+                "SELECT a.id,a.document_id,a.model,a.created_at FROM analyses a "
+                f"JOIN documents d ON d.id=a.document_id WHERE {where} AND a.prompt_version=? "
+                "AND a.status='done' AND a.result_json IS NOT NULL AND a.id=(SELECT MAX(b.id) "
+                "FROM analyses b WHERE b.document_id=a.document_id AND b.model=a.model "
+                "AND b.prompt_version=? AND b.status='done' AND b.result_json IS NOT NULL) "
+                "ORDER BY a.id", (*args, prompt_version, prompt_version)).fetchall()
 
     def analysis_reports(self, ids: list[int]) -> dict[int, str]:
         """result_json by analysis id, fetched in small chunks."""

@@ -133,6 +133,29 @@ def test_operator_page_uses_adaptive_navy_serbian_theme():
     assert "@media (prefers-color-scheme:dark)" in html
 
 
+def test_analysis_status_uses_compact_grouped_labels():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    for label in ("primary queue", "primary results", "arithmetic results", "pace", "ETA"):
+        assert f'["{label}"' in html
+    assert '" waiting · "' in html and '" done · "' in html and '" s/form"' in html
+    assert '"queued / running"' not in html and '"time to clear queue"' not in html
+
+
+def test_review_and_alert_status_share_one_card():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'card("Review & alerts"' in html
+    assert 'card("Review"' not in html and 'card("Alerts"' not in html
+
+
+def test_non_default_form_select_filters_use_active_filter_colors():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    active = "#ctl select:has(option:not(:first-child):checked)"
+    assert active + "{background:var(--accent-bg);border-color:var(--accent)}" in html
+
+
 def test_operator_page_uses_official_static_flag_background():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
@@ -311,6 +334,31 @@ def test_second_opinions_merged_per_model_with_disagreement(tmp_path):
     assert set(by) == {"opus", "sonnet"} and by["sonnet"]["f"] == []
     assert any(f[1] == "HIGH" for f in by["opus"]["f"])
     assert r["dis"] and r["dis"] == sorted({f[0] for f in by["opus"]["f"] if f[1] == "HIGH"})
+
+
+def test_targeted_arithmetic_models_are_listed_separately_and_wrap(tmp_path):
+    s = store()
+    d = doc(BASE + "/e/a.pdf", no="12")
+    add(s, d)
+    _analysis(s, d, "claude-haiku-5-5", clean_report())
+    arithmetic = {
+        "voted": {"value": 800, "legible": True},
+        "ballots_in_box": {"value": 800, "legible": True},
+        "invalid": {"value": 20, "legible": True},
+        "valid": {"value": 780, "legible": True},
+        "list_votes": [{"row": 1, "value": 780, "legible": True}],
+    }
+    s.save_analysis(d.url, AnalysisResult(arithmetic, 0, 0, 0, "bonsai-2:27b", "stop"), "a1")
+
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs")
+    (row,) = rows_of(out)
+    html = STATIC.joinpath("index.html").read_text(encoding="utf-8")
+
+    assert [x["m"] for x in row["ars"]] == ["bonsai-2:27b"]
+    assert [x["m"] for x in row["ops"]] == ["claude-haiku-5-5"]
+    assert 'className: "models"' in html
+    assert '.models{white-space:normal;max-width:' in html
 
 
 def test_no_disagreement_when_models_agree_or_single(tmp_path):

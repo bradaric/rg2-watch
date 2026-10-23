@@ -79,6 +79,15 @@ max_spend_usd = 60.0  # a parliamentary election (~8,300 forms) is estimated at 
 # price_out_per_mtok = 0.50
 # Background analysis worker threads
 analysis_workers = 4
+# Optional A2/A3 recovery cascade. A targeted local Bonsai read is tried first; at most 10 uncached
+# forms wait in that lane, and overflow/inconclusive reads go to paid targeted Sonnet calls. A read
+# is promoted into the primary report only when exactly one value changes and A1-A3 then reconcile.
+# Sonnet spend counts against max_spend_usd. Ollama must be running with the local model installed.
+arithmetic_recheck_enabled = false
+arithmetic_local_model = "ollama:bonsai-2:27b"
+arithmetic_sonnet_model = "claude-sonnet-5-5"
+arithmetic_local_queue_limit = 10
+arithmetic_sonnet_workers = 2
 # Seconds between rebuilds of the local browse page (index.html in <db dir>/<db stem>/) while watching; 0 = off
 browse_interval_s = 120
 

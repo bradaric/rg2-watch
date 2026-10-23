@@ -45,6 +45,19 @@ def test_public_payload_has_only_aggregate_corrected_results_and_review_counts()
         assert private not in blob
 
 
+def test_public_payload_sorts_municipalities_by_serbian_cyrillic_alphabet():
+    s = store()
+    for no, municipality in enumerate(
+            ["Љиг", "Ћуприја", "Ада", "Шид", "Лапово", "Тител", "Чока", "Џеп"], 1):
+        form(s, no, clean_report(), muni=municipality)
+
+    data = build_public_results(s, config(), P)
+
+    assert [row["m"] for row in data["municipalities"]] == [
+        "Ада", "Лапово", "Љиг", "Тител", "Ћуприја", "Чока", "Џеп", "Шид",
+    ]
+
+
 def test_public_payload_removes_records_prefix_from_election_title():
     s = store()
     s.upsert_election(Election(P, "1", "t", "Записници Парламентарни избори 2026", BASE))
@@ -152,6 +165,16 @@ def test_public_page_uses_wide_layout_nonwrapping_ratios_and_unofficial_badge():
     assert html.count('class="v ratio"') == 2
     assert 'class="status-badge">Незванични резултати</div>' in html
     assert ".status-badge{" in html and "background:var(--badge-bg)" in html
+
+
+def test_public_page_uses_compact_municipality_select_text():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert "select{display:block" in html
+    assert "font:inherit;font-size:.9rem" in html
 
 
 def test_public_page_uses_restrained_editorial_accents():

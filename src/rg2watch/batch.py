@@ -9,7 +9,8 @@ from pathlib import Path
 import anthropic
 import httpx
 
-from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
+from .analyze import (ARITHMETIC_PROMPT_VERSION, AnalysisError, OllamaUnavailable, analyze_document,
+                      is_ollama, stored_model)
 from .browse import SEV_RANK
 from .config import Config
 from .evaluate import TOKENS_PER_TILE, count_tiles, usd_for
@@ -113,8 +114,40 @@ def _print_findings(report: dict, doc: Doc, cfg: Config, out) -> None:
         print("    no findings", file=out)
 
 
+def _print_arithmetic(report: dict, out) -> None:
+    def value(key):
+        field = report[key]
+        return field["value"] if field["legible"] and isinstance(field["value"], int) else None
+
+    voted, box, invalid, valid = (value(k) for k in
+                                  ("voted", "ballots_in_box", "invalid", "valid"))
+    if voted is None or box is None:
+        print("    A1 unavailable: voted or ballots in box unreadable", file=out)
+    elif box > voted:
+        print(f"    A1 ballots in box {box} > voted {voted}", file=out)
+    else:
+        print(f"    A1 reconcile: ballots in box {box} <= voted {voted}", file=out)
+    if None in (box, invalid, valid):
+        print("    A2 unavailable: box, invalid or valid unreadable", file=out)
+    elif invalid + valid != box:
+        print(f"    A2 invalid {invalid} + valid {valid} != ballots in box {box}", file=out)
+    else:
+        print(f"    A2 reconcile: invalid {invalid} + valid {valid} = ballots in box {box}", file=out)
+    rows = report["list_votes"]
+    complete = bool(rows) and [r["row"] for r in rows] == list(range(1, rows[-1]["row"] + 1)) \
+        and all(r["legible"] and isinstance(r["value"], int) for r in rows)
+    if valid is None or not complete:
+        print("    A3 unavailable: valid or complete list rows unreadable", file=out)
+    else:
+        total = sum(r["value"] for r in rows)
+        op = "=" if total == valid else "!="
+        status = "reconcile" if total == valid else "list votes differ"
+        print(f"    A3 {status}: list sum {total} {op} valid {valid} ({len(rows)} rows)", file=out)
+
+
 def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, cache_dir: Path,
-              max_usd: float, out, err) -> dict:
+              max_usd: float, out, err, kind: str = "rg2",
+              prompt_version: str = PROMPT_VERSION) -> dict:
     """Analyse each form once, one at a time; returns analysed/cached/failed counts, spend, stopped."""
     model = stored_model(cfg.model)
     res = {"analysed": 0, "cached": 0, "failed": 0, "cost_usd": 0.0, "stopped": None,
@@ -131,11 +164,12 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
 
     for doc in docs:
         label = f"{doc.municipality} BM {doc.station_no}"
-        report = store.latest_report(doc.url, model, PROMPT_VERSION)
+        report = store.latest_report(doc.url, model, prompt_version)
         if report is not None:
             res["cached"] += 1
             print(f"{label} | {model} | cached, $0.000", file=out)
-            _print_findings(report, doc, cfg, out)
+            (_print_arithmetic(report, out) if kind == "arithmetic"
+             else _print_findings(report, doc, cfg, out))
             continue
         if res["cost_usd"] >= max_usd:
             res["stopped"] = f"spend cap ${max_usd:.2f} reached"
@@ -146,7 +180,9 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
             try:
                 path = fetch_pdf(rik, doc.url, cache_dir)
                 blocked = 0
-                result = analyze_document(render_tiles(path), ai, cfg)
+                tiles = render_tiles(path)
+                result = (analyze_document(tiles, ai, cfg, kind) if kind != "rg2"
+                          else analyze_document(tiles, ai, cfg))
                 bad = 0
                 break
             except Exception as exc:
@@ -154,7 +190,7 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
                 if cost:
                     res["cost_usd"] += cost
                     record(doc, lambda: store.save_failed_analysis(
-                        doc.url, model, PROMPT_VERSION, cost, str(exc)[:200], parent=ADHOC))
+                        doc.url, model, prompt_version, cost, str(exc)[:200], parent=ADHOC))
                 if isinstance(exc, GLOBAL_ERRORS):
                     res["stopped"] = f"API refused the request ({type(exc).__name__}): {exc}"
                     break
@@ -195,7 +231,8 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
         # keyed by the requested model so the cache lookup hits; the responding one stays in the report
         stored = dataclasses.replace(result, model=model,
                                      report={**result.report, "responding_model": result.model})
-        record(doc, lambda: store.save_analysis(doc.url, stored, PROMPT_VERSION, parent=ADHOC))
+        record(doc, lambda: store.save_analysis(doc.url, stored, prompt_version, parent=ADHOC))
         print(f"{label} | {model} | ${result.cost_usd:.3f}", file=out)
-        _print_findings(result.report, doc, cfg, out)
+        (_print_arithmetic(result.report, out) if kind == "arithmetic"
+         else _print_findings(result.report, doc, cfg, out))
     return res

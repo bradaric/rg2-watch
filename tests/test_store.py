@@ -228,6 +228,35 @@ def test_spend_is_per_parent():
     assert s.queued_for_analysis(P) == 1
 
 
+def test_arithmetic_queue_spills_past_local_limit():
+    s = store()
+    docs = [doc(f"https://x/{i}.pdf", no=str(i)) for i in range(1, 4)]
+    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", d) for d in docs])
+
+    assert s.queue_arithmetic_recheck(docs[0].url, 11, 2) == "local"
+    assert s.queue_arithmetic_recheck(docs[1].url, 12, 2) == "local"
+    assert s.queue_arithmetic_recheck(docs[2].url, 13, 2) == "sonnet"
+    claimed = s.next_arithmetic_recheck(P, "local")
+    assert claimed is not None and claimed[0].url == docs[0].url
+    s.finish_arithmetic_recheck(docs[0].url, "done")
+    assert s.arithmetic_recheck_counts(P) == {"local": 1, "sonnet": 1, "running": 0,
+                                              "manual": 0, "done": 1}
+
+
+def test_only_matching_manual_arithmetic_errors_are_requeued():
+    s = store()
+    a, b = doc("https://x/a.pdf"), doc("https://x/b.pdf", no="2")
+    s.apply_events(P, s.start_sweep(P, "t"), [Event("added", a), Event("added", b)])
+    s.queue_arithmetic_recheck(a.url, 1, 0)
+    s.queue_arithmetic_recheck(b.url, 2, 0)
+    s.finish_arithmetic_recheck(a.url, "manual", "property 'minimum' is not supported")
+    s.finish_arithmetic_recheck(b.url, "manual", "no single-value reconciled read")
+
+    assert s.requeue_arithmetic_errors(P, "minimum' is not supported") == 1
+    assert s.arithmetic_recheck_counts(P)["sonnet"] == 1
+    assert s.arithmetic_recheck_counts(P)["manual"] == 1
+
+
 def test_analysis_queries_restricted_to_selected_municipalities():
     s = store()
     a, b = doc("https://x/a.pdf", muni="А"), doc("https://x/b.pdf", muni="Б", no="2")

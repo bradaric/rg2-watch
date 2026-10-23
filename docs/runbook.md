@@ -124,6 +124,16 @@ shared layout and safe to delete.
       uv run rg2watch analyze <RIK PDF URL> --config rg2watch.toml --model ollama:qwen3.8:27b-64k
 
   Prints the findings and the cost. The URL must be on the RIK host of a registered election.
+- **Targeted arithmetic second reads** (stored separately; they do not change totals):
+
+      scripts/second-opinion.sh <id> --rule A2,A3 --arithmetic-only
+
+  This asks the local model only for voted, box, invalid, valid and every list-vote row, then prints
+  A1-A3 reconciliation. It is useful when a full local second opinion skips a long list table.
+  To run the conservative local-to-Sonnet cascade continuously during `watch`, set
+  `arithmetic_recheck_enabled = true`; the status panel shows local/Sonnet queues, running jobs,
+  unresolved manual cases and promoted fixes. Sonnet spillover is paid and shares the election
+  `max_spend_usd` cap.
 - **A local PDF:** `uv run --env-file .env rg2watch analyze path/to/form.pdf`.
 - **Review the alerts on the night:** in the page choose review "to review" (forms with findings and
   no verdict yet; the status panel counts them). For each: open the row (arrow), open the PDF,

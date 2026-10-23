@@ -246,6 +246,21 @@ def test_waits_for_queue_then_two_checks():
     assert d.step() == 0
 
 
+def test_waits_for_arithmetic_recheck_queue():
+    store, docs, watcher, pipe, clock = queue_env(1)
+    store.mark_analysis(docs[0].url, "done")
+    store.queue_arithmetic_recheck(docs[0].url, 1, 10)
+    d = _UntilDone(watcher, pipe, store, P, None, clock=clock, confirm=0)
+
+    assert d.step() is None and d.remaining == 1
+    store.next_arithmetic_recheck(P, "local")
+    clock.now += 1
+    assert d.step() is None and d.remaining == 1
+    store.finish_arithmetic_recheck(docs[0].url, "done")
+    clock.now += 1
+    assert d.step() == 0 and d.remaining == 0
+
+
 def test_race_resets_the_confirmation():
     store, docs, watcher, pipe, clock = queue_env(1)
     store.mark_analysis(docs[0].url, "done")

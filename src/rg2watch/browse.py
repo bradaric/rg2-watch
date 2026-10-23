@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .analyze import stored_model
+from .analyze import ARITHMETIC_PROMPT_VERSION, stored_model
 from .config import Config
 from .models import Doc
 from .operator_corrections import OperatorCorrections
@@ -89,8 +89,9 @@ def record_review(store: Store, url: str, verdict: str, note: str | None) -> dic
 
 
 def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
-             reviews: dict | None = None, corrections: dict | None = None,
-             analysed_at: dict[int, str | None] | None = None) -> dict:
+              reviews: dict | None = None, corrections: dict | None = None,
+              analysed_at: dict[int, str | None] | None = None,
+              arithmetic: dict[int, list[dict]] | None = None) -> dict:
     pdf = hashlib.sha256(d["url"].encode()).hexdigest()
     path = cache_dir / (pdf + ".pdf")
     cached = None
@@ -108,6 +109,7 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
             "cache": cached, "done": done, "f": f, "ast": analysis_status,
             "pdf": pdf if cached is not None else None,
             "rik": _rik_link(d["url"], base), "ops": opinions.get(d["id"], []),
+            "ars": (arithmetic or {}).get(d["id"], []),
             "u": d["url"], "rv": (reviews or {}).get(d["url"]),
             "oc": (corrections or {}).get(d["url"]), "correctable": d["doc_type"] == 6}
 
@@ -121,9 +123,14 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     found: dict[int, list] = {}
     for f in findings:
         found.setdefault(f["document_id"], []).append(f)
-    arows = store.browse_analyses(parent, PROMPT_VERSION)
+    arows = [a for a in store.browse_analyses(parent, PROMPT_VERSION)
+             if a["prompt_version"].startswith("v")]
     opinions = _opinions(store, {d["id"]: _doc(d) for d in docs}, arows, cfg,
                           {} if cache is None else cache.setdefault("ops", {}))
+    arithmetic: dict[int, list[dict]] = {}
+    for a in store.arithmetic_analyses(parent, ARITHMETIC_PROMPT_VERSION):
+        arithmetic.setdefault(a["document_id"], []).append(
+            {"m": a["model"] or "?", "at": to_belgrade(a["created_at"])})
     analysed_at = {a["document_id"]: to_belgrade(a["created_at"]) for a in arows
                    if a["model"] == model and a["prompt_version"] == PROMPT_VERSION}
     elections = {e.parent: e for e in store.elections()}
@@ -166,13 +173,15 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         ds.sort(key=lambda d: (d["uploaded_at"] or "", d["id"]), reverse=True)
         main = next((d for d in ds if d["active"]), ds[0])
         base = elections[par].base_url if par in elections else None
-        row = _version(main, found, opinions, cache_dir, base, reviews, corrections, analysed_at)
+        row = _version(main, found, opinions, cache_dir, base, reviews, corrections, analysed_at,
+                       arithmetic)
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
             name=main["station_name"], label=main["label"],
             state="removed" if not main["active"] else "replaced" if len(ds) > 1 else "current",
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),
-            v=[_version(d, found, opinions, cache_dir, base, reviews, corrections, analysed_at)
+            v=[_version(d, found, opinions, cache_dir, base, reviews, corrections, analysed_at,
+                        arithmetic)
                for d in ds if d is not main])
         row["dis"] = _disagreement(row["ops"])
         row["r7"] = r7.get((par, main["station_key"], main["doc_type"]), []) if main["active"] else []
