@@ -520,13 +520,13 @@ function renderStatus() {
   const p = a.paused;
   const ar = a.arithmetic;
   cards.push(card("Analysis", a.on ? [
-    ["model", a.model], ["queued / running", a.queued + " / " + a.running],
-    ["done / failed / retrying", a.done + " / " + a.failed + " / " + a.retrying],
-    ...(ar ? [["arithmetic local / Sonnet", ar.local + " / " + ar.sonnet],
-      ["arithmetic running / manual / fixed", ar.running + " / " + ar.manual + " / " + ar.done]] : []),
+    ["model", a.model], ["primary queue", a.queued + " waiting · " + a.running + " running"],
+    ["primary results", a.done + " done · " + a.failed + " failed · " + a.retrying + " retrying"],
+    ...(ar ? [["arithmetic", ar.local + " local · " + ar.sonnet + " Sonnet · " + ar.running + " running"],
+      ["arithmetic results", ar.done + " fixed · " + ar.manual + " manual"]] : []),
     ["state", p ? "paused: " + p[0] + (p[1] ? " since " + epoch(p[1]) : "") : "running", p ? "bad" : "good"],
     ["spend", "$" + a.spend.toFixed(2) + " of $" + a.cap.toFixed(2)],
-    ["avg per form", a.avg_s == null ? "-" : a.avg_s + " s"], ["time to clear queue", dur(a.eta_s)]]
+    ["pace", a.avg_s == null ? "-" : a.avg_s + " s/form"], ["ETA", dur(a.eta_s)]]
     : [["state", "off"], ["done / failed", a.done + " / " + a.failed], ["spend", "$" + a.spend.toFixed(2)]]));
   const n = S.ntfy;
   if (rows.length) {

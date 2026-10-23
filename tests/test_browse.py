@@ -133,6 +133,15 @@ def test_operator_page_uses_adaptive_navy_serbian_theme():
     assert "@media (prefers-color-scheme:dark)" in html
 
 
+def test_analysis_status_uses_compact_grouped_labels():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    for label in ("primary queue", "primary results", "arithmetic results", "pace", "ETA"):
+        assert f'["{label}"' in html
+    assert '" waiting · "' in html and '" done · "' in html and '" s/form"' in html
+    assert '"queued / running"' not in html and '"time to clear queue"' not in html
+
+
 def test_non_default_form_select_filters_use_active_filter_colors():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
