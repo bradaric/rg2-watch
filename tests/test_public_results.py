@@ -45,6 +45,16 @@ def test_public_payload_has_only_aggregate_corrected_results_and_review_counts()
         assert private not in blob
 
 
+def test_public_payload_removes_records_prefix_from_election_title():
+    s = store()
+    s.upsert_election(Election(P, "1", "t", "Записници Парламентарни избори 2026", BASE))
+    form(s, 1, clean_report())
+
+    data = build_public_results(s, config(), P)
+
+    assert data["title"] == "Парламентарни избори 2026"
+
+
 def test_public_review_breakdown_uses_current_version_and_marks_missing_verdict_undecided():
     s = store()
     old = form(s, 1, report(ballots_in_box=nf(900)))
@@ -84,7 +94,7 @@ def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
     assert checked.returncode == 0, checked.stderr
 
 
-def test_public_page_renders_controls_summary_and_top_eight_lists():
+def test_public_page_renders_controls_summary_and_every_list():
     s = store()
     form(s, 1, clean_report())
     data = build_public_results(s, config(), P)
@@ -96,18 +106,34 @@ def test_public_page_renders_controls_summary_and_top_eight_lists():
     script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
     harness = r'''
 const assert=require("assert"),els={};
-class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className=""}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(){}}
+class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className="";this.hidden=false}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(){}}
 global.document={getElementById:id=>els[id]??=(new El()),createElement:()=>new El()};
 global.Option=function(text,value){const x=new El();x.textContent=text;x.value=value;return x};
 ''' + script + r'''
 assert.equal(els.title.textContent,"Title");
 assert.equal(els.municipality.children.length,2);
-assert.equal(els.chart.children.length,9);
-assert.equal(els.chart.children[8].children[0].textContent,"Остале (2 листе)");
-assert(els.footer.textContent.includes("статичан снимак"));
+assert.equal(els.chart.children.length,10);
+assert.equal(els.chart.children[0].children[0].textContent,"Листа 10");
+assert.equal(els.chart.children[9].children[0].textContent,"Листа 1");
+assert(!els.chart.children.some(x=>x.children[0].textContent.startsWith("Остале")));
+assert.equal(els.footer.textContent,"НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а.");
 DATA.scope_note="unknown election type - set tally_scope";render();
 assert(els.warning.textContent.includes("Непозната врста избора"));
 assert(!els.warning.textContent.includes("unknown election type"));
+const counted=DATA.overall.counted;
+DATA.overall.counted=0;render();
+assert(els["chart-section"].hidden);
+assert(els.warning.hidden);
+assert(!els["empty-results"].hidden);
+assert.equal(els["empty-results"].textContent,"Још нема обрађених записника — резултати још нису доступни.");
+DATA.overall.counted=counted;DATA.scope="municipal";
+const muni=DATA.municipalities[0];muni.counted=0;els.municipality.value=muni.m;render();
+assert(els["chart-section"].hidden);
+assert.equal(els["empty-results"].textContent,"За ову општину још нема обрађених записника.");
+els.municipality.value="";render();
+assert(!els["chart-section"].hidden);
+assert(els["empty-results"].hidden);
+assert.equal(els["chart-note"].textContent,"Изаберите општину за упоредиве резултате по листама.");
 console.log(JSON.stringify({ok:true}));
 '''
     result = subprocess.run(["node", "-e", harness], text=True, capture_output=True)
@@ -124,9 +150,20 @@ def test_public_page_uses_wide_layout_nonwrapping_ratios_and_unofficial_badge():
     assert "main{max-width:1600px" in html
     assert ".ratio{" in html and "white-space:nowrap" in html
     assert html.count('class="v ratio"') == 2
-    assert 'class="eyebrow"' not in html
     assert 'class="status-badge">Незванични резултати</div>' in html
     assert ".status-badge{" in html and "background:var(--badge-bg)" in html
+
+
+def test_public_page_uses_restrained_editorial_accents():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert "header{display:flex" in html and "border-bottom:2px solid var(--accent)" in html
+    assert ".tiles .tile:first-child{box-shadow:inset 0 3px var(--accent)}" in html
+    assert ".chart-eyebrow{" in html
+    assert '<span class="chart-eyebrow">Пресек резултата</span>' in html
 
 
 def test_public_page_aligns_chart_bars_and_values_in_shared_columns():
@@ -147,9 +184,21 @@ def test_public_page_uses_adaptive_navy_serbian_theme():
     html = render_public_results(build_public_results(s, config(), P))
 
     assert "--bg:#eaf0f6" in html and "--bg:#061321" in html
-    assert "--flag-red:" in html and "--flag-blue:" in html and "--flag-white:" in html
-    assert "linear-gradient(to bottom,var(--flag-red) 0 33.333%" in html
-    assert "background-attachment:fixed" in html
+    assert "@media(prefers-color-scheme:dark)" in html
+
+
+def test_public_page_uses_official_static_flag_background():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert 'class="serbian-flag-bg" aria-hidden="true"' in html
+    assert 'class="serbian-flag-art"' in html and "Flag_of_Serbia.svg" in html
+    assert "pointer-events:none" in html
+    assert "mask-image:linear-gradient(90deg" in html
+    assert "mask-image:linear-gradient(135deg" not in html
+    assert "linear-gradient(to bottom,var(--flag-red)" not in html
 
 
 def test_export_refuses_directory_with_other_files(tmp_path):

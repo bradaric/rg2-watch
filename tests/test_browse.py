@@ -123,9 +123,18 @@ def test_operator_page_uses_adaptive_navy_serbian_theme():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert "--bg:#eaf0f6" in html and "--bg:#061321" in html
-    assert "--flag-red:" in html and "--flag-blue:" in html and "--flag-white:" in html
-    assert "linear-gradient(to bottom,var(--flag-red) 0 33.333%" in html
-    assert "background-attachment:fixed" in html
+    assert "@media (prefers-color-scheme:dark)" in html
+
+
+def test_operator_page_uses_official_static_flag_background():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'class="serbian-flag-bg" aria-hidden="true"' in html
+    assert 'class="serbian-flag-art"' in html and "Flag_of_Serbia.svg" in html
+    assert "pointer-events:none" in html
+    assert "mask-image:linear-gradient(90deg" in html
+    assert "mask-image:linear-gradient(135deg" not in html
+    assert "linear-gradient(to bottom,var(--flag-red)" not in html
 
 
 def test_json_is_ascii_even_with_lone_surrogate():
