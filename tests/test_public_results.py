@@ -147,9 +147,20 @@ def test_public_page_uses_adaptive_navy_serbian_theme():
     html = render_public_results(build_public_results(s, config(), P))
 
     assert "--bg:#eaf0f6" in html and "--bg:#061321" in html
-    assert "--flag-red:" in html and "--flag-blue:" in html and "--flag-white:" in html
-    assert "linear-gradient(to bottom,var(--flag-red) 0 33.333%" in html
-    assert "background-attachment:fixed" in html
+    assert "@media(prefers-color-scheme:dark)" in html
+
+
+def test_public_page_uses_official_static_flag_background():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert 'class="serbian-flag-bg" aria-hidden="true"' in html
+    assert 'class="serbian-flag-art"' in html and "Flag_of_Serbia.svg" in html
+    assert "pointer-events:none" in html
+    assert "mask-image:linear-gradient(135deg" in html
+    assert "linear-gradient(to bottom,var(--flag-red)" not in html
 
 
 def test_export_refuses_directory_with_other_files(tmp_path):
