@@ -104,7 +104,7 @@ assert.equal(els.title.textContent,"Title");
 assert.equal(els.municipality.children.length,2);
 assert.equal(els.chart.children.length,9);
 assert.equal(els.chart.children[8].children[0].textContent,"Остале (2 листе)");
-assert(els.footer.textContent.includes("статичан снимак"));
+assert.equal(els.footer.textContent,"НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а.");
 DATA.scope_note="unknown election type - set tally_scope";render();
 assert(els.warning.textContent.includes("Непозната врста избора"));
 assert(!els.warning.textContent.includes("unknown election type"));
