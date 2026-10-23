@@ -20,6 +20,7 @@ One argument: the election ID (digits). Databases are `data/election-<id>.sqlite
 - `scripts/escalated.sh <id>` - forms marked ESCALATE
 - `scripts/tally.sh <id>` - unofficial totals
 - `scripts/export.sh <id>` - sanitized standalone public-results snapshot (no upload or network request)
+  ([optional guarded cron and Cloudflare Pages setup](review-and-sharing.md#optional-scheduled-cloudflare-pages-updates))
 - `scripts/second-opinion.sh <id>` - re-analyse with local `ollama:bonsai-2:27b` (Ollama must be running)
 
 Extra arguments are passed through to the underlying command. An older rehearsal DB can be renamed to
