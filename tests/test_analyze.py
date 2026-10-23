@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from rg2watch import analyze
-from rg2watch.analyze import SCHEMA, AnalysisError, AnalysisRefused, analyze_document
+from rg2watch.analyze import ARITHMETIC_SCHEMA, SCHEMA, AnalysisError, AnalysisRefused, analyze_document
 from rg2watch.config import Config
 from rg2watch.render import Tile
 
@@ -77,6 +77,27 @@ def test_request_shape():
     assert base64.b64decode(src["data"]) == TILES[0].jpeg
     assert content[-1]["text"] == analyze.PROMPT
     assert res.model == "claude-haiku-5-5" and res.stop_reason == "end_turn"
+
+
+def test_arithmetic_request_only_reads_result_numbers():
+    raw = {
+        "voted": {"value": 322, "legible": True},
+        "ballots_in_box": {"value": 321, "legible": True},
+        "invalid": {"value": 16, "legible": True},
+        "valid": {"value": 306, "legible": True},
+        "list_votes": [
+            {"row": 1, "value": 300, "legible": True},
+            {"row": 2, "value": 6, "legible": True},
+        ],
+    }
+    c = FakeClient(_resp(report=raw))
+
+    res = analyze_document(TILES, c, Config(), "arithmetic")
+
+    kw = c.calls[0]
+    assert kw["output_config"]["format"] == {"type": "json_schema", "schema": ARITHMETIC_SCHEMA}
+    assert kw["messages"][0]["content"][-1]["text"] == analyze.ARITHMETIC_PROMPT
+    assert res.report == raw
 
 
 def test_fallbacks_disabled_omits_params():

@@ -152,6 +152,37 @@ def test_local_model_needs_no_yes(run, monkeypatch):
     assert code == 0 and calls == [1] and "local model, no API cost" in cap.out
 
 
+def test_arithmetic_only_uses_targeted_prompt_and_separate_cache(run, db, monkeypatch):
+    calls = []
+    report = {
+        "voted": {"value": 322, "legible": True},
+        "ballots_in_box": {"value": 321, "legible": True},
+        "invalid": {"value": 16, "legible": True},
+        "valid": {"value": 306, "legible": True},
+        "list_votes": [{"row": 1, "value": 306, "legible": True}],
+    }
+
+    def fake(tiles, client, cfg, kind="rg2"):
+        calls.append(kind)
+        from rg2watch.analyze import AnalysisResult
+        return AnalysisResult(report, 0, 0, 0.0, "qwen", "stop")
+
+    monkeypatch.setattr(batch, "analyze_document", fake)
+    args = ("--model", "ollama:qwen", "--limit", "1", "--arithmetic-only")
+    code, cap = run(None, *args)
+    assert code == 0 and calls == ["arithmetic"]
+    assert "A2 invalid 16 + valid 306 != ballots in box 321" in cap.out
+    assert "A3 reconcile: list sum 306 = valid 306 (1 rows)" in cap.out
+    s = Store(db)
+    assert s.latest_report(mk("a.pdf").url, "qwen", batch.ARITHMETIC_PROMPT_VERSION) == \
+        report | {"responding_model": "qwen"}
+    s.close()
+
+    code, cap = run(None, *args)
+    assert code == 0 and calls == ["arithmetic"]
+    assert "1 already analysed" in cap.out and "0 analysed, 1 cached" in cap.out
+
+
 def test_cache_hits_when_responding_model_differs(run, db):
     r = resp(clean_report())
     r.model = "claude-opus-5-5-20261001"

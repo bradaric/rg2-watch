@@ -16,7 +16,7 @@ from urllib.parse import unquote, urlsplit
 import httpx
 
 from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
-from .batch import ADHOC, describe_estimate, run_batch, select_forms
+from .batch import ARITHMETIC_PROMPT_VERSION, ADHOC, describe_estimate, run_batch, select_forms
 from .browse import (build_page, copy_static, default_parent, record_review, review_record,
                      reviews_payload, write_status)
 from .config import Config, UnknownPrice, load_config, model_prices
@@ -121,6 +121,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=_positive_int, help="batch: only the first N selected forms")
     s.add_argument("--yes", action="store_true", help="batch: confirm the estimated API spend")
     s.add_argument("--max-usd", type=float, help="batch: stop at this spend (default max_spend_usd)")
+    s.add_argument("--arithmetic-only", action="store_true",
+                   help="batch: targeted second read of A1-A3 result numbers only")
     s.add_argument("--json", action="store_true", help="print report and findings as JSON")
     s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
     s.add_argument("--doc-type", choices=["rg2", "rg7"], default="rg2",
@@ -969,7 +971,9 @@ def _cmd_analyze_batch(args, cfg: Config) -> int:
                 print(f"  {name}", file=sys.stderr)
             return 2
         model = stored_model(cfg.model)
-        todo = [d for d in sel.docs if store.latest_report(d.url, model, PROMPT_VERSION) is None]
+        kind = "arithmetic" if args.arithmetic_only else "rg2"
+        version = ARITHMETIC_PROMPT_VERSION if args.arithmetic_only else PROMPT_VERSION
+        todo = [d for d in sel.docs if store.latest_report(d.url, model, version) is None]
         print(f"{len(sel.docs)} form(s) selected, {len(sel.docs) - len(todo)} already analysed by "
               f"{model} (cached: rules re-applied, free)")
         max_usd = cfg.max_spend_usd if args.max_usd is None else args.max_usd
@@ -990,7 +994,7 @@ def _cmd_analyze_batch(args, cfg: Config) -> int:
             print(f"analysis unavailable: {why}", file=sys.stderr)
             return 2
         res = run_batch(sel.docs, store, _rik_client(cfg, election), ai, cfg, _cache_dir(cfg),
-                        max_usd, sys.stdout, sys.stderr)
+                        max_usd, sys.stdout, sys.stderr, kind=kind, prompt_version=version)
     finally:
         store.close()
     print(f"{res['analysed']} analysed, {res['cached']} cached, {res['failed']} failed, "
@@ -1004,7 +1008,7 @@ def _cmd_analyze_batch(args, cfg: Config) -> int:
 def _cmd_analyze(args) -> int:
     cfg = _config(args)
     batch_flags = (args.municipality, args.station, args.rule, args.severity, args.state, args.limit,
-                   args.yes, args.max_usd)
+                   args.yes, args.max_usd, args.arithmetic_only)
     if args.parent and args.source:
         print("give either a source or --parent, not both", file=sys.stderr)
         return 2
@@ -1020,8 +1024,8 @@ def _cmd_analyze(args) -> int:
             return 2
         return _cmd_analyze_batch(args, cfg)
     if any(batch_flags):
-        print("--municipality/--station/--rule/--severity/--state/--limit/--yes/--max-usd need "
-              "--parent", file=sys.stderr)
+        print("--municipality/--station/--rule/--severity/--state/--limit/--yes/--max-usd/"
+              "--arithmetic-only need --parent", file=sys.stderr)
         return 2
     ai, why = _analysis_client(cfg)
     if ai is None:

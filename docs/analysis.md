@@ -104,6 +104,12 @@ removed` (as on the browse page; `removed` uses the newest version), `--limit N`
     uv run rg2watch analyze --parent 662405 --rule V1,V2 --yes --max-usd 5
     uv run rg2watch analyze --parent 662405 --state removed --model ollama:qwen3.8:27b-96k
 
+For a focused second read of A1-A3 result numbers, use `--arithmetic-only`. This uses a separate
+prompt/cache from full-form analysis, asks for every list row, and prints the three reconciliation
+checks without changing the primary report or unofficial totals:
+
+    scripts/second-opinion.sh 288966 --rule A2,A3 --arithmetic-only
+
 It prints the number of forms, how many are already analysed by this model and prompt version
 (cached: rules are re-applied for free) and an estimate for the rest. A paid model needs `--yes`;
 without it the estimate is printed and nothing is spent. `ollama:` models need no `--yes`. Forms
