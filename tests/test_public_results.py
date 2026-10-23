@@ -106,7 +106,7 @@ def test_public_page_renders_controls_summary_and_every_list():
     script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
     harness = r'''
 const assert=require("assert"),els={};
-class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className=""}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(){}}
+class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className="";this.hidden=false}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(){}}
 global.document={getElementById:id=>els[id]??=(new El()),createElement:()=>new El()};
 global.Option=function(text,value){const x=new El();x.textContent=text;x.value=value;return x};
 ''' + script + r'''
@@ -120,6 +120,20 @@ assert.equal(els.footer.textContent,"НЕЗВАНИЧНО — Скенирани
 DATA.scope_note="unknown election type - set tally_scope";render();
 assert(els.warning.textContent.includes("Непозната врста избора"));
 assert(!els.warning.textContent.includes("unknown election type"));
+const counted=DATA.overall.counted;
+DATA.overall.counted=0;render();
+assert(els["chart-section"].hidden);
+assert(els.warning.hidden);
+assert(!els["empty-results"].hidden);
+assert.equal(els["empty-results"].textContent,"Још нема обрађених записника — резултати још нису доступни.");
+DATA.overall.counted=counted;DATA.scope="municipal";
+const muni=DATA.municipalities[0];muni.counted=0;els.municipality.value=muni.m;render();
+assert(els["chart-section"].hidden);
+assert.equal(els["empty-results"].textContent,"За ову општину још нема обрађених записника.");
+els.municipality.value="";render();
+assert(!els["chart-section"].hidden);
+assert(els["empty-results"].hidden);
+assert.equal(els["chart-note"].textContent,"Изаберите општину за упоредиве резултате по листама.");
 console.log(JSON.stringify({ok:true}));
 '''
     result = subprocess.run(["node", "-e", harness], text=True, capture_output=True)
