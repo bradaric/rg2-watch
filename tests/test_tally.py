@@ -581,6 +581,17 @@ def test_page_handles_municipal_scope():
     assert '"Share %"' in html and "listsOf(" in html and 'id="tscope"' in html
 
 
+def test_operator_results_use_editorial_accents():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "#herohead{" in html and "border-bottom:2px solid var(--accent)" in html
+    assert ".kicker{" in html and "background:var(--accent-bg)" in html
+    assert "#heronums .tile:first-child{box-shadow:inset 0 3px var(--accent)" in html
+    assert '<div class="hero-eyebrow">Пресек резултата</div>' in html
+    assert "#resview>h3{" in html and "border-left:3px solid var(--accent)" in html
+    assert "body.hero>*:not(#resview):not(.serbian-flag-bg){display:none!important}" in html
+
+
 def test_municipal_unknown_municipality_gets_no_list_totals():
     s = store()
     two_ballots(s)
@@ -655,6 +666,7 @@ def test_cli_diff_heading_describes_term_specific_comparable_cohorts():
 
 def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_lists():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "TOP_LISTS" not in html and 'Остале (" + rest.length' not in html
     helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
     hero = html[html.index("const OKABE") : html.index('$("herobtn").onclick')]
     assert "function paintHero" in html
@@ -866,15 +878,16 @@ assert(slots.every(x => x.row.hidden), "filed-ineligible selected view must hide
 assert(!els["hs-valid-primary"].textContent.includes("NaN"));
 assert(!els["hs-valid-context"].textContent.includes("NaN"));
 
-for (const [rest, word] of [[1,"листа"],[2,"листе"],[5,"листа"],[12,"листа"],[22,"листе"]]) {
-  const values = Array.from({length: 8 + rest}, () => 1);
-  const many = row(values, values);
-  setData(many);
-  T.names = values.map((_, i) => "Назив " + (i + 1));
-  T.fallback_name_indices = [];
-  renderHero();
-  assert.equal(slots[8].nm.textContent, "Остале (" + rest + " " + word + ")");
-}
+const values = Array.from({length: 13}, (_, i) => 13 - i);
+const many = row(values, values);
+setData(many);
+T.names = values.map((_, i) => "Назив " + (i + 1));
+T.fallback_name_indices = [];
+renderHero();
+assert.equal(slots.length, 13);
+assert.equal(slots[0].nm.textContent, "Назив 1");
+assert.equal(slots[12].nm.textContent, "Назив 13");
+assert(!slots.some(x => x.nm.textContent.startsWith("Остале")));
 
 r = row(null, [55, 45]);
 setData(r);

@@ -183,7 +183,7 @@ button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 /* results */
 #tctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;margin:0 0 var(--s3)}
 #tctl label{color:var(--mut);display:inline-flex;align-items:center;gap:6px}
-#resview h3{margin:var(--s5) 0 var(--s2)}
+#resview>h3{margin:var(--s5) 0 var(--s2);padding-left:var(--s2);border-left:3px solid var(--accent);color:var(--fg)}
 #toverall{overflow-x:auto;margin-bottom:var(--s3);padding:var(--s1) var(--s3)}
 #toverall table{border-collapse:collapse;font-variant-numeric:tabular-nums}
 #toverall th,#toverall td{padding:6px 10px;text-align:right;white-space:nowrap}
@@ -204,13 +204,13 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 #hero{border:1px solid var(--line);border-radius:10px;padding:var(--s4) var(--s5) var(--s5);margin-bottom:var(--s4);background:var(--panel);box-shadow:var(--shadow)}
 #herobar{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;margin-bottom:var(--s3)}
 #herobtn{margin-left:auto}
-#herohead{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2) var(--s3);padding-bottom:var(--s3);border-bottom:3px solid var(--fg)}
-.kicker{display:inline-block;background:var(--warn);color:#fff;font-weight:800;letter-spacing:.1em;text-transform:uppercase;font-size:clamp(.75rem,1vw,1.15rem);padding:.2em .6em;border-radius:3px}
-@media (prefers-color-scheme:dark){.kicker{color:#1d1300}}
+#herohead{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2) var(--s3);padding-bottom:var(--s3);border-bottom:2px solid var(--accent)}
+.kicker{display:inline-block;background:var(--accent-bg);border:1px solid var(--accent);color:var(--accent);font-weight:800;letter-spacing:.1em;text-transform:uppercase;font-size:clamp(.75rem,1vw,1.15rem);padding:.2em .65em;border-radius:999px}
 #herotitle{font-size:clamp(1.3rem,2.4vw,2.8rem);font-weight:800;letter-spacing:-.015em;line-height:1.15;overflow-wrap:anywhere}
 #heronums{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0;margin:var(--s4) 0 var(--s3)}
 .tile{padding:var(--s2) var(--s4);border-left:1px solid var(--line2);min-width:0;container-type:inline-size}
 .tile:first-child{border-left:0;padding-left:0}
+#heronums .tile:first-child{box-shadow:inset 0 3px var(--accent);padding-top:var(--s3)}
 .tile .k{color:var(--mut);font-size:clamp(.72rem,.9vw,1.1rem);font-weight:700;text-transform:uppercase;letter-spacing:.08em}
 .tile .s{color:var(--mut);font-size:clamp(.8rem,1vw,1.25rem);font-variant-numeric:tabular-nums}
 #hs-valid-primary,#hs-valid-context{white-space:pre-line}
@@ -223,7 +223,9 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .tile .v .of{font-size:.45em;font-weight:700;color:var(--mut);letter-spacing:0}
 .prog{height:6px;background:var(--track);border-radius:3px;overflow:hidden;margin:var(--s1) 0 var(--s1)}
 .prog>div{height:100%;width:0;background:var(--accent);transition:width .8s ease}
-#herochart{margin:var(--s3) 0 var(--s2)}
+#herocharthead{margin:var(--s4) 0 var(--s1)}
+.hero-eyebrow{color:var(--accent);font-size:clamp(.7rem,.85vw,1rem);font-weight:850;letter-spacing:.12em;text-transform:uppercase}
+#herochart{margin:0 0 var(--s2)}
 .hrow{display:grid;grid-template-columns:1fr minmax(8.5em,20%);grid-template-areas:"hd hd" "tr val";gap:.12em var(--s4);align-items:center;padding:.3em 0;border-top:1px solid var(--line);font-size:clamp(1rem,1.8vw,2.1rem)}
 .hrow:first-child{border-top:0}
 .hrow[hidden]{display:none}
@@ -241,7 +243,7 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 #herofoot{margin-top:var(--s3);padding-top:var(--s2);border-top:1px solid var(--line2);font-size:clamp(.8rem,1.05vw,1.3rem);color:var(--fg);font-weight:500}
 @keyframes flash{from{background:rgba(230,159,0,.45)}to{background:transparent}}
 .flash{animation:flash 1.2s}
-body.hero>*:not(#resview){display:none!important}
+body.hero>*:not(#resview):not(.serbian-flag-bg){display:none!important}
 body.hero #resview>*:not(#hero){display:none}
 body.hero{padding:2.2vh 3vw;min-height:100vh}
 body.hero #hero{border:0;background:transparent;box-shadow:none;padding:0;margin:0}
@@ -351,6 +353,7 @@ stroke-width:2.5;
 </div>
 <div id="heronames" class="warnbox" hidden></div>
 <div id="heronote"></div>
+<div id="herocharthead"><div class="hero-eyebrow">Пресек резултата</div></div>
 <div id="herochart"></div>
 <div id="herofoot"></div>
 </section>
@@ -1361,7 +1364,6 @@ function renderTally() {
 
 // ---- hero display -------------------------------------------------------------------------
 const OKABE = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"];
-const TOP_LISTS = 8;
 let heroMuni = "", heroPicked = false, slots = [];
 function put(id, text) {  // set text; flash when it changed
   const el = $(id);
@@ -1419,8 +1421,8 @@ function flaggedReviewSummary(flagged) {
   if (counts.undecided) parts.push(num(counts.undecided) + " без одлуке");
   return num(seen.size) + " за проверу: " + parts.join(" · ");
 }
-function initHero() {
-  for (let i = 0; i <= TOP_LISTS; i++) {
+function ensureHeroSlots(count) {
+  while (slots.length < count) {
     const row = mk("div", null, "hrow"), hd = mk("div", null, "hd"), no = mk("span", null, "no"),
       nm = mk("span", null, "nm"), tr = mk("div", null, "track"), fill = mk("div", null, "fill"),
       val = mk("div", null, "val");
@@ -1431,6 +1433,10 @@ function initHero() {
     $("herochart").append(row);
     slots.push({row, no, nm, fill, val});
   }
+}
+function initHero() {
+  slots.length = 0;
+  $("herochart").replaceChildren();
 }
 function heroMunis() {
   const sel = $("hmuni"), rows = T ? T.munis : [], names = rows.map(m => m.m);
@@ -1524,9 +1530,8 @@ function renderHero() {
   const noChartLists = !t.lists || (dg ? !t.sh || t.sh.every(x => x == null) : !t.lists_valid);
   const rows = none || (muniScope && allMunis) || noChartLists ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
     .sort((a, b) => dg ? Math.abs(b.v) - Math.abs(a.v) || a.i - b.i : b.v - a.v || a.i - b.i);
-  const shown = rows.slice(0, TOP_LISTS), rest = rows.slice(TOP_LISTS);
-  if (rest.length) shown.push({n: "Остале (" + rest.length + " " + serbianCount(rest.length, "листа", "листе", "листа") + ")",
-    i: -1, v: rest.reduce((a, x) => a + x.v, 0), s: rest.reduce((a, x) => a + (x.s || 0), 0)});
+  const shown = rows;
+  ensureHeroSlots(shown.length);
   const maxAbs = Math.max(1, ...shown.map(x => Math.abs(x.v)));
   slots.forEach((s, k) => {
     const e = shown[k];
