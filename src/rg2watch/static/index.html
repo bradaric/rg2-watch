@@ -387,6 +387,7 @@ function when(s) {
   const m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)/.exec(s || "");
   return m ? m[3] + "/" + m[2] + "/" + m[1] + " " + m[4] + ":" + m[5] : s || "";
 }
+const stamp = s => String(s || "").replace("T", " ");
 const fmtEpoch = new Intl.DateTimeFormat("en-GB", {timeZone: TZ, day: "2-digit", month: "2-digit",
   year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
 function epoch(t) {
@@ -1099,7 +1100,8 @@ function initTable() {
         esc((r.no ? "BM " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""))}},
       {data: "label", title: "Document", render: txt(), defaultContent: ""},
       {data: "up", title: "Times (RS)", className: "nw", render: {_: d => d || "", display: (d, t, r) =>
-        esc((d ? "up " + when(d) : "") ) + (d ? "<br>" : "") + esc("seen " + when(r.seen))}},
+        [["up", d], ["seen", r.seen], ["cache", r.cache], ["done", r.done]].filter(x => x[1])
+          .map(x => esc(x[0] + " " + stamp(x[1]))).join("<br>")}},
       {data: "_st", title: "Status", className: "nw", render: {_: d => d, display: (d, t, r) =>
         esc(r.state) + "<br>" + esc("analysis " + r.ast)}},
       {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
