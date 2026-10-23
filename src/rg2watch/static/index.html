@@ -39,6 +39,7 @@ h3{font-size:11.5px;font-weight:700;margin:0 0 var(--s2);text-transform:uppercas
 .warnbox button{margin-left:var(--s2)}
 /* status panel */
 #status{display:flex;flex-wrap:wrap;gap:var(--s3);margin-bottom:var(--s4)}
+#status-live,#status-alerts{display:contents}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:var(--s3) var(--s4);box-shadow:var(--shadow);min-width:0;flex:1 1 280px}
 .card dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:3px var(--s3)}
 .card dt{color:var(--mut)}.card dd{margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
@@ -312,7 +313,7 @@ stroke-width:2.5;
 <dialog id="ocdlg" aria-labelledby="octitle"><div class="ochead"><h2 id="octitle">Operator verification / correction</h2><button id="occlose" type="button" aria-label="Close correction editor">Close</button></div><div id="ocbody"></div></dialog>
 <h1>rg2-watch <span class="mut" id="ele"></span> <span class="mut" id="built"></span></h1>
 <div id="banner"></div>
-<div id="status"></div>
+<div id="status"><div id="status-live"></div><div id="status-alerts"></div></div>
 <div id="tabs"><button id="tabforms" class="on">Forms</button><button id="tabres">Results (unofficial)</button></div>
 <div id="formsview">
 <div id="ctl">
@@ -453,11 +454,40 @@ function alertForm(url) {  // [row, version] of the form an alert is about (from
 function paintHero() {
   if (typeof renderHero === "function" && slots.length) renderHero();
 }
+let statusKey = null, alertsKey = null;
+function renderAlerts() {
+  const key = JSON.stringify([S.alerts, D.built]);
+  if (key === alertsKey) return;
+  const al = mk("div", null, "card wide");
+  al.append(mk("h3", "Last " + S.alerts.length + " alerts"));
+  const t = mk("table");
+  for (const x of S.alerts) {
+    const tr = mk("tr"), sv = mk("td"), rc = mk("td");
+    rc.append(ruleEl(x[2]));
+    sv.append(mk("span", x[1], "b " + (SEV.includes(x[1]) ? x[1] : "")));
+    tr.append(mk("td", when(x[0]), "mut"), sv, rc, mk("td", x[3] + (x[4] ? " BM " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
+    const hit = alertForm(x[7]), v = hit && hit[1], lk = mk("td", null, "lk");
+    const loc = localHref(v ? v.pdf : x[8]), rik = rikHref(v ? v.rik : x[9]);
+    if (loc) lk.append(link("PDF", loc));
+    if (rik) lk.append(link("RIK", rik));
+    if (hit) {
+      const r = hit[0];
+      const b = mk("button", "show", "chip"); b.onclick = () => showForm(r.id, r.muni + " BM " + r.no); lk.append(b);
+    }
+    tr.append(lk);
+    t.append(tr);
+  }
+  al.append(t);
+  $("status-alerts").replaceChildren(al);
+  alertsKey = key;
+}
 function renderStatus() {
   setTitle();
-  const box = $("status"), ban = $("banner");
+  const box = $("status-live"), ban = $("banner");
   if (!S) {
     box.replaceChildren();
+    $("status-alerts").replaceChildren();
+    alertsKey = null;
     ban.style.display = "block";
     ban.textContent = "no status yet";
     paintHero();
@@ -501,29 +531,19 @@ function renderStatus() {
   }
   cards.push(card("Alerts", n ? [["ntfy", !n.enabled ? "not configured (terminal only)" : n.failing ? "failing, last ok " + ago(n.last_ok) : "delivering, last ok " + ago(n.last_ok), n.failing ? "bad" : ""],
     ["waiting to send", n.queued]] : [["ntfy", "-"]]));
-  const al = mk("div", null, "card wide");
-  al.append(mk("h3", "Last " + S.alerts.length + " alerts"));
-  const t = mk("table");
-  for (const x of S.alerts) {
-    const tr = mk("tr"), sv = mk("td"), rc = mk("td");
-    rc.append(ruleEl(x[2]));
-    sv.append(mk("span", x[1], "b " + (SEV.includes(x[1]) ? x[1] : "")));
-    tr.append(mk("td", when(x[0]), "mut"), sv, rc, mk("td", x[3] + (x[4] ? " BM " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
-    const hit = alertForm(x[7]), v = hit && hit[1], lk = mk("td", null, "lk");
-    const loc = localHref(v ? v.pdf : x[8]), rik = rikHref(v ? v.rik : x[9]);
-    if (loc) lk.append(link("PDF", loc));
-    if (rik) lk.append(link("RIK", rik));
-    if (hit) {
-      const r = hit[0];
-      const b = mk("button", "show", "chip"); b.onclick = () => showForm(r.id, r.muni + " BM " + r.no); lk.append(b);
-    }
-    tr.append(lk);
-    t.append(tr);
-  }
-  al.append(t);
-  cards.push(al);
   box.replaceChildren(...cards);
+  renderAlerts();
   paintHero();
+}
+function applyStatus(s) {
+  const key = JSON.stringify(s);
+  if (key === statusKey) return;
+  S = s;
+  statusKey = key;
+  renderStatus();
+}
+function tickStatus() {
+  if (S && S.watching) renderStatus();
 }
 
 // ---- table --------------------------------------------------------------------------------
@@ -1641,14 +1661,14 @@ function load(name, global, apply) {
       .then(run, e => console.error("fetching " + name + ".json failed", e));
   } else inject(name, () => run(window[global]));
 }
-function loadStatus() { load("status", "RG2_STATUS", s => { S = s; renderStatus(); }); loadReviews(); }
+function loadStatus() { load("status", "RG2_STATUS", applyStatus); loadReviews(); }
 let dataBuilt = null;
 function loadData() {
   load("data", "RG2_DATA", d => { if (d && d.built !== dataBuilt) { applyData(d); dataBuilt = d.built; } });
 }
 loadStatus();
 setInterval(loadStatus, STATUS_EVERY_MS);
-setInterval(renderStatus, 5000);
+setInterval(tickStatus, 5000);
 // first load always; later loads only while auto-refresh is on, at the period given by the data (0 = off)
 loadData();
 function loop() {
