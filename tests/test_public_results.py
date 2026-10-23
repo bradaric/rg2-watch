@@ -45,6 +45,19 @@ def test_public_payload_has_only_aggregate_corrected_results_and_review_counts()
         assert private not in blob
 
 
+def test_public_payload_sorts_municipalities_by_serbian_cyrillic_alphabet():
+    s = store()
+    for no, municipality in enumerate(
+            ["Љиг", "Ћуприја", "Ада", "Шид", "Лапово", "Тител", "Чока", "Џеп"], 1):
+        form(s, no, clean_report(), muni=municipality)
+
+    data = build_public_results(s, config(), P)
+
+    assert [row["m"] for row in data["municipalities"]] == [
+        "Ада", "Лапово", "Љиг", "Тител", "Ћуприја", "Чока", "Џеп", "Шид",
+    ]
+
+
 def test_public_payload_removes_records_prefix_from_election_title():
     s = store()
     s.upsert_election(Election(P, "1", "t", "Записници Парламентарни избори 2026", BASE))
