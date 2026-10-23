@@ -80,10 +80,23 @@ change the file or environment variable.
        systemctl --user status rg2watch-night.service
        journalctl --user -u rg2watch-night.service -f
 
-   Start it deliberately around 19:15-19:30, only after confirming the RIK page, credentials,
-   Ollama/Bonsai, ntfy, disk space and local page. Keep the machine plugged in: sleep inhibition
-   prevents suspend but cannot prevent power or network loss. Do not also run `scripts/night.sh`
-   in a terminal; that would create a competing watcher.
+   Start it deliberately around 20:30 (results are not expected before 21:00), only after confirming
+   the RIK page, credentials, Ollama/Bonsai, ntfy, disk space and local page. This leaves a 30-minute
+   operational buffer without unnecessary early polling of RIK. Keep the machine plugged in: sleep
+   inhibition prevents suspend but cannot prevent power or network loss. Do not also run
+   `scripts/night.sh` in a terminal; that would create a competing watcher.
+
+   Two dated user timers are already installed for election `779676`:
+
+   - `rg2watch-backup-election.timer`: a validated, private SQLite online backup at 19:45, every
+     15 minutes overnight, and finally at 08:00. It is persistent, so one missed backup runs after
+     wake/login. Snapshots are retained under `data/backups/779676/`.
+   - `rg2watch-publish-results.timer`: a sanitized Cloudflare Pages export every 3 minutes from
+     20:00 through 08:00. It is deliberately non-persistent, so missed public deployments are skipped.
+
+   Confirm both before starting the watcher:
+
+       systemctl --user list-timers rg2watch-backup-election.timer rg2watch-publish-results.timer --all
 
    - Leave out `--analyze` to only watch for new/replaced/removed documents (free).
    - Started late, with forms already published? Add `--baseline`: what is already there is
@@ -109,9 +122,26 @@ same command resumes from the database without re-alerting. For the supervised s
 final database and public export on Monday, then stop and remove its reboot activation with:
 
     systemctl --user disable --now rg2watch-night.service
+    systemctl --user is-active rg2watch-night.service     # expected: inactive
 
-Disable lingering afterwards only if no other user services need to survive logout. The local
-backup and publication timers also depend on the user service manager during their election window.
+After the final 08:00 backup and deployment have been verified, disable their now-expired dated
+timers (the existing backups and Cloudflare deployment remain):
+
+    systemctl --user disable --now rg2watch-backup-election.timer
+    systemctl --user disable --now rg2watch-publish-results.timer
+
+The normal Monday 00:05 Fathom run is skipped by a dated service condition. Its one-time replacement
+runs Tuesday at 00:05. After confirming that Tuesday run, remove the temporary exception:
+
+    systemctl --user disable --now fathom-weekly-election-delay.timer
+    rm ~/.config/systemd/user/fathom-weekly-election-delay.timer
+    rm ~/.config/systemd/user/fathom-weekly.service.d/election-delay.conf
+    systemctl --user daemon-reload
+
+Disable lingering only after that Tuesday run, and only if no other user services need to survive
+logout:
+
+    loginctl disable-linger "$USER"
 
 ## 3. When something goes wrong
 
