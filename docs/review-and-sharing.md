@@ -247,16 +247,17 @@ The command writes only `public-results/index.html`. Open it locally before publ
 election title, snapshot time, municipality choices, totals and disclaimer. The page contains corrected,
 all-counted aggregate values and aggregate review counts, with only a municipality selector. It contains
 no form/document identifiers or links, findings, review notes, PDFs, database name, model name, audit
-history, write controls, external assets or network requests. For safety, the command refuses an output
+history, write controls, external assets or API/data requests. For safety, the command refuses an output
 directory containing anything except an older `index.html`; do not point it at the private browse-page
 directory.
 
 For a manual Cloudflare Pages Direct Upload, create a Pages project and upload the `public-results`
 directory. Cloudflare provides a stable production URL such as `https://rg2-rezultati.pages.dev/` and a
 unique URL for each deployment; its deployment history can roll back a bad upload. A custom domain is
-optional. Every update is manual: run `export-results` again, inspect the local page, then upload that
-directory as a new production deployment. The timestamp and footer explicitly say that the page is a
-static unofficial snapshot and does not update automatically. Never upload the database's private page
+optional. Every publication is manual: run `export-results` again, inspect the local page, then upload that
+directory as a new production deployment. The browser reloads the published page once per minute so a
+new deployment appears without user action; the timestamp identifies the static unofficial snapshot.
+Never upload the database's private page
 folder, `data.json`, `reviews.json`, PDFs, SQLite file, configuration, or credentials.
 
 #### Optional scheduled Cloudflare Pages updates
