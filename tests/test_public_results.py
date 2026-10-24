@@ -107,6 +107,16 @@ def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
     assert checked.returncode == 0, checked.stderr
 
 
+def test_public_page_refreshes_the_whole_snapshot_every_minute():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert '<meta http-equiv="refresh"' not in html
+    assert "setTimeout(()=>location.reload(),60000)" in html
+
+
 def test_public_page_renders_controls_summary_and_every_list():
     s = store()
     form(s, 1, clean_report())
@@ -118,13 +128,24 @@ def test_public_page_renders_controls_summary_and_every_list():
     html = render_public_results(data)
     script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
     harness = r'''
-const assert=require("assert"),els={};
-class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className="";this.hidden=false}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(){}}
+const assert=require("assert"),els={};let refresh,refreshDelay,reloadedHash;
+class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className="";this.hidden=false;this.listeners={}}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(type,fn){this.listeners[type]=fn}}
 global.document={getElementById:id=>els[id]??=(new El()),createElement:()=>new El()};
 global.Option=function(text,value){const x=new El();x.textContent=text;x.value=value;return x};
+global.location={hash:"#municipality=Alpha",pathname:"/",search:"",reload(){reloadedHash=this.hash}};
+global.history={replaceState(_state,_title,url){location.hash=url.includes("#")?url.slice(url.indexOf("#")):""}};
+global.setTimeout=(fn,delay)=>{refresh=fn;refreshDelay=delay};
 ''' + script + r'''
 assert.equal(els.title.textContent,"Title");
 assert.equal(els.municipality.children.length,2);
+assert.equal(els.municipality.value,"Alpha");
+els.municipality.value="";els.municipality.listeners.change();
+assert.equal(location.hash,"");
+els.municipality.value="Alpha";els.municipality.listeners.change();
+assert.equal(location.hash,"#municipality=Alpha");
+assert.equal(refreshDelay,60000);refresh();
+assert.equal(reloadedHash,"#municipality=Alpha");
+els.municipality.value="";els.municipality.listeners.change();
 assert.equal(els.chart.children.length,10);
 assert.equal(els.chart.children[0].children[0].textContent,"Листа 10");
 assert.equal(els.chart.children[9].children[0].textContent,"Листа 1");
