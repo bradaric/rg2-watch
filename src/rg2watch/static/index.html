@@ -960,9 +960,29 @@ function openCorrection(v) {
 }
 function updateCorrectionSummary(url, state) {
   for (const r of rows) for (const v of [r, ...r.v]) if (v.u === url) {
-    v.oc = {status: state.status, reason: state.reason, at: state.at};
+    v.oc = {status: state.status, reason: state.reason, at: state.at, revision: state.revision};
     if (v === r) refreshRow(r.id);
   }
+}
+function correctionStateInData(data, url, state) {
+  for (const row of data.rows || []) for (const v of [row, ...(row.v || [])]) {
+    if (v.u === url) return !!v.oc && v.oc.revision === state.revision;
+  }
+  return false;
+}
+function waitForCorrectionData(url, state, attempt = 0) {
+  fetch("data.json?t=" + Date.now(), {cache: "no-store"})
+    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+    .then(data => {
+      if (correctionStateInData(data, url, state)) {
+        applyData(data); dataBuilt = data.built;
+      } else if (attempt < 60) {
+        setTimeout(() => waitForCorrectionData(url, state, attempt + 1), 1000);
+      }
+    }, e => {
+      if (attempt < 60) setTimeout(() => waitForCorrectionData(url, state, attempt + 1), 1000);
+      else console.error("refreshing corrected totals failed", e);
+    });
 }
 function submitCorrection(action) {
   const reason = $("ocreason").value, request = {url: ocUrl, action, reason, source_token: ocState.source_token};
@@ -973,9 +993,8 @@ function submitCorrection(action) {
     body: JSON.stringify(request)}).then(state => {
       try { sessionStorage.removeItem(ocDraftKey(ocUrl)); } catch (_) {}
       updateCorrectionSummary(ocUrl, state);
-      dataBuilt = null;
       $("ocdlg").close();
-      loadData();
+      waitForCorrectionData(ocUrl, state);
     }, e => {
       for (const b of $("ocbody").querySelectorAll("button")) b.disabled = false;
       saveCorrectionDraft();

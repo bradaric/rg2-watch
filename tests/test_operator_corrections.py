@@ -357,7 +357,8 @@ def test_browse_row_has_compact_operator_correction_status(tmp_path):
 
     row = build_data(s, tmp_path, cfg=Config(model=MODEL))["rows"][0]
     assert row["oc"] == {"status": "active", "reason": "checked against scan",
-                         "at": row["oc"]["at"]}
+                         "at": row["oc"]["at"], "revision": row["oc"]["revision"]}
+    assert isinstance(row["oc"]["revision"], int)
     assert row["rec"]["status"] == "ok"
 
 
@@ -458,7 +459,10 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     failure = html[html.index("}, e => {", html.index("function submitCorrection(")):html.index("});\n}", html.index("function submitCorrection("))]
     assert failure.index("saveCorrectionDraft();") < failure.index("Not saved:")
     success = html[html.index(".then(state => {", html.index("function submitCorrection(")):html.index("}, e => {", html.index("function submitCorrection("))]
-    assert success.index("dataBuilt = null;") < success.index("loadData();")
+    assert "waitForCorrectionData(ocUrl, state);" in success
+    assert "dataBuilt = null;" not in success
+    assert "function waitForCorrectionData(" in html
+    assert "v.oc.revision === state.revision" in html
     assert '$("ocdlg").close();' in success
     assert '$("ocdlg").close();' not in failure
     assert 'id="nc"' in html and "number check" in html

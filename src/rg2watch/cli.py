@@ -320,14 +320,17 @@ def _publication_api(store: Store, cfg: Config):
     return PublicationJobs(cases, publisher)
 
 
-def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Config | None = None):
+def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Config | None = None,
+               correction_change=None):
     """Serve the page on `port`, else the next free port up to +10; None when none is free."""
     case_api = _publication_api(store, cfg) if cfg is not None else None
-    correction_api = (OperatorCorrections(
-        store, cfg, stored_model(cfg.model),
-        on_change=lambda: build_page(store, page_dir / "index.html", cache_dir, cfg=cfg,
-                                     interval=cfg.browse_interval_s, with_status=False))
-                      if cfg is not None else None)
+    if cfg is not None:
+        refresh = correction_change or (lambda: build_page(
+            store, page_dir / "index.html", cache_dir, cfg=cfg,
+            interval=cfg.browse_interval_s, with_status=False))
+        correction_api = OperatorCorrections(store, cfg, stored_model(cfg.model), on_change=refresh)
+    else:
+        correction_api = None
     for p in range(port, min(port + PORT_TRIES, 65536)):
         server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
                               correction_api)
@@ -380,7 +383,8 @@ def _live(watcher: Watcher, pipeline, notifier: Notifier, url: str | None):
     return live
 
 
-def _background(name: str, stop: threading.Event, period: float, fn, first=None) -> threading.Thread:
+def _background(name: str, stop: threading.Event, period: float, fn, first=None,
+                wake: threading.Event | None = None) -> threading.Thread:
     """Run fn every `period` s in a daemon thread; failures are logged and swallowed, so the watch
     loop never waits for (or is hurt by) page building."""
     def run() -> None:
@@ -390,11 +394,13 @@ def _background(name: str, stop: threading.Event, period: float, fn, first=None)
             except Exception:
                 log.exception("%s setup failed", name)
         while not stop.is_set():
+            if wake is not None:
+                wake.clear()
             try:
                 fn()
             except Exception:
                 log.exception("%s update failed", name)
-            stop.wait(period)
+            (wake or stop).wait(period)
 
     t = threading.Thread(target=run, name=name, daemon=True)
     t.start()
@@ -851,6 +857,8 @@ def _run_watch(args, cfg: Config) -> int:
                           on_status=notifier.status, baseline=args.baseline, only=only,
                           on_mass=notifier.digest_only)
         stop = threading.Event()
+        browse_wake = threading.Event() if cfg.browse_interval_s > 0 else None
+        opinions: dict = {}  # evaluated second opinions, kept between builds
         stop_delivery = threading.Event()  # set after the pipeline stopped: its last findings still go out
         delivery = None
         server, threads = None, []
@@ -866,7 +874,9 @@ def _run_watch(args, cfg: Config) -> int:
                                        lambda: (deliver(), watcher.check_health()))
                 port = cfg.serve_port if args.serve_port is None else args.serve_port
                 if port:
-                    server = _start_web(_browse_path(cfg).parent, _cache_dir(cfg), port, store, cfg)
+                    server = _start_web(
+                        _browse_path(cfg).parent, _cache_dir(cfg), port, store, cfg,
+                        correction_change=browse_wake.set if browse_wake is not None else None)
                 url = f"http://127.0.0.1:{server.server_port}" if server else None
                 if url:
                     notifier.page_url = url
@@ -876,10 +886,9 @@ def _run_watch(args, cfg: Config) -> int:
                     store, _browse_path(cfg), parent, live(), _cache_dir(cfg)),
                     first=lambda: copy_static(_browse_path(cfg).parent)))
                 if cfg.browse_interval_s > 0:
-                    opinions: dict = {}  # evaluated second opinions, kept between builds
                     threads.append(_background("browse", stop, cfg.browse_interval_s, lambda: build_page(
                         store, _browse_path(cfg), _cache_dir(cfg), None, cfg, cfg.browse_interval_s,
-                        False, opinions)))
+                        False, opinions), wake=browse_wake))
             while True:
                 try:
                     watcher.run_once()
@@ -905,6 +914,8 @@ def _run_watch(args, cfg: Config) -> int:
             log.info("interrupted, shutting down")
         finally:
             stop.set()
+            if browse_wake is not None:
+                browse_wake.set()
             if server is not None:
                 server.shutdown()
                 server.server_close()

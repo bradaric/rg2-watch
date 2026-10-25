@@ -529,6 +529,27 @@ def test_watch_builds_in_background_at_start_and_status_is_written(tmp_path, mon
     assert pages[0][3] is None and pages[0][6] is False  # all elections' rows; the status thread owns status
 
 
+def test_background_update_can_be_woken_before_its_period():
+    stop, wake, ran = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+
+    def update():
+        calls.append(time.monotonic())
+        ran.set()
+
+    thread = cli._background("test-refresh", stop, 60, update, wake=wake)
+    try:
+        assert ran.wait(1)
+        ran.clear()
+        wake.set()
+        assert ran.wait(1)
+        assert len(calls) == 2
+    finally:
+        stop.set()
+        wake.set()
+        thread.join(1)
+
+
 def test_watch_browse_off_with_zero(tmp_path, monkeypatch):
     pages, everything = _watch(tmp_path, monkeypatch, 0, 3)
     assert pages == [] and any(x[0] == "status" for x in everything)
