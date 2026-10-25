@@ -369,6 +369,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         active = [d for d in ds if d["active"]]
         if active:  # removed forms are not counted
             mains.append(max(active, key=lambda d: (d["uploaded_at"] or "", d["id"])))
+    held_ids = {r["document_id"] for r in store.latest_reviews(parent)
+                if r["active"] and not r["superseded"] and r["verdict"] == "escalate"}
     corr: dict[str, list[dict]] = {}  # station_key -> RG-7 decisions in decision order
     for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION):
         if row["doc_type"] in RG7_FIRST_ROUND and row["station_key"] is not None:
@@ -438,6 +440,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         others = {m: e for m, a in got.items() if m != model and a["prompt_version"] == PROMPT_VERSION
                   and (e := ex_of(a)) is not None}
         forms.append({"d": d, "muni": muni, "ex": mine, "others": others,
+                      "held": d["id"] in held_ids,
                       "operator": operator_states.get(d["id"])})
     scope, scope_note = scope_of(store, cfg, parent)
     national = scope == "national"
@@ -493,7 +496,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     overall = {k: _acc(nl) for k in ("all", "cl", "fall", "fcl")}  # f*: as filed on the RG-2s
     # like-for-like difference: each term only over the stations present in it in BOTH views
     opair = {k: _pair_acc(nl) for k in ("all", "cl")}
-    counts = {"stations": 0, "counted": 0, "clean": 0, "unanalysed": 0}
+    counts = {"stations": 0, "counted": 0, "clean": 0, "held": 0,
+              "held_clean": 0, "held_fclean": 0, "unanalysed": 0}
     munis = []
     for name in names:
         mine = by_muni.get(name, [])
@@ -503,6 +507,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         acc = {k: _acc(len(mrows)) for k in overall}
         pair = {k: _pair_acc(len(mrows)) for k in opair}
         for f in mine:
+            if f["held"]:
+                continue
             filed = as_filed(f["ex"])
             for key, take_c, take_f in (("all", True, True), ("cl", not f["why"], not f["why_f"])):
                 cc = _contrib(f["ex"], mrows) if take_c else {}
@@ -535,10 +541,14 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                and all(not source for source in muni_sources[name]),
                "corrected": sum(1 for f in mine if f["ex"]["rg7"]),
                "operator_corrected": sum(1 for f in mine if f["ex"]["operator"]),
-               "clean": sum(1 for f in mine if not f["why"]), "unanalysed": unanalysed.get(name, 0),
+               "clean": sum(1 for f in mine if not f["why"]),
+               "held": sum(1 for f in mine if f["held"]),
+               "held_clean": sum(1 for f in mine if f["held"] and not f["why"]),
+               "held_fclean": sum(1 for f in mine if f["held"] and not f["why_f"]),
+               "unanalysed": unanalysed.get(name, 0),
                "fclean": sum(1 for f in mine if not f["why_f"]),
                **{k: _tot(acc[k]) for k in acc},
-                "pair": {k: _pair_tot(p) for k, p in pair.items()}}
+               "pair": {k: _pair_tot(p) for k, p in pair.items()}}
         if mixed:
             row.update({"nlists": 0, "names": [], "fallback_name_indices": [],
                         "names_note": UNKNOWN_MUNI_NOTE})
@@ -576,9 +586,11 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             "corrected": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                            "rg7": f["ex"]["rg7"]} for f in forms if f["ex"]["rg7"]],
             "operator_corrected": [{"id": f["d"]["id"], "m": f["muni"],
-                                     "no": f["d"]["station_no"],
-                                     "reason": f["operator"]["reason"], "at": f["operator"]["at"]}
-                                    for f in forms if f["ex"]["operator"]],
+                                    "no": f["d"]["station_no"],
+                                    "reason": f["operator"]["reason"], "at": f["operator"]["at"]}
+                                   for f in forms if f["ex"]["operator"]],
+            "held": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
+                      "verdict": "escalate"} for f in forms if f["held"]],
             "reconciliation": [{"id": f["d"]["id"], "m": f["muni"],
                                 "no": f["d"]["station_no"], **f["rec"]} for f in forms],
             "excluded": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
@@ -650,15 +662,15 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
     out = [f"UNOFFICIAL - numbers read by {t['model']} from the scanned forms, not RIK results",
            f"{t['title']} ({t['parent']}): "
            + ("all counted forms" if all_forms else "clean forms only (leave out flagged)") + "; numbers " + label, ""]
-    head = ["municipality", "stations", "counted", "clean", "flagged", "cover", "registered", "voted",
-            "turnout", "in box", "invalid*", "reconciled valid", "outside"]
+    head = ["municipality", "stations", "counted", "clean", "flagged", "held", "cover",
+            "registered", "voted", "turnout", "in box", "invalid*", "reconciled valid", "outside"]
     if not diff:
         head += ["vote forms", "withheld valid", "gap"]
     if diff:
         head.append("terms corrected-only/filed-only")
     pp = (lambda v: "-" if v is None else f"{v * 100:+.1f}") if diff else _pct
     num = (lambda v: _sgn(v)) if diff else (lambda v: f"{v:,}")
-    body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if (r["corrected"] or r["operator_corrected"]) and view != "filed" else ""), str(r["clean"]), str(r["excluded"]),
+    body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if (r["corrected"] or r["operator_corrected"]) and view != "filed" else ""), str(r["clean"]), str(r["excluded"]), str(r["held"]),
              _pct(r["counted"] / r["stations"] if r["stations"] else None),
              *(num(r[key][k]) for k in ("registered", "voted")), pp(r[key]["turnout"]),
               *(num(r[key][k]) for k in ("ballots_in_box", "invalid", "valid", "outside_voted")),
@@ -688,7 +700,8 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
     pending = t["overall"]["unanalysed"]
     o = rows[-1] if view == "filed" else t["overall"]
     out += ["", f"{o['counted']} form(s) counted, {o['clean']} clean, "
-            f"{o['excluded']} flagged, {pending} not analysed by {t['model']}"]
+            f"{o['excluded']} flagged, {o['held']} held by escalation, "
+            f"{pending} not analysed by {t['model']}"]
     if diff:
         o = t["overall"]["pair"][key]
         neither = o["pair_not_contributing"] - o["corrected_only_vote_forms"] - o["filed_only_vote_forms"]

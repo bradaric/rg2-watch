@@ -1229,7 +1229,7 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come
   const dg = NV() === "diff", n = dg ? dnum : num, p = dg ? dpp : pc, t = r => r[mode], c = [
     ["Municipality", r => r.m, s => s, r => r.m],
     ["Stations", r => r.stations, num], ["Counted", r => r.counted, num], ["Clean", r => r.clean, n],
-    ["Flagged", r => r.excluded, n],
+    ["Flagged", r => r.excluded, n], ["Held by escalation", r => r.held || 0, num],
     ["Coverage", r => ratio(r.counted, r.stations), pc, r => ratio(r.counted, r.stations) == null ? "" : (100 * r.counted / r.stations).toFixed(1)],
     ["Registered", r => t(r).registered, n], ["Voted", r => t(r).voted, n],
     ["Turnout" + (dg ? " (pp)" : ""), r => t(r).turnout, p, r => t(r).turnout == null ? "" : (100 * t(r).turnout).toFixed(1)],
@@ -1269,7 +1269,8 @@ function tallyCsv() {
   const mode = $("tmode").value, cols = resultCols(mode), rows = [...T.munis, T.overall].map(vrow);
   // header is row 1 (pandas/Excel read it cleanly); the unofficial note is a last column, first data row
   const note = "Unofficial - numbers read by " + T.model + " from the scanned forms; " +
-    (mode === "cl" ? "clean forms only (leave out flagged)" : "all counted forms") + "; numbers: " + NV_LABEL[NV()] +
+    (mode === "cl" ? "clean forms only (leave out flagged)" : "all counted forms") +
+    "; escalated forms are held from totals; numbers: " + NV_LABEL[NV()] +
     " Reported invalid counts are limited to forms with reconciled valid/list totals." +
     (NV() === "diff" ? " Paired cohort columns are unsigned actual sizes; turnout and shares are differences in percentage points." : "");
   if (T.scope === "municipal") {  // long format: one row per (municipality, list), shared totals repeated
@@ -1511,7 +1512,9 @@ function renderHero() {
     put("hv-forms", dnum(r.clean) + " / " + dnum(r.excluded));
     put("hv-formstot", "");
     put("hs-forms-primary", "промене броја: без уочених проблема / за проверу");
-    put("hs-forms-context", "");
+    const held = raw.held || 0;
+    put("hs-forms-context", held ? "Задржано због ескалације: " + num(held) + " " +
+      serbianCount(held, "записник", "записника", "записника") : "");
   } else if (none) {
     put("hv-forms", "-");
     put("hv-formstot", "");
@@ -1519,13 +1522,16 @@ function renderHero() {
     put("hs-forms-context", "");
   } else {
     const selected = mode === "cl" ? r.clean : r.counted;
+    const held = mode === "cl" ? (NV() === "filed" ? raw.held_fclean : raw.held_clean) || 0 : raw.held || 0;
     const cleanContributing = r.cl.vote_forms;
     put("hv-forms", num(t.vote_forms));
     put("hv-formstot", " / " + num(selected));
     put("hs-forms-primary", "урачунато у резултат");
     const formContext = [num(cleanContributing) + " без уочених проблема",
       flaggedReviewSummary(heroFlagged(raw))];
-    if (selected > t.vote_forms) formContext.push("Није урачунато: " + num(selected - t.vote_forms) +
+    if (held) formContext.push("Задржано због ескалације: " + num(held) + " " +
+      serbianCount(held, "записник", "записника", "записника"));
+    if (selected - t.vote_forms - held > 0) formContext.push("Није урачунато: " + num(selected - t.vote_forms - held) +
       " записника — подаци по листама нису потпуни или усаглашени");
     put("hs-forms-context", formContext.join("\n"));
   }

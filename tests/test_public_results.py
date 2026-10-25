@@ -82,6 +82,24 @@ def test_public_review_breakdown_uses_current_version_and_marks_missing_verdict_
     assert data["overall"]["review"] == {"ok": 0, "escalate": 0, "unsure": 0, "undecided": 1}
 
 
+def test_public_results_hold_escalated_form_out_of_totals():
+    s = store()
+    form(s, 1, clean_report())
+    held = form(s, 2, report(registered=nf(500), voted=nf(400), ballots_in_box=nf(400),
+                              invalid=nf(10), valid=nf(390),
+                              list_votes=[{"row": 1, "field": nf(300)},
+                                          {"row": 2, "field": nf(90)}]))
+    s.set_review(held.url, "escalate")
+
+    data = build_public_results(s, config(), P)
+
+    assert data["overall"]["counted"] == 2
+    assert data["overall"]["held"] == 1
+    assert data["overall"]["totals"]["registered"] == 1000
+    assert data["overall"]["totals"]["valid"] == 780
+    assert "Задржано због ескалације" in render_public_results(data)
+
+
 def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
     s = store()
     s.upsert_election(Election(P, "1", "t", "</script><b>Избори", BASE))

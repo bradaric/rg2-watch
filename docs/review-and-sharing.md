@@ -205,8 +205,13 @@ first-round RG-2 forms: registered, voted, ballots in box, invalid, valid, outsi
 votes and share of valid votes per list, per municipality and overall, with coverage (forms counted
 of stations known). Applied RG-7 and operator-entered corrections replace those readings in the
 corrected view; the as-filed view preserves the original RG-2 readings. RIK's official results are
-never fetched. Flagged forms are left out of the clean
-totals (`--clean` / the page switch "clean forms only (leave out flagged)" show only those; every counted form is shown by default) when the
+never fetched. A latest `escalate` verdict places that exact active RG-2 on hold: it remains visible as
+processed and escalated (and flagged when its findings warrant), but contributes no numbers to
+corrected, as-filed, clean or default
+totals. Changing its verdict to `ok` or `unsure` releases the hold; an escalation on an older replaced
+version does not hold the current version. Flagged forms are left out of the clean
+totals (`--clean` / the page switch "clean forms only (leave out flagged)" show only those; all other
+counted forms are shown by default) when the
 confidence is low, the page quality is poor or unreadable, a counted number is illegible, another
 stored model read a counted number differently, an arithmetic rule (A1-A5) fires, or the form has any
 HIGH-severity alert (any rule, e.g. "HIGH alert: V1, V9"; the rules are re-applied to the stored
@@ -245,7 +250,8 @@ data/election-<id>.sqlite --out public-results`.
 
 The command writes only `public-results/index.html`. Open it locally before publishing and verify the
 election title, snapshot time, municipality choices, totals and disclaimer. The page contains corrected,
-all-counted aggregate values and aggregate review counts, with only a municipality selector. It contains
+all-counted aggregate values except forms held by escalation, plus aggregate review and hold counts, with
+only a municipality selector. It contains
 no form/document identifiers or links, findings, review notes, PDFs, database name, model name, audit
 history, write controls, external assets or API/data requests. For safety, the command refuses an output
 directory containing anything except an older `index.html`; do not point it at the private browse-page

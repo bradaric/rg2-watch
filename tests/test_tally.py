@@ -62,6 +62,51 @@ def test_clean_form_counts_and_totals_and_turnout():
     assert o["cl"] == o["all"] and t["excluded"] == [] and t["nlists"] == 2
 
 
+def test_current_escalated_form_is_held_from_every_tally_view():
+    s = store()
+    form(s, 12, clean_report())
+    held = form(s, 13, report(registered=nf(500), voted=nf(400), ballots_in_box=nf(400),
+                              invalid=nf(10), valid=nf(390),
+                              list_votes=[{"row": 1, "field": nf(300)},
+                                          {"row": 2, "field": nf(90)}]))
+    s.set_review(held.url, "escalate")
+
+    result = tally(s)
+    overall = result["overall"]
+
+    assert overall["counted"] == 2 and overall["held"] == 1
+    assert overall["held_clean"] == 1 and overall["held_fclean"] == 1
+    assert overall["all"]["registered"] == 1000
+    assert overall["all"]["voted"] == 800
+    assert overall["all"]["valid"] == 780
+    assert overall["all"]["lists"] == [400, 380]
+    assert overall["cl"] == overall["all"]
+    assert [(row["no"], row["verdict"]) for row in result["held"]] == [("13", "escalate")]
+    text = format_tally(result)
+    assert "held by escalation" in text and "1 held" in text
+
+    s.set_review(held.url, "unsure")
+    released = tally(s)["overall"]
+    assert released["held"] == 0
+    assert released["all"]["registered"] == 1500
+    assert released["all"]["valid"] == 1170
+
+
+def test_escalation_of_replaced_version_does_not_hold_current_form():
+    s = store()
+    old = form(s, 12, clean_report())
+    s.set_review(old.url, "escalate")
+    new = doc(BASE + "/e/replacement.pdf", muni="Alpha", no="12")
+    add(s, new, "replaced", old.url)
+    put(s, new, clean_report())
+
+    result = tally(s)
+
+    assert result["overall"]["held"] == 0
+    assert result["overall"]["all"]["registered"] == 1000
+    assert result["held"] == []
+
+
 @pytest.mark.parametrize("name, rep, expect", [
     ("low", {**clean_report(), "confidence": "low"}, "low confidence"),
     ("poor", None, "page quality poor"),
@@ -331,6 +376,7 @@ def test_hero_markup_labelled_and_safe():
     assert "#hs-forms-context{border-top:1px solid var(--line2)" in html
     assert 'return num(seen.size) + " за проверу: "' in html
     assert "урачунато у резултат" in html
+    assert "Held by escalation" in html and "Задржано због ескалације" in html
     assert "Ван заједничког збира: " in html
     assert '"Неусаглашено: " + snum(gap)' in html
     assert "само са исправкама: " in html and "само оригинално: " in html
@@ -748,7 +794,8 @@ function row(correctedLists, filedLists) {
     pair_not_contributing: correctedLists && filedLists ? 0 : 1,
     corrected_only_vote_forms: correctedLists && !filedLists ? 1 : 0,
     filed_only_vote_forms: filedLists && !correctedLists ? 1 : 0};
-  return {m: "Alpha", stations: 1, counted: 1, clean: 1, excluded: 0, fclean: 1, fexcluded: 0,
+  return {m: "Alpha", stations: 1, counted: 1, clean: 1, excluded: 0, held: 0,
+    held_clean: 0, held_fclean: 0, fclean: 1, fexcluded: 0,
     names: ["A", "B"], nlists: 2, all: c, cl: c, fall: f, fcl: f, pair: {all: cohort, cl: cohort}};
 }
 function setData(r, scope="national") {
@@ -766,6 +813,7 @@ setData(r);
 assert.equal(vrow(r).all.valid, 100);
 let csv = tallyCsv();
 assert.equal(csvValue(csv, "Reconciled valid"), "100");
+assert.equal(csvValue(csv, "Held by escalation"), "0");
 assert.equal(csvValue(csv, "1 · Листа А votes"), "60");
 assert.equal(csvValue(csv, "Unreconciled turnout gap (signed)"), "0");
 renderHero();
@@ -811,6 +859,12 @@ assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
   "0 за проверу: 0 прихваћено",
   "Није урачунато: 3 записника — подаци по листама нису потпуни или усаглашени",
 ]);
+r.held = 1;
+renderHero();
+assert(els["hs-forms-context"].textContent.includes("Задржано због ескалације: 1 записник"));
+assert(els["hs-forms-context"].textContent.includes(
+  "Није урачунато: 2 записника — подаци по листама нису потпуни или усаглашени"));
+r.held = 0;
 assert.deepEqual(els["hs-valid-primary"].textContent.split("\n"), [
   "Неважећи: 9",
   "Неусаглашено: +11",
