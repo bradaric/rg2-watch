@@ -25,9 +25,9 @@ def result_payload():
             "processed_stations": "3.791",
         },
         "table_data": [
-            {"count_number": 1, "list_image": "", "list_name": "Листа <један>",
+            {"count_number": 1, "list_image": "", "list_name": "1. Листа <један>",
              "won_number": "608.711", "won_percent": 43.65},
-            {"count_number": 2, "list_image": "", "list_name": "Листа два",
+            {"count_number": 2, "list_image": "", "list_name": "2. Листа два",
              "won_number": "33.378", "won_percent": 2.49},
         ],
     }

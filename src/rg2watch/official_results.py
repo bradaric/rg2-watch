@@ -65,6 +65,7 @@ def _normalize(body: dict, source: str, built: str) -> dict:
                 or not isinstance(percent, (int, float)) or isinstance(percent, bool)
                 or not 0 <= percent <= 100):
             raise OfficialResultsError("invalid RIK list result")
+        name = re.sub(rf"^\s*{no}\.\s+", "", name, count=1)
         lists.append({"no": no, "name": name, "votes": _integer(votes),
                       "share": round(percent / 100, 6)})
     processed_registered = not_voted + voted
