@@ -95,6 +95,17 @@ input[type=search]{width:15em}
 #tabs button:hover{color:var(--fg)}
 #tabs button.on{border-bottom-color:var(--accent);color:var(--fg)}
 #tabs button[hidden]{display:none}
+#officialhead{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s4);margin-bottom:var(--s3)}
+#officialhead h2{margin:0;font-size:22px}#officialmeta{margin:3px 0 0;color:var(--mut)}
+#officialbadge{display:inline-block;background:var(--good);color:#fff;border-radius:999px;padding:4px 10px;font-weight:750;white-space:nowrap}
+#officialsummary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--s3);margin-bottom:var(--s4)}
+.officialmetric{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:var(--s3) var(--s4);box-shadow:var(--shadow)}
+.officialmetric .k{color:var(--mut);font-size:12px}.officialmetric .v{font-size:24px;font-weight:750;font-variant-numeric:tabular-nums}.officialmetric .s{color:var(--mut);font-size:12px}
+#officialtable{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
+#officialtable th,#officialtable td{padding:9px var(--s3);border-top:1px solid var(--line);text-align:left}
+#officialtable th{color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em}
+#officialtable td:nth-child(1),#officialtable td:nth-child(3),#officialtable td:nth-child(4){font-variant-numeric:tabular-nums;white-space:nowrap}
+#officialtable td:nth-child(3),#officialtable td:nth-child(4),#officialtable th:nth-child(3),#officialtable th:nth-child(4){text-align:right}
 /* tables */
 #wrap,.wrapx,#toverall{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:0 var(--s3);box-shadow:var(--shadow)}
 #wrap{overflow-x:auto}
@@ -316,7 +327,7 @@ stroke-width:2.5;
 <h1>rg2-watch <span class="mut" id="ele"></span> <span class="mut" id="built"></span></h1>
 <div id="banner"></div>
 <div id="status"><div id="status-live"></div><div id="status-alerts"></div></div>
-<div id="tabs"><button id="tabforms" class="on">Forms</button><button id="tabres">Results (unofficial)</button></div>
+<div id="tabs"><button id="tabforms" class="on">Forms</button><button id="tabres">Results (unofficial)</button><button id="tabofficial">RIK official results</button></div>
 <div id="formsview">
 <div id="ctl">
 <input id="q" type="search" placeholder="search">
@@ -370,6 +381,17 @@ stroke-width:2.5;
 <h3>Flagged forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
 <h3 id="tcorhead" hidden>Corrections counted (RG-7 / operator-entered)</h3><ul id="tcor"></ul>
 <h3 id="tnoteshead" hidden>Notes (not flagged)</h3><ul id="tnotes"></ul>
+</div>
+<div id="officialview" hidden>
+<div id="officialhead"><div><h2 id="officialtitle">RIK official results</h2><p><span id="officialmeta">Official results have not been loaded yet.</span> <a id="officialsource" target="_blank" rel="noopener noreferrer" hidden>Извор: РИК</a></p></div><span id="officialbadge">Official RIK data · ЗВАНИЧНИ ПОДАЦИ РИК</span></div>
+<p id="officialnotice" class="warnbox" aria-live="polite">Waiting for the first official RIK snapshot.</p>
+<div id="officialsummary" hidden>
+<div class="officialmetric"><div class="k">Обрађена бирачка места</div><div class="v" id="officialstations">–</div><div class="s" id="officialcoverage"></div></div>
+<div class="officialmetric"><div class="k">Уписани бирачи</div><div class="v" id="officialregistered">–</div><div class="s">укупан број РИК</div></div>
+<div class="officialmetric"><div class="k">Изашли бирачи</div><div class="v" id="officialvoted">–</div><div class="s" id="officialturnout"></div></div>
+<div class="officialmetric"><div class="k">Важећи листићи</div><div class="v" id="officialvalid">–</div><div class="s" id="officialinvalid"></div></div>
+</div>
+<div class="wrapx"><table id="officialtable" hidden><thead><tr><th>Бр.</th><th>Изборна листа</th><th>Гласови</th><th>Удео</th></tr></thead><tbody id="officialbody"></tbody></table></div>
 </div>
 <script src="jquery.min.js"></script>
 <script src="dataTables.min.js"></script>
@@ -1629,14 +1651,60 @@ $("hview").addEventListener("input", () => { $("tview").value = $("hview").value
 initHero();
 if (new URLSearchParams(location.search).get("hero") === "1") setHero(true);
 
+let O = null;
+function renderOfficialResults(data) {
+  O = data;
+  $("officialtitle").textContent = data.title || "RIK official results";
+  $("officialmeta").textContent = "РИК стање: " + (data.rik_at || "–") + " · преузето: " + stamp(data.built);
+  try {
+    const source = new URL(data.source);
+    if (source.protocol === "https:" || source.protocol === "http:") {
+      $("officialsource").href = source.href; $("officialsource").hidden = false;
+    }
+  } catch (_) { $("officialsource").hidden = true; }
+  const age = (Date.now() - Date.parse(data.built)) / 1000;
+  $("officialnotice").hidden = age <= 180;
+  $("officialnotice").textContent = "Последњи успешно преузети званични подаци су старији од три минута.";
+  $("officialsummary").hidden = false; $("officialtable").hidden = false;
+  put("officialstations", num(data.stations.processed) + " / " + num(data.stations.total));
+  put("officialcoverage", pc(data.stations.total ? data.stations.processed / data.stations.total : null) + " бирачких места");
+  put("officialregistered", num(data.voters.registered));
+  put("officialvoted", num(data.voters.voted));
+  put("officialturnout", "излазност на обрађеним местима: " + pc(data.voters.turnout));
+  put("officialvalid", num(data.ballots.valid));
+  put("officialinvalid", "неважећи: " + num(data.ballots.invalid));
+  const body = $("officialbody"); body.replaceChildren();
+  for (const item of data.lists || []) {
+    const tr = document.createElement("tr");
+    for (const value of [item.no, item.name, num(item.votes), pc(item.share)]) {
+      const td = document.createElement("td"); td.textContent = String(value); tr.append(td);
+    }
+    body.append(tr);
+  }
+}
+function loadOfficialResults() {
+  if (!HTTP) return;
+  fetch("official-results.json?t=" + Date.now(), {cache: "no-store"})
+    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+    .then(renderOfficialResults, () => {
+      if (!O) {
+        $("officialnotice").hidden = false;
+        $("officialnotice").textContent = "Званични резултати РИК још нису доступни.";
+      }
+    });
+}
+
 function setTab(name) {
-  const res = name === "results";
-  $("formsview").hidden = res; $("resview").hidden = !res;
-  $("tabforms").classList.toggle("on", !res); $("tabres").classList.toggle("on", res);
+  const res = name === "results", official = name === "official";
+  $("formsview").hidden = res || official; $("resview").hidden = !res; $("officialview").hidden = !official;
+  $("tabforms").classList.toggle("on", !res && !official); $("tabres").classList.toggle("on", res);
+  $("tabofficial").classList.toggle("on", official);
   if (res && tmTable) { tmTable.columns.adjust(); teTable.columns.adjust(); }
+  if (official) loadOfficialResults();
 }
 $("tabforms").onclick = () => setTab("forms");
 $("tabres").onclick = () => setTab("results");
+$("tabofficial").onclick = () => setTab("official");
 $("tmode").addEventListener("input", () => { if (T) renderTally(); });
 $("tview").addEventListener("input", () => { writeHash(); if (T) renderTally(); });
 $("onlyclear").onclick = () => { onlyId = null; $("onlyid").hidden = true; redraw(); };
@@ -1726,4 +1794,5 @@ function loop() {
   setTimeout(loop, Math.max(5, D.interval || 10) * 1000);
 }
 setTimeout(loop, 10000);
+setInterval(loadOfficialResults, 60000);
 </script></body></html>

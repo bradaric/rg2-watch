@@ -168,6 +168,14 @@ def test_operator_page_uses_official_static_flag_background():
     assert "linear-gradient(to bottom,var(--flag-red)" not in html
 
 
+def test_operator_page_has_separate_official_rik_results_tab():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'id="tabofficial"' in html and "RIK official results" in html
+    assert 'id="officialview"' in html and "Official RIK data" in html
+    assert "official-results.json" in html and "function renderOfficialResults(" in html
+    assert "РИК" in html and "НЕЗВАНИЧНО" in html
+
+
 def test_json_is_ascii_even_with_lone_surrogate():
     from rg2watch.browse import _json
     blob = _json({"x": "a\ud800b\u2028</script>"})

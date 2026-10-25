@@ -42,3 +42,11 @@ and any SQLite migration with backup and restart recovery in mind. Test replacem
 same-URL changed content, bursts larger than the configured rate, retries, process restart, analysis and
 spending-cap pauses, cache deduplication, and unchanged tally/review behavior. Run a rehearsal against a
 fixture timeline before adopting it for production.
+
+## Official RIK results drill-down
+
+The first operator integration intentionally shows only RIK's national summary and party-list results.
+A later version may add the official region, municipality and polling-station hierarchy using RIK's
+undocumented `/get-regions/`, `/get-municipalities/`, `/get-election-stations/` and `/get_results/`
+filters. Keep this separate from the unofficial tally, cache requests, handle dependent-selector races,
+and retain the last successful response when RIK is unavailable or changes its response format.

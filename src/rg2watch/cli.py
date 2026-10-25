@@ -28,6 +28,7 @@ from .findings import findings_for
 from .models import Doc, Event, Finding
 from .names import MunicipalityError, resolve_municipalities
 from .notify import Notifier
+from .official_results import OfficialResultsClient, write_official_results
 from .operator_corrections import OperatorCorrections
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from .public_results import write_public_results
@@ -42,6 +43,7 @@ from .tally import build_tally, format_tally
 from .watcher import Watcher, filter_request_rate
 
 log = logging.getLogger("rg2watch.cli")
+OFFICIAL_RESULTS_EVERY_S = 60
 
 
 def _positive_int(text: str) -> int:
@@ -861,6 +863,7 @@ def _run_watch(args, cfg: Config) -> int:
         opinions: dict = {}  # evaluated second opinions, kept between builds
         stop_delivery = threading.Event()  # set after the pipeline stopped: its last findings still go out
         delivery = None
+        official_http = None
         server, threads = None, []
         code, finished, reached, started = 0, None, False, time.monotonic()
         if args.until_done:
@@ -881,6 +884,16 @@ def _run_watch(args, cfg: Config) -> int:
                 if url:
                     notifier.page_url = url
                     print(f"page: {url}", flush=True)
+                    election = store.get_election(parent)
+                    if election is not None:
+                        official_http = httpx.Client(
+                            headers={"User-Agent": USER_AGENT}, follow_redirects=True)
+                        official = OfficialResultsClient(
+                            election, official_http, cfg.request_timeout_s)
+                        official_path = _browse_path(cfg).parent / "official-results.json"
+                        threads.append(_background(
+                            "official-results", stop, OFFICIAL_RESULTS_EVERY_S,
+                            lambda: write_official_results(official_path, official.fetch())))
                 live = _live(watcher, pipeline, notifier, url)
                 threads.append(_background("status", stop, STATUS_EVERY_S, lambda: write_status(
                     store, _browse_path(cfg), parent, live(), _cache_dir(cfg)),
@@ -924,6 +937,8 @@ def _run_watch(args, cfg: Config) -> int:
             helpers_by = time.monotonic() + HELPER_JOIN_S  # one shared deadline for all helpers
             for t in threads:  # a build in flight should finish before the store is closed
                 t.join(max(0.0, helpers_by - time.monotonic()))
+            if official_http is not None:
+                official_http.close()
             if pipeline is not None:
                 pipeline.stop()
             stop_delivery.set()
