@@ -97,7 +97,7 @@ def test_public_results_hold_escalated_form_out_of_totals():
     assert data["overall"]["held"] == 1
     assert data["overall"]["totals"]["registered"] == 1000
     assert data["overall"]["totals"]["valid"] == 780
-    assert "Задржано због ескалације" in render_public_results(data)
+    assert "Задржано из резултата" in render_public_results(data)
 
 
 def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
@@ -169,6 +169,19 @@ assert.equal(els.chart.children[0].children[0].textContent,"Листа 10");
 assert.equal(els.chart.children[9].children[0].textContent,"Листа 1");
 assert(!els.chart.children.some(x=>x.children[0].textContent.startsWith("Остале")));
 assert.equal(els.footer.textContent,"НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а.");
+const original={counted:DATA.overall.counted,clean:DATA.overall.clean,held:DATA.overall.held,
+  flagged:DATA.overall.flagged,review:DATA.overall.review,vote_forms:DATA.overall.totals.vote_forms};
+Object.assign(DATA.overall,{counted:996,clean:843,held:13,flagged:151,
+  review:{ok:26,escalate:11,unsure:0,undecided:114}});
+DATA.overall.totals.vote_forms=983;render();
+assert.deepEqual(els["forms-sub"].textContent.split("\n"),[
+  "843 без уочених проблема",
+  "За проверу: 151 записник — 26 прихваћено · 11 ескалирано · 114 без одлуке",
+  "Задржано из резултата: 13 ескалираних записника — 11 из скупа за проверу · 2 додатно",
+]);
+Object.assign(DATA.overall,{counted:original.counted,clean:original.clean,held:original.held,
+  flagged:original.flagged,review:original.review});
+DATA.overall.totals.vote_forms=original.vote_forms;render();
 DATA.scope_note="unknown election type - set tally_scope";render();
 assert(els.warning.textContent.includes("Непозната врста избора"));
 assert(!els.warning.textContent.includes("unknown election type"));

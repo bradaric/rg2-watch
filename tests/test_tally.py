@@ -374,9 +374,9 @@ def test_hero_markup_labelled_and_safe():
     assert "#hs-valid-context{border-top:1px solid var(--line2);margin-top:.7em;padding-top:.7em;font-size:.9em}" in html
     assert "#hs-forms-primary,#hs-forms-context{white-space:pre-line}" in html
     assert "#hs-forms-context{border-top:1px solid var(--line2)" in html
-    assert 'return num(seen.size) + " за проверу: "' in html
+    assert '"За проверу: " + num(seen.size)' in html and 'serbianCount(seen.size, "записник"' in html
     assert "урачунато у резултат" in html
-    assert "Held by escalation" in html and "Задржано због ескалације" in html
+    assert "Held by escalation" in html and "Задржано из резултата" in html
     assert "Ван заједничког збира: " in html
     assert '"Неусаглашено: " + snum(gap)' in html
     assert "само са исправкама: " in html and "само оригинално: " in html
@@ -856,12 +856,14 @@ assert.equal(els["hv-formstot"].textContent, " / 15");
 assert.equal(els["hs-forms-primary"].textContent, "урачунато у резултат");
 assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
   "10 без уочених проблема",
-  "0 за проверу: 0 прихваћено",
+  "За проверу: 0 записника — 0 прихваћено",
   "Није урачунато: 3 записника — подаци по листама нису потпуни или усаглашени",
 ]);
 r.held = 1;
 renderHero();
-assert(els["hs-forms-context"].textContent.includes("Задржано због ескалације: 1 записник"));
+assert.equal(heldReviewSummary(13,11),
+  "Задржано из резултата: 13 ескалираних записника — 11 из скупа за проверу · 2 додатно");
+assert(els["hs-forms-context"].textContent.includes("Задржано из резултата: 1 ескалирани записник"));
 assert(els["hs-forms-context"].textContent.includes(
   "Није урачунато: 2 записника — подаци по листама нису потпуни или усаглашени"));
 r.held = 0;
@@ -882,7 +884,7 @@ assert.equal(els["hv-forms"].textContent, "10");
 assert.equal(els["hv-formstot"].textContent, " / 10");
 assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
   "10 без уочених проблема",
-  "0 за проверу: 0 прихваћено",
+  "За проверу: 0 записника — 0 прихваћено",
 ]);
 assert.equal(els["hs-valid-context"].textContent, "");
 assert(!els["hs-valid-context"].textContent.includes("У збиру:"));
@@ -896,7 +898,7 @@ assert.equal(els["hv-forms"].textContent, "4");
 assert.equal(els["hv-formstot"].textContent, " / 15");
 assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
   "3 без уочених проблема",
-  "0 за проверу: 0 прихваћено",
+  "За проверу: 0 записника — 0 прихваћено",
   "Није урачунато: 11 записника — подаци по листама нису потпуни или усаглашени",
 ]);
 els.tmode.value = "cl";
@@ -905,7 +907,7 @@ assert.equal(els["hv-forms"].textContent, "3");
 assert.equal(els["hv-formstot"].textContent, " / 8");
 assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
   "3 без уочених проблема",
-  "0 за проверу: 0 прихваћено",
+  "За проверу: 0 записника — 0 прихваћено",
   "Није урачунато: 5 записника — подаци по листама нису потпуни или усаглашени",
 ]);
 assert(!els.herofoot.children[0].includes("оригинални"));
@@ -921,11 +923,11 @@ els.tview.value = "corrected";
 els.tmode.value = "all";
 renderHero();
 assert(els["hs-forms-context"].textContent.includes(
-  "4 за проверу: 1 прихваћено · 1 ескалирано · 1 несигурно · 1 без одлуке"));
+  "За проверу: 4 записника — 1 прихваћено · 1 ескалирано · 1 несигурно · 1 без одлуке"));
 REV = {u1: {v: "unsure"}, u2: {v: "ok"}, u3: {v: "ok"}};
 renderHero();
 assert(els["hs-forms-context"].textContent.includes(
-  "4 за проверу: 2 прихваћено · 1 несигурно · 1 без одлуке"));
+  "За проверу: 4 записника — 2 прихваћено · 1 несигурно · 1 без одлуке"));
 
 D.rows = [];
 REV = null;
@@ -1179,14 +1181,14 @@ async function refreshCases() {
   submitReview({id, u: url}, "ok", "", null);
   assert.equal(heroPaints, 1, "submit paints the hero once before fetch settles");
   assert.equal(LOCAL[url].pending, true);
-  assert(els["hs-forms-context"].textContent.includes("1 за проверу: 1 прихваћено"));
+  assert(els["hs-forms-context"].textContent.includes("За проверу: 1 записник — 1 прихваћено"));
   assert(!els["hs-forms-context"].textContent.includes("0 без одлуке"));
 
   gate.reject(new Error("save failed"));
   await flushTurns();
   assert.equal(heroPaints, 2, "failed save paints the hero once more");
   assert.equal(url in LOCAL, false);
-  assert(els["hs-forms-context"].textContent.includes("1 за проверу: 0 прихваћено · 1 без одлуке"));
+  assert(els["hs-forms-context"].textContent.includes("За проверу: 1 записник — 0 прихваћено · 1 без одлуке"));
 
   table = null;
   const body = {[url]: {v: "ok"}};

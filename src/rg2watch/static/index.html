@@ -1455,7 +1455,18 @@ function flaggedReviewSummary(flagged) {
   if (counts.escalate) parts.push(num(counts.escalate) + " ескалирано");
   if (counts.unsure) parts.push(num(counts.unsure) + " несигурно");
   if (counts.undecided) parts.push(num(counts.undecided) + " без одлуке");
-  return num(seen.size) + " за проверу: " + parts.join(" · ");
+  return {text: "За проверу: " + num(seen.size) + " " +
+    serbianCount(seen.size, "записник", "записника", "записника") + " — " + parts.join(" · "),
+    escalate: counts.escalate};
+}
+function heldReviewSummary(held, escalatedAmongFlagged) {
+  const inReview = Math.min(held, escalatedAmongFlagged), extra = held - inReview;
+  let text = "Задржано из резултата: " + num(held) + " " +
+    serbianCount(held, "ескалирани записник", "ескалирана записника", "ескалираних записника");
+  if (inReview && extra) text += " — " + num(inReview) + " из скупа за проверу · " + num(extra) + " додатно";
+  else if (inReview) text += " — сви из скупа за проверу";
+  else if (extra) text += " — " + num(extra) + " додатно";
+  return text;
 }
 function ensureHeroSlots(count) {
   while (slots.length < count) {
@@ -1508,13 +1519,13 @@ function renderHero() {
   put("hv-sttot", r.stations ? " / " + num(r.stations) : "");
   put("hs-st", cover == null ? "број бирачких места није познат" : pc(cover) + " бирачких места");
   $("hp-st").style.width = (cover == null ? 0 : Math.min(100, cover * 100)) + "%";
+  const reviewSummary = flaggedReviewSummary(heroFlagged(raw));
   if (dg) {
     put("hv-forms", dnum(r.clean) + " / " + dnum(r.excluded));
     put("hv-formstot", "");
     put("hs-forms-primary", "промене броја: без уочених проблема / за проверу");
     const held = raw.held || 0;
-    put("hs-forms-context", held ? "Задржано због ескалације: " + num(held) + " " +
-      serbianCount(held, "записник", "записника", "записника") : "");
+    put("hs-forms-context", held ? heldReviewSummary(held, reviewSummary.escalate) : "");
   } else if (none) {
     put("hv-forms", "-");
     put("hv-formstot", "");
@@ -1528,9 +1539,8 @@ function renderHero() {
     put("hv-formstot", " / " + num(selected));
     put("hs-forms-primary", "урачунато у резултат");
     const formContext = [num(cleanContributing) + " без уочених проблема",
-      flaggedReviewSummary(heroFlagged(raw))];
-    if (held) formContext.push("Задржано због ескалације: " + num(held) + " " +
-      serbianCount(held, "записник", "записника", "записника"));
+      reviewSummary.text];
+    if (held) formContext.push(heldReviewSummary(held, reviewSummary.escalate));
     if (selected - t.vote_forms - held > 0) formContext.push("Није урачунато: " + num(selected - t.vote_forms - held) +
       " записника — подаци по листама нису потпуни или усаглашени");
     put("hs-forms-context", formContext.join("\n"));
