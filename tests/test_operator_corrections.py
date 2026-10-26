@@ -495,3 +495,37 @@ assert.equal(ocVoteSummary({{valid: 780, list_votes: [{{value: 400}}, {{value: n
     assert 'mk("strong", "List votes total")' in html
     assert 'total.id = "ocvotesum"' in html
     assert '$("ocvotesum").textContent = ocVoteSummary(values);' in html
+
+
+def test_correction_dialog_auto_appends_labeled_value_changes_to_reason():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function ocCorrectionSummary(")
+    summary = html[start:html.index("function ocProblem(", start)]
+    update_start = html.index("function updateCorrectionReason(")
+    update = html[update_start:html.index("function saveCorrectionValueDraft(", update_start)]
+    script = f"""
+const assert = require("assert");
+const OC_FIELDS = [["registered", "Registered"], ["valid", "Valid"]];
+{summary}
+const source = {{registered: 1000, valid: 780,
+  list_votes: [{{row: 1, value: 4}}, {{row: 2, value: 50}}, {{row: 3, value: 726}}]}};
+assert.equal(ocCorrectionSummary(source, source), "");
+const changed = {{...source, valid: 779,
+  list_votes: [{{row: 1, value: 0}}, {{row: 2, value: 5}}, {{row: 3, value: 774}}]}};
+const changeText = "(Valid: 780->779, List 1: 4->0, List 2: 50->5, List 3: 726->774)";
+assert.equal(ocCorrectionSummary(source, changed), changeText);
+let ocAutoReason = "";
+const ocState = {{snapshot: source}}, reason = {{value: "misread numbers"}};
+const $ = id => {{assert.equal(id, "ocreason"); return reason;}};
+{update}
+updateCorrectionReason(changed);
+assert.equal(reason.value, "misread numbers " + changeText);
+updateCorrectionReason(source);
+assert.equal(reason.value, "misread numbers");
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert "function saveCorrectionValueDraft(" in html
+    assert 'input.addEventListener("input", saveCorrectionValueDraft);' in html
+    assert "ocAutoReason" in html
+    assert 'if (ocAutoReason) reason.setSelectionRange(0, 0);' in html
