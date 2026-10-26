@@ -247,7 +247,8 @@ def test_public_page_aligns_chart_bars_and_values_in_shared_columns():
 
     html = render_public_results(build_public_results(s, config(), P))
 
-    assert "grid-template-columns:minmax(16rem,30%) minmax(8rem,1fr) 9rem" in html
+    assert "grid-template-columns:minmax(16rem,30%) minmax(8rem,1fr) 12rem" in html
+    assert ".value{font-variant-numeric:tabular-nums;white-space:nowrap" in html
     assert "@media(max-width:780px)" in html
     assert ".row{grid-template-columns:1fr auto}" in html
 

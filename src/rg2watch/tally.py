@@ -483,11 +483,13 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         unavailable = (f["ex"]["rec_bad"] or not f["rows"]
                        or sorted(f["ex"]["l"]) != f["rows"])
         status = "fail" if f["ex"]["arith"] else "unavailable" if unavailable else "ok"
+        inclusion = ({"included": False, "reason": "held by escalation"} if f["held"] else None)
         f["rec"] = {"status": status, "rules": f["ex"]["arith"],
                      "details": [f["ex"]["arith_details"][r] for r in f["ex"]["arith"]],
                      "gap": turnout_gap,
-                     "result": {"corrected": _result_inclusion(f["ex"], f["rows"]),
-                                "filed": _result_inclusion(as_filed(f["ex"]), f["rows"])}}
+                     "result": {"corrected": inclusion or _result_inclusion(f["ex"], f["rows"]),
+                                "filed": inclusion or _result_inclusion(
+                                    as_filed(f["ex"]), f["rows"])}}
         notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
     stations = {m: n for m, n in store.station_counts(parent).items()
                 if municipalities is None or m in municipalities}

@@ -82,14 +82,22 @@ def test_current_escalated_form_is_held_from_every_tally_view():
     assert overall["all"]["lists"] == [400, 380]
     assert overall["cl"] == overall["all"]
     assert [(row["no"], row["verdict"]) for row in result["held"]] == [("13", "escalate")]
+    held_rec = next(row for row in result["reconciliation"] if row["no"] == "13")
+    assert held_rec["result"] == {
+        "corrected": {"included": False, "reason": "held by escalation"},
+        "filed": {"included": False, "reason": "held by escalation"},
+    }
     text = format_tally(result)
     assert "held by escalation" in text and "1 held" in text
 
     s.set_review(held.url, "unsure")
-    released = tally(s)["overall"]
+    released_result = tally(s)
+    released = released_result["overall"]
     assert released["held"] == 0
     assert released["all"]["registered"] == 1500
     assert released["all"]["valid"] == 1170
+    released_rec = next(row for row in released_result["reconciliation"] if row["no"] == "13")
+    assert released_rec["result"]["corrected"] == {"included": True, "reason": None}
 
 
 def test_escalation_of_replaced_version_does_not_hold_current_form():
