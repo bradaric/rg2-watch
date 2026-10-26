@@ -126,6 +126,28 @@ def test_result_inclusion_analysis_status_filter_and_models_column_are_present()
     assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
 
 
+def test_common_review_filter_presets_preserve_scope_and_auto_refresh_setting():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<select id="preset">' in html
+    assert '<option value="review-filed">To review · not counted as filed · done</option>' in html
+    assert '<option value="review-v3">To review · V3 · done</option>' in html
+    start = html.index("const FILTER_PRESETS =")
+    code = html[start:html.index("// rule codes", start)]
+    script = f"""
+const assert = require("assert");
+{code}
+assert.deepEqual(presetControls("review-filed", {{e: "779676", m: "Alpha", auto: false}}),
+  {{e: "779676", m: "Alpha", auto: false, rv: "todo", ri: "filed", ast: "done"}});
+assert.deepEqual(presetControls("review-v3", {{e: "779676", m: "Alpha", auto: false}}),
+  {{e: "779676", m: "Alpha", auto: false, rv: "todo", ast: "done", rules: ["V3"]}});
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert 'setCtl(presetControls(name, {e: sel("e"), m: sel("m"), auto: $("auto").checked}));' in html
+    assert '$("preset").value = "";' in html
+
+
 def test_operator_page_uses_adaptive_navy_serbian_theme():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 

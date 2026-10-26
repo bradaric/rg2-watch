@@ -331,6 +331,7 @@ stroke-width:2.5;
 <div id="formsview">
 <div id="ctl">
 <input id="q" type="search" placeholder="search">
+<label>preset <select id="preset"><option value="">choose…</option><option value="review-filed">To review · not counted as filed · done</option><option value="review-v3">To review · V3 · done</option></select></label>
 <select id="m"></select><select id="e"></select><select id="mod"></select>
 <label>min severity <select id="sev"><option value="0">any</option><option value="1">LOW</option><option value="2">MEDIUM</option><option value="3">HIGH</option></select></label>
 <details id="rulesbox"><summary id="rulessum">rules: any</summary><div id="rules"></div></details>
@@ -580,6 +581,11 @@ function tickStatus() {
 let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
 const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "nc", "ri", "ast", "fl", "rp", "rm", "c7", "loc", "dis", "auto"];
+const FILTER_PRESETS = {
+  "review-filed": {rv: "todo", ri: "filed", ast: "done"},
+  "review-v3": {rv: "todo", ast: "done", rules: ["V3"]},
+};
+function presetControls(name, scope) { return {...scope, ...FILTER_PRESETS[name]}; }
 
 // rule codes carry their plain-language description (data.json "rules"): a hover title, a focus
 // tooltip, and aria-describedby pointing at the legend entry
@@ -1801,6 +1807,13 @@ let timer = 0;
 $("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(redraw, 200); });
 for (const id of FILTERS) if (id !== "q") $(id).addEventListener("input", redraw);
 $("rules").addEventListener("input", () => { rulesSummary(); redraw(); });
+$("preset").addEventListener("input", () => {
+  const name = $("preset").value;
+  if (!FILTER_PRESETS[name]) return;
+  setCtl(presetControls(name, {e: sel("e"), m: sel("m"), auto: $("auto").checked}));
+  $("preset").value = "";
+  redraw();
+});
 window.addEventListener("hashchange", () => { readHash(); if (table) table.draw(); if (T) renderTally(); });
 
 // ---- loading: fetch() over http, script re-injection from file:// ------------------------
