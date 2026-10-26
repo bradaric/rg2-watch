@@ -954,7 +954,6 @@ function ocProblem(values, reason) {
   if (values.invalid + values.valid !== values.ballots_in_box) return "Invalid plus valid must equal ballots in box.";
   if (values.list_votes.reduce((n, x) => n + x.value, 0) !== values.valid) return "List votes must sum to valid.";
   if (values.voted > values.registered) return "Voted cannot exceed registered.";
-  if (values.outside_voted > values.outside_confirmations) return "Outside voted cannot exceed confirmations.";
   if (!reason.trim()) return "A verification / correction reason is required.";
   return "";
 }
