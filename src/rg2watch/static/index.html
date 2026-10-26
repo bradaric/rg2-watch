@@ -65,13 +65,20 @@ button{cursor:pointer;padding:3px var(--s3);font-weight:550}
 button:hover,select:hover{border-color:var(--mut)}
 input[type=checkbox]{min-height:0;width:15px;height:15px;margin:0;accent-color:var(--accent);vertical-align:-2px}
 input[type=search]{width:15em}
-#ctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;margin-bottom:var(--s3);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
-#ctl>label{white-space:nowrap;display:inline-flex;align-items:center;gap:6px;color:var(--mut)}
-#ctl>label:has(>input[type=checkbox]){min-height:30px;padding:0 10px;border:1px solid var(--line2);border-radius:15px;color:var(--fg);cursor:pointer;user-select:none}
-#ctl>label:has(>input:checked){background:var(--accent-bg);border-color:var(--accent)}
+#ctl{margin-bottom:var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:visible}
+.presetbar,.filtergroup{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;padding:var(--s2) var(--s3)}
+.presetbar{background:var(--surface);border-bottom:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px 8px 0 0}
+.presetbar button{border-color:var(--accent);color:var(--accent);background:var(--panel);font-weight:700}
+.presetbar button:hover{background:var(--accent-bg)}
+#clearfilters{margin-left:auto;border-color:var(--line2);color:var(--mut);font-weight:600}
+.filtergroup+.filtergroup{border-top:1px solid var(--line)}
+.filtertitle{flex:0 0 8.5rem;color:var(--mut);font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase}
+.filtergroup>label{white-space:nowrap;display:inline-flex;align-items:center;gap:6px;color:var(--mut)}
+.filtergroup>label:has(>input[type=checkbox]){min-height:30px;padding:0 10px;border:1px solid var(--line2);border-radius:15px;color:var(--fg);cursor:pointer;user-select:none}
+.filtergroup>label:has(>input:checked){background:var(--accent-bg);border-color:var(--accent)}
 #ctl select:has(option:not(:first-child):checked){background:var(--accent-bg);border-color:var(--accent)}
-#ctl>label:has(>input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
-#ctl>label[hidden]{display:none}
+.filtergroup>label:has(>input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.filtergroup>label[hidden]{display:none}
 #rulesbox,#colbox{position:relative}
 #rulesbox summary,#colbox summary{cursor:pointer;min-height:30px;display:flex;align-items:center;padding:0 var(--s3);border:1px solid var(--line2);border-radius:var(--r);background:var(--panel);list-style:none;white-space:nowrap}
 #rulesbox summary::-webkit-details-marker,#colbox summary::-webkit-details-marker{display:none}
@@ -281,7 +288,10 @@ body.hero #herochart{margin:var(--s2) 0 0}
   .card.wide td{border:0;padding:0}
   .card.wide td:nth-child(5){flex-basis:100%}
   .card.wide td:empty{display:none}
-  #ctl{padding:var(--s2)}
+  .presetbar,.filtergroup{padding:var(--s2);align-items:stretch}
+  .filtertitle{flex-basis:100%}
+  .presetbar button{flex:1 1 14em}
+  #clearfilters{margin-left:0}
   input[type=search]{width:100%;flex:1 1 100%}
   table.dataTable td.fcol{min-width:16em}
   #rules,#cols{grid-template-columns:repeat(2,auto)}
@@ -330,18 +340,32 @@ stroke-width:2.5;
 <div id="tabs"><button id="tabforms" class="on">Forms</button><button id="tabres">Results (unofficial)</button><button id="tabofficial">RIK official results</button></div>
 <div id="formsview">
 <div id="ctl">
+<div id="presetbar" class="presetbar" role="group" aria-labelledby="presettitle">
+<span id="presettitle" class="filtertitle">Common workflows</span>
+<button type="button" data-preset="review-filed">Review excluded as filed</button>
+<button type="button" data-preset="review-v3">Review V3</button>
+<button id="clearfilters" type="button">Clear all filters</button>
+</div>
+<div id="filtergroups">
+<div id="scopefilters" class="filtergroup" role="group" aria-labelledby="scopetitle">
+<span id="scopetitle" class="filtertitle">Scope</span>
 <input id="q" type="search" placeholder="search">
-<label>preset <select id="preset"><option value="">choose…</option><option value="review-filed">To review · not counted as filed · done</option><option value="review-v3">To review · V3 · done</option></select></label>
 <select id="m"></select><select id="e"></select><select id="mod"></select>
+</div>
+<div id="reviewfilters" class="filtergroup" role="group" aria-labelledby="reviewtitle">
+<span id="reviewtitle" class="filtertitle">Review filters</span>
+<label>review <select id="rv"><option value="">any</option><option value="todo">to review</option><option value="escalate">escalated</option><option value="unsure">unsure</option><option value="ok">ok</option></select></label>
+<label>analysis status <select id="ast"><option value="">any</option><option value="pending">pending</option><option value="done">done</option><option value="failed">failed</option><option value="off">off</option></select></label>
+<label>result inclusion <select id="ri"><option value="">any</option><option value="corrected">not counted with corrections</option><option value="filed">not counted as filed</option></select></label>
+<label>number check <select id="nc"><option value="">any</option><option value="ok">reconcile</option><option value="fail">any failure</option><option value="gap">turnout gap</option><option value="A1">A1</option><option value="A2">A2</option><option value="A3">A3</option><option value="A4">A4</option><option value="A5">A5</option><option value="unavailable">unavailable</option></select></label>
 <label>min severity <select id="sev"><option value="0">any</option><option value="1">LOW</option><option value="2">MEDIUM</option><option value="3">HIGH</option></select></label>
 <details id="rulesbox"><summary id="rulessum">rules: any</summary><div id="rules"></div></details>
-<label>review <select id="rv"><option value="">any</option><option value="todo">to review</option><option value="escalate">escalated</option><option value="unsure">unsure</option><option value="ok">ok</option></select></label>
-<label>number check <select id="nc"><option value="">any</option><option value="ok">reconcile</option><option value="fail">any failure</option><option value="gap">turnout gap</option><option value="A1">A1</option><option value="A2">A2</option><option value="A3">A3</option><option value="A4">A4</option><option value="A5">A5</option><option value="unavailable">unavailable</option></select></label>
-<label>result inclusion <select id="ri"><option value="">any</option><option value="corrected">not counted with corrections</option><option value="filed">not counted as filed</option></select></label>
+</div>
+<div id="morefilters" class="filtergroup" role="group" aria-labelledby="moretitle">
+<span id="moretitle" class="filtertitle">More</span>
 <label><input type="checkbox" id="fl"> with findings</label>
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
-<label>analysis status <select id="ast"><option value="">any</option><option value="pending">pending</option><option value="done">done</option><option value="failed">failed</option><option value="off">off</option></select></label>
 <label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by RG-7</label>
 <label><input type="checkbox" id="loc"> has local copy</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
@@ -349,6 +373,8 @@ stroke-width:2.5;
 <details id="legendbox"><summary>rule codes</summary><dl id="legend"></dl></details>
 <label><input type="checkbox" id="auto" checked> auto-refresh</label>
 <button id="esccsv" type="button">Escalated CSV</button>
+</div>
+</div>
 </div>
 <div id="onlyid" class="warnbox" hidden><span id="onlytxt"></span> <button id="onlyclear">show all forms</button></div>
 <div id="wrap"><table id="forms" class="display" style="width:100%"></table></div>
@@ -1807,11 +1833,13 @@ let timer = 0;
 $("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(redraw, 200); });
 for (const id of FILTERS) if (id !== "q") $(id).addEventListener("input", redraw);
 $("rules").addEventListener("input", () => { rulesSummary(); redraw(); });
-$("preset").addEventListener("input", () => {
-  const name = $("preset").value;
-  if (!FILTER_PRESETS[name]) return;
+for (const button of document.querySelectorAll("[data-preset]")) button.addEventListener("click", () => {
+  const name = button.dataset.preset;
   setCtl(presetControls(name, {e: sel("e"), m: sel("m"), auto: $("auto").checked}));
-  $("preset").value = "";
+  redraw();
+});
+$("clearfilters").addEventListener("click", () => {
+  setCtl({auto: $("auto").checked});
   redraw();
 });
 window.addEventListener("hashchange", () => { readHash(); if (table) table.draw(); if (T) renderTally(); });

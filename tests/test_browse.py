@@ -129,9 +129,10 @@ def test_result_inclusion_analysis_status_filter_and_models_column_are_present()
 def test_common_review_filter_presets_preserve_scope_and_auto_refresh_setting():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
-    assert '<select id="preset">' in html
-    assert '<option value="review-filed">To review · not counted as filed · done</option>' in html
-    assert '<option value="review-v3">To review · V3 · done</option>' in html
+    assert '<div id="presetbar" class="presetbar"' in html
+    assert '<button type="button" data-preset="review-filed">Review excluded as filed</button>' in html
+    assert '<button type="button" data-preset="review-v3">Review V3</button>' in html
+    assert '<button id="clearfilters" type="button">Clear all filters</button>' in html
     start = html.index("const FILTER_PRESETS =")
     code = html[start:html.index("// rule codes", start)]
     script = f"""
@@ -145,7 +146,23 @@ assert.deepEqual(presetControls("review-v3", {{e: "779676", m: "Alpha", auto: fa
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert 'setCtl(presetControls(name, {e: sel("e"), m: sel("m"), auto: $("auto").checked}));' in html
-    assert '$("preset").value = "";' in html
+    assert 'document.querySelectorAll("[data-preset]")' in html
+    assert 'setCtl({auto: $("auto").checked});' in html
+
+
+def test_form_filters_are_visually_grouped_by_workflow():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<div id="filtergroups">' in html
+    assert '<div id="scopefilters" class="filtergroup"' in html
+    assert '<div id="reviewfilters" class="filtergroup"' in html
+    assert '<div id="morefilters" class="filtergroup"' in html
+    assert all(f'id="{group}title" class="filtertitle">{label}</span>' in html for group, label in (
+        ("preset", "Common workflows"), ("scope", "Scope"),
+        ("review", "Review filters"), ("more", "More")))
+    assert ".presetbar{" in html and ".filtergroup{" in html
+    assert "border-left:4px solid var(--accent)" in html
+    assert "@media (max-width:700px)" in html and ".filtertitle{flex-basis:100%}" in html
 
 
 def test_operator_page_uses_adaptive_navy_serbian_theme():
