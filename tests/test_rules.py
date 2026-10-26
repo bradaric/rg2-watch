@@ -124,7 +124,7 @@ CASES = [
     ("V1", lambda r: r["numbers"]["ballots_in_box"].update(mark="overwritten", value=834), "HIGH"),
     ("V1", lambda r: r["numbers"]["list_votes"][0]["field"].update(mark="digit_altered"), "HIGH"),
     ("V2", lambda r: r["numbers"]["registered"].update(mark="correction_fluid"), "MEDIUM"),
-    ("V3", lambda r: r["signatures"].update(president_signed=False), "HIGH"),
+    ("V3", lambda r: r["signatures"].update(president_signed=False), "MEDIUM"),
     ("V4", lambda r: r["signatures"].update(rows_name_without_signature=2), "MEDIUM"),
     ("V5", lambda r: r["signatures"].update(signatures_look_same_hand=True), "HIGH"),
     ("V6", lambda r: r["visual"].update(results_block_different_pen=True), "HIGH"),
@@ -410,6 +410,29 @@ def test_low_confidence_downgrades_high():
     assert found["V3"].severity == "MEDIUM"
     assert found["V3"].summary.endswith(" (low-confidence read)")
     assert found["V10"].severity == "LOW"
+
+
+def test_blank_committee_grid_is_high_and_not_mislabeled_as_unsigned_president():
+    def blank(r):
+        r["signatures"].update(rows_with_name=0, rows_with_signature=0,
+                               rows_name_without_signature=0, president_signed=False)
+
+    found = rules(mutated(blank))
+
+    assert found["V13"].severity == "HIGH"
+    assert found["V13"].summary == "committee section is completely blank (no names or signatures)"
+    assert "V3" not in found and "V4" not in found
+
+
+def test_absent_committee_section_remains_v9_not_blank_grid():
+    def absent(r):
+        r["header"]["sections_present"].remove("V")
+        r["signatures"].update(rows_total=0, rows_with_name=0, rows_with_signature=0,
+                               rows_name_without_signature=0, president_signed=False)
+
+    found = rules(mutated(absent))
+
+    assert "V9" in found and "V13" not in found
 
 
 def test_summary_truncated():

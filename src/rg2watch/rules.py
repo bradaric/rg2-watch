@@ -28,6 +28,7 @@ RULE_INFO = {
     "V10": "The scan is of poor quality or unreadable, so other checks are less reliable",
     "V11": "A yes/no item has both or neither answer circled (item 14 is not checked)",
     "V12": "Large correction: a number was changed by 5 or more and by 30% or more of the original",
+    "V13": "The committee section is present but completely blank, with no names or signatures",
     "P1": "The control sheet was not found or not signed (item 9 or 9.1 = NE)",
     "P2": "Voting was interrupted (item 7 = DA)",
     "P3": "The committee recorded remarks (item 14 = DA) or wrote text in item 15",
@@ -146,8 +147,13 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
         if not unreliable:
             add(rule, phys, text)
 
-    if not sig["president_signed"]:
-        add_phys("V3", "president did not sign")
+    blank_committee = ("V" in hdr["sections_present"] and sig["rows_with_name"] == 0
+                       and sig["rows_with_signature"] == 0)
+    if blank_committee:
+        if not unreliable:
+            add("V13", "HIGH", "committee section is completely blank (no names or signatures)")
+    elif not sig["president_signed"] and not unreliable:
+        add("V3", "MEDIUM", "president did not sign")
     if sig["rows_name_without_signature"] >= cfg.unsigned_rows_threshold:
         add("V4", "MEDIUM", f"{sig['rows_name_without_signature']} named committee rows without signature")
     if sig["signatures_look_same_hand"]:
