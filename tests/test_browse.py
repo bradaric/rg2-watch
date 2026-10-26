@@ -168,6 +168,14 @@ def test_operator_page_uses_official_static_flag_background():
     assert "linear-gradient(to bottom,var(--flag-red)" not in html
 
 
+def test_operator_page_has_separate_official_rik_results_tab():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'id="tabofficial"' in html and "RIK official results" in html
+    assert 'id="officialview"' in html and "Official RIK data" in html
+    assert "official-results.json" in html and "function renderOfficialResults(" in html
+    assert "РИК" in html and "НЕЗВАНИЧНО" in html
+
+
 def test_json_is_ascii_even_with_lone_surrogate():
     from rg2watch.browse import _json
     blob = _json({"x": "a\ud800b\u2028</script>"})
@@ -527,6 +535,27 @@ def test_watch_builds_in_background_at_start_and_status_is_written(tmp_path, mon
     assert len(pages) == 1 and status
     assert status[0][1][4] == tmp_path / "pdfs"
     assert pages[0][3] is None and pages[0][6] is False  # all elections' rows; the status thread owns status
+
+
+def test_background_update_can_be_woken_before_its_period():
+    stop, wake, ran = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+
+    def update():
+        calls.append(time.monotonic())
+        ran.set()
+
+    thread = cli._background("test-refresh", stop, 60, update, wake=wake)
+    try:
+        assert ran.wait(1)
+        ran.clear()
+        wake.set()
+        assert ran.wait(1)
+        assert len(calls) == 2
+    finally:
+        stop.set()
+        wake.set()
+        thread.join(1)
 
 
 def test_watch_browse_off_with_zero(tmp_path, monkeypatch):

@@ -51,6 +51,7 @@ def _public_row(row: dict, flagged: list[dict], verdicts: dict[int, str]) -> dic
         "generated_unknown_muni": bool(row.get("generated_unknown_muni")),
         "stations": row["stations"],
         "counted": row["counted"],
+        "held": row.get("held", 0),
         "clean": row["clean"],
         "flagged": len({item["id"] for item in flagged}),
         "review": _review_counts(flagged, verdicts),

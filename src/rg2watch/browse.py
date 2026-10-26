@@ -145,7 +145,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                 continue
             try:
                 state = service.state(item["url"])
-                corrections[item["url"]] = {k: state[k] for k in ("status", "reason", "at")}
+                corrections[item["url"]] = {
+                    k: state[k] for k in ("status", "reason", "at", "revision")}
             except Exception:
                 log.warning("operator correction state of %s could not be read", item["url"], exc_info=True)
     r7: dict[tuple, list[dict]] = {}  # (election, station_key, RG-2 type) -> its RG-7 decisions

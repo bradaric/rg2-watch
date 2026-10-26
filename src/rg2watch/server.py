@@ -18,7 +18,8 @@ log = logging.getLogger("rg2watch.server")
 # cross-origin <script src> could read their globals; over http the page fetch()es the .json files.
 FILES = {
     "index.html": "text/html; charset=utf-8", "status.json": "application/json",
-    "data.json": "application/json", "jquery.min.js": "text/javascript; charset=utf-8",
+    "data.json": "application/json", "official-results.json": "application/json",
+    "jquery.min.js": "text/javascript; charset=utf-8",
     "dataTables.min.js": "text/javascript; charset=utf-8",
     "dataTables.dataTables.min.css": "text/css; charset=utf-8"}
 PDF = re.compile(r"/pdfs/([0-9a-f]{64})\.pdf")
