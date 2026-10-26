@@ -1,6 +1,7 @@
 import http.client
 import json
 import sqlite3
+import subprocess
 
 import pytest
 
@@ -471,3 +472,26 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "rec-ok" in html and "rec-fail" in html and "rec-unavailable" in html
     assert 'data: "rec", title: "Numbers"' in html and "r.rec.rules.includes(nc)" in html
     assert 'nc === "gap"' in html and '"Gap " + snum(rec.gap)' in html
+
+
+def test_correction_dialog_sums_list_votes_and_reports_difference_from_valid():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function ocVoteSummary(")
+    summary = html[start:html.index("function ocProblem(", start)]
+    script = f"""
+const assert = require("assert");
+const num = n => String(n);
+{summary}
+assert.equal(ocVoteSummary({{valid: 780, list_votes: [{{value: 400}}, {{value: 380}}]}}),
+  "780 — matches Valid");
+assert.equal(ocVoteSummary({{valid: 780, list_votes: [{{value: 400}}, {{value: 379}}]}}),
+  "779 — 1 below Valid");
+assert.equal(ocVoteSummary({{valid: 780, list_votes: [{{value: 401}}, {{value: 381}}]}}),
+  "782 — 2 above Valid");
+assert.equal(ocVoteSummary({{valid: 780, list_votes: [{{value: 400}}, {{value: null}}]}}), "—");
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert 'mk("strong", "List votes total")' in html
+    assert 'total.id = "ocvotesum"' in html
+    assert '$("ocvotesum").textContent = ocVoteSummary(values);' in html

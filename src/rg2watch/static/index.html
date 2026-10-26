@@ -893,6 +893,15 @@ function ocReadSnapshot() {
   });
   return values;
 }
+function ocVoteSummary(values) {
+  const votes = values.list_votes.map(x => x.value);
+  if (!votes.length || votes.some(x => !Number.isSafeInteger(x) || x < 0)) return "—";
+  const total = votes.reduce((sum, value) => sum + value, 0);
+  if (!Number.isSafeInteger(values.valid) || values.valid < 0) return num(total) + " — enter Valid";
+  const difference = total - values.valid;
+  return num(total) + (difference === 0 ? " — matches Valid" :
+    " — " + num(Math.abs(difference)) + (difference < 0 ? " below Valid" : " above Valid"));
+}
 function ocProblem(values, reason) {
   const nums = [...OC_FIELDS.map(x => values[x[0]]), ...values.list_votes.map(x => x.value)];
   if (nums.some(x => !Number.isSafeInteger(x) || x < 0)) return "Every value must be a non-negative whole number.";
@@ -913,6 +922,7 @@ function saveCorrectionDraft() {
 }
 function refreshCorrectionValidation() {
   const reason = $("ocreason").value, values = ocReadSnapshot();
+  $("ocvotesum").textContent = ocVoteSummary(values);
   const problem = ocProblem(values, reason), msg = $("ocmsg");
   msg.textContent = problem || "Values reconcile and are ready to save.";
   msg.className = problem ? "ocerror" : "ocok";
@@ -951,6 +961,8 @@ function renderCorrectionEditor(state) {
     grid.append(mk("label", label), mk("span", sourceRows[row] == null ? "—" : num(sourceRows[row]), "mut"),
       ocInput(label, byRow[row], "data-oc-row", row));
   }
+  const total = mk("output", ocVoteSummary(start), "ocvotesum"); total.id = "ocvotesum";
+  grid.append(mk("strong", "List votes total"), mk("span", ocVoteSummary(state.snapshot), "mut"), total);
   const reasonLabel = mk("label", "Required reason", "ocreason"), reason = document.createElement("input");
   reason.id = "ocreason"; reason.maxLength = 500; reason.value = reasonValue;
   reason.setAttribute("aria-label", "Verification or correction reason"); reason.addEventListener("input", saveCorrectionDraft);
