@@ -75,11 +75,18 @@ def test_validate_full_snapshot_and_apply_it_without_mutating_model_report():
     ({"voted": 1001, "ballots_in_box": 1001, "valid": 981,
       "list_votes": [{"row": 1, "value": 500}, {"row": 2, "value": 481}]},
      "voted cannot exceed registered"),
-    ({"outside_voted": 6}, "outside voted cannot exceed confirmations"),
 ])
 def test_invalid_arithmetic_is_rejected(change, message):
     with pytest.raises(ValueError, match=message):
         validate_snapshot(snapshot(**change), [1, 2])
+
+
+def test_outside_vote_confirmation_mismatch_can_be_saved_for_review():
+    values = snapshot(outside_voted=6, outside_confirmations=5)
+
+    assert validate_snapshot(values, [1, 2]) == values
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "Outside voted cannot exceed confirmations." not in html
 
 
 @pytest.mark.parametrize("bad", [
@@ -330,7 +337,7 @@ def test_tally_uses_active_operator_snapshot_and_clears_corrected_numeric_alerts
 
 def test_operator_snapshot_does_not_clear_unrelated_high_alert_and_suspension_stops_application():
     report = clean_report()
-    report["signatures"]["president_signed"] = False
+    report["signatures"]["signatures_look_same_hand"] = True
     report["numbers"]["voted"].update(value=900, mark="crossed_out")
     report["numbers"]["ballots_in_box"].update(value=900)
     report["numbers"]["invalid"].update(value=120)
@@ -341,7 +348,7 @@ def test_operator_snapshot_does_not_clear_unrelated_high_alert_and_suspension_st
     active = build_tally(s, Config(model=MODEL, tally_scope={P: "national"}), P, MODEL)
     assert active["overall"]["all"]["voted"] == 800
     assert active["overall"]["clean"] == 0
-    assert active["excluded"][0]["why"] == ["HIGH alert: V3"]
+    assert active["excluded"][0]["why"] == ["HIGH alert: V5"]
 
     changed = clean_report()
     changed["numbers"]["registered"]["value"] = 1001

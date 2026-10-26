@@ -47,8 +47,6 @@ def validate_snapshot(snapshot: dict, expected_rows: list[int]) -> dict:
         raise ValueError("list votes must sum to valid")
     if snapshot["voted"] > snapshot["registered"]:
         raise ValueError("voted cannot exceed registered")
-    if snapshot["outside_voted"] > snapshot["outside_confirmations"]:
-        raise ValueError("outside voted cannot exceed confirmations")
     return copy.deepcopy(snapshot)
 
 
