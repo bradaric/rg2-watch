@@ -52,7 +52,7 @@ def station_location(municipality: str, station_no: str) -> dict[str, str] | Non
 def station_coordinates(municipality: str, station_no: str) -> dict[str, float | int] | None:
     """Cached source coordinates, before any display jitter. Confidence: 0 confident,
     1 unverified, 2 approximate. Missing locations are not represented as (0, 0).
-    This is independent of scan-analysis confidence and is not added to result exports.
+    This is independent of scan-analysis confidence and is not added to public result exports.
     """
     values = _data(COORDINATES)["municipalities"].get(_key(municipality), {}).get(str(station_no))
     if values is None or values[0] is None or values[1] is None:

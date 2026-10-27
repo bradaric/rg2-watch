@@ -284,6 +284,7 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .station summary{cursor:pointer;padding:var(--s2);list-style:none}
 .station summary::-webkit-details-marker{display:none}.station summary::before{content:"▸";color:var(--accent);font-weight:800}
 .station[open] summary::before{content:"▾"}.stationname{font-weight:750;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stationname.hasmap{position:relative;padding-right:28px;min-height:24px;line-height:24px}.stationmap{position:absolute;right:0;top:0;display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;font-size:14px;text-decoration:none;border-radius:4px}.stationmap:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .stationmetric,.stationshare,.stationmargin{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .stationwinner{display:flex;align-items:center;justify-content:center;font-weight:700}.stationwinner .no{flex:none;min-width:1.8em;padding:1px 5px;border-radius:4px;background:var(--fg);color:var(--panel);text-align:center}
 .stationshare{display:grid;gap:2px}.minibar{display:grid;grid-template-columns:1.2em minmax(2.5rem,1fr) 3.2em;gap:3px;align-items:center;height:8px;font-size:9px;line-height:8px}.minino{color:var(--mut);text-align:right}.minitrack{height:4px;background:var(--track);border-radius:2px;overflow:hidden}.minifill{display:block;height:100%;background:var(--bar);border-radius:2px}.minipct{text-align:right}
@@ -1894,6 +1895,22 @@ function renderStationChart(body, station, owner, viewName) {
     track.append(fill); row.append(label, track, value); body.append(row);
   }
 }
+function stationMapLink(station) {
+  const point = station.coordinates;
+  if (!point || !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude) ||
+      Math.abs(point.latitude) > 90 || Math.abs(point.longitude) > 180 ||
+      (point.latitude === 0 && point.longitude === 0)) return null;
+  const {latitude, longitude, location_confidence} = point,
+    url = `https://www.openstreetmap.org/?mlat=${latitude}&mlon=${longitude}#map=18/${latitude}/${longitude}`,
+    warning = location_confidence === 0 ? "" : location_confidence === 2 ? " · Приближна локација" : " · Непроверена локација",
+    globe = link("🌐", url);
+  globe.className = "stationmap";
+  globe.title = "Отвори локацију на OpenStreetMap" + warning + " · Извор: ИТ Блокада";
+  globe.ariaLabel = globe.title + " — " + station.m + ", БМ " + station.no;
+  globe.onclick = event => event.stopPropagation();
+  globe.onkeydown = event => event.stopPropagation();
+  return globe;
+}
 function renderStationResults() {
   const section = $("stationresults"), list = $("stationlist");
   if (!T) { stationKey = ""; section.hidden = true; list.replaceChildren(); $("stationmore").hidden = true; return; }
@@ -2009,8 +2026,11 @@ function renderStationResults() {
       statusEl.append(reviewEl);
     }
     statusEl.append(stationActionMenu(station, source));
-    summary.append(mk("span", (allScope ? municipalityName + " · " : "") + "БМ " + station.no +
+    const name = mk("span", (allScope ? municipalityName + " · " : "") + "БМ " + station.no +
       (station.settlement ? " · " + station.settlement : "") + (station.name ? " — " + station.name : ""), "stationname"),
+      mapLink = stationMapLink(station);
+    if (mapLink) { name.className += " hasmap"; name.append(mapLink); }
+    summary.append(name,
       mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric"),
       mk("span", valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid), "stationmetric"), winner,
       stationMiniBars(outcome, barCount, viewName === "diff"), stationMargin(outcome, viewName === "diff"), statusEl);

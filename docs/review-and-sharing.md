@@ -244,8 +244,12 @@ SHA-256 of the downloaded bundle and field order. `station_coordinates(municipal
 `rg2watch.station_locations` provides an offline lookup; it returns `None` for unknown stations or
 missing coordinates. Confidence ranks are `0` (source marks confident), `1` (unverified) and `2`
 (approximate), not scan-analysis confidence. These are the source coordinates, without display offsets
-used to separate overlapping map pins. Coordinates are not currently added to result exports or any map
-UI. Check election-specific station identities before using this snapshot for another election.
+used to separate overlapping map pins. Operator station-result rows include a small globe link to
+OpenStreetMap, opening in a new tab only when coordinates are available. Its tooltip credits ИТ Блокада
+and warns about unverified or approximate locations. No map library or background API request is used;
+the coordinates are sent to OpenStreetMap only when the operator follows the link. Public result
+exports do not load or include coordinates or map links. Check election-specific station identities
+before using this snapshot for another election.
 
 Scope: list totals only make sense where one ballot is used everywhere. RIK's election type 2
 (parliamentary) is `national`: list votes overall and per municipality, `"<parent>" = ["Name 1", ...]`.

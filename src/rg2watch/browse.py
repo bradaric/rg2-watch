@@ -14,6 +14,7 @@ from .operator_corrections import OperatorCorrections
 from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
 from .rules import RULE_INFO, change_text, decision_label, decision_sort_key, evaluate_report
 from .status import _rik_link, build_status, to_belgrade
+from .station_locations import station_coordinates
 from .store import Store, _doc
 from .tally import build_tally
 
@@ -201,6 +202,12 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     except Exception:
         log.exception("tally could not be built")
         tally = None
+    try:
+        for station in (tally or {}).get("station_results", []):
+            if coordinates := station_coordinates(station["m"], station["no"]):
+                station["coordinates"] = coordinates
+    except (OSError, ValueError, KeyError):
+        log.warning("operator station coordinates unavailable", exc_info=True)
     annulled = {x["id"]: {"rik": x["rik"]} for x in (tally or {}).get("annulled", [])}
     undetermined = {x["id"]: {"rik": x["rik"]} for x in (tally or {}).get("undetermined", [])}
     rec = {x["id"]: {k: x[k] for k in ("status", "rules", "details", "gap", "result")}
