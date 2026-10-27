@@ -57,6 +57,21 @@ def test_groups_versions_and_states(tmp_path):
     assert by_no["2"]["state"] == "removed"
 
 
+def test_form_rows_include_optional_domestic_and_foreign_settlement_labels(tmp_path):
+    s = store()
+    add(s, doc(BASE + "/extfile/domestic.pdf", muni="Градска општина Гроцка", no="7"))
+    add(s, doc(BASE + "/extfile/foreign.pdf", muni="Иностранство", no="79"))
+    add(s, doc(BASE + "/extfile/unknown.pdf", muni="Непостојећа општина", no="1"))
+    out = tmp_path / "index.html"
+
+    build_page(s, out, tmp_path / "pdfs")
+
+    by_muni = {row["muni"]: row for row in rows_of(out)}
+    assert by_muni["Градска општина Гроцка"]["settlement"] == "ВИНЧА"
+    assert by_muni["Иностранство"]["settlement"] == "ПАРИЗ · ФРАНЦУСКА"
+    assert "settlement" not in by_muni["Непостојећа општина"]
+
+
 def test_severity_order_and_rik_link_built_from_relative_url(tmp_path):
     s = store()
     d = doc("/extfile/a.pdf")
@@ -260,6 +275,24 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
     assert '.stationreview.hasnote:hover::after,.stationreview.hasnote:focus::after{display:block}' in html
     assert '.stationstatusmain.hasreason:hover::after,.stationstatusmain.hasreason:focus::after{display:block}' in html
     assert '.stationmarginfill{display:block;height:100%;background:var(--bar)' in html
+
+
+def test_forms_table_renders_settlement_on_a_small_separate_line():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "function stationCellHtml" in html
+    render = html[html.index("function stationCellHtml"):html.index("function optsOf")]
+    script = r'''
+const assert = require("assert");
+const esc = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+''' + render + r'''
+const shown = stationCellHtml({muni: "Иностранство", no: "79", name: "Амбасада", settlement: "ПАРИЗ · ФРАНЦУСКА"});
+assert.equal(shown, "Иностранство<br>BM 79 - Амбасада<span class=\"stationplace\">ПАРИЗ · ФРАНЦУСКА</span>");
+assert.equal(stationCellHtml({muni: "Unknown", no: "1", name: "School"}), "Unknown<br>BM 1 - School");
+assert(stationCellHtml({muni: "M", no: "1", name: "N", settlement: "<Paris>"}).includes("&lt;Paris&gt;"));
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert ".stationplace{display:block;color:var(--mut);font-size:12px" in html
 
 
 def test_current_escalation_note_is_available_from_forms_table_pill():

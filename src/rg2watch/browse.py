@@ -14,7 +14,7 @@ from .operator_corrections import OperatorCorrections
 from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
 from .rules import RULE_INFO, change_text, decision_label, decision_sort_key, evaluate_report
 from .status import _rik_link, build_status, to_belgrade
-from .station_locations import station_coordinates
+from .station_locations import station_coordinates, station_location
 from .store import Store, _doc
 from .tally import build_tally
 
@@ -179,6 +179,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         base = elections[par].base_url if par in elections else None
         row = _version(main, found, opinions, cache_dir, base, reviews, corrections, analysed_at,
                        arithmetic)
+        location = station_location(main["municipality"] or "", main["station_no"] or "")
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
             name=main["station_name"], label=main["label"], doc_type=main["doc_type"],
@@ -186,8 +187,9 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             state="removed" if not main["active"] else "replaced" if len(ds) > 1 else "current",
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),
             v=[_version(d, found, opinions, cache_dir, base, reviews, corrections, analysed_at,
-                        arithmetic)
-               for d in ds if d is not main])
+                         arithmetic)
+               for d in ds if d is not main],
+            **({"settlement": location["settlement"]} if location and location["settlement"] else {}))
         row["dis"] = _disagreement(row["ops"])
         row["r7"] = r7.get((par, main["station_key"], main["doc_type"]), []) if main["active"] else []
         # "to review": the active current version has stored findings and no verdict on its URL

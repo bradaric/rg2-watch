@@ -233,7 +233,8 @@ V4 signatures never flag); the reasons are listed, with a link to the form. List
 CSV download of the per-municipality table (cells starting with = + - @ are escaped); in municipal
 scope it is long format, one row per municipality and list with that municipality's totals.
 
-Operator and public station-result cards optionally enrich the RIK venue name with settlement data
+The operator forms table (on a small line below the venue) and operator/public station-result cards
+optionally enrich the RIK venue name with settlement data
 from a bundled snapshot of [ИТ Блокада's polling-place map](https://bm.itblokada.org/). The snapshot
 records its source revision and retrieval date, and matching uses municipality plus station number.
 For foreign stations whose source settlement is empty, a concise city and country label is derived
