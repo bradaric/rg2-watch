@@ -69,6 +69,8 @@ def test_classification_endpoint_is_guarded_and_exact(tmp_path):
         assert classification_post(server, {"url": "https://x/doc.pdf",
                                             "action": "confirm_rg2"}) == (200, {"ok": True})
         assert calls == [("https://x/doc.pdf", "confirm_rg2")]
+        assert classification_post(server, {"url": "https://x/doc.pdf",
+                                            "action": "quarantine_rg7"}) == (200, {"ok": True})
         assert classification_post(server, {"url": "https://x/doc.pdf", "action": "revoke"},
                                    "http://evil.example")[0] == 403
         assert classification_post(server, {"url": "https://x/doc.pdf", "action": "other"})[0] == 400

@@ -1212,21 +1212,28 @@ function rg7Badges(r) {
   return td;
 }
 function classificationLabel(c) {
-  return {quarantined_rg7: "Quarantined: likely mislabeled RG-7",
-    quarantined_other: "Quarantined: not an RG-2", pending: "Pending document classification",
-    confirmed_rg2: c.override ? "Operator confirmed as RG-2" : "Content confirmed as RG-2"}[c.status] || "Pending document classification";
+  return {quarantined_rg7: "quarantined: mislabeled RG-7",
+    quarantined_other: "quarantined: not an RG-2", pending: "classification pending",
+    confirmed_rg2: c.legacy ? "legacy analysis treated as RG-2" :
+      c.override ? "operator confirmed as RG-2" : "content confirmed as RG-2"}[c.status] || "classification pending";
 }
 function classificationBox(v, editable) {
   const c = v.classification;
-  if (!c || (c.status === "confirmed_rg2" && !c.override)) return document.createDocumentFragment();
+  const canQuarantine = c && c.legacy && !c.override_action;
+  if (!c || (c.status === "confirmed_rg2" && !c.override && !canQuarantine)) return document.createDocumentFragment();
   const box = mk("div", null, "sub"), label = mk("strong", classificationLabel(c));
   box.append(label, c.evidence ? ": " + c.evidence : "");
   if (!editable) return box;
-  const action = c.override ? "revoke" : "confirm_rg2";
-  const button = mk("button", c.override ? "Revoke RG-2 confirmation" : "Confirm as RG-2");
+  const action = c.override_action ? "revoke" : canQuarantine ? "quarantine_rg7" : "confirm_rg2";
+  const button = mk("button", c.override_action === "quarantine_rg7" ? "revoke RG-7 quarantine" :
+    c.override_action === "confirm_rg2" ? "revoke RG-2 confirmation" :
+    canQuarantine ? "mark as mislabeled RG-7" : "confirm as RG-2");
   button.type = "button";
   button.onclick = () => {
-    if (!confirm(action === "confirm_rg2" ? "Confirm this exact document as RG-2? This may change unofficial totals." : "Revoke this exact document's RG-2 confirmation?")) return;
+    const question = action === "confirm_rg2" ? "Confirm this exact document as RG-2? This may change unofficial totals." :
+      action === "quarantine_rg7" ? "Mark this exact document as a mislabeled RG-7 and exclude it from RG-2 selection?" :
+      "Revoke this exact document classification override?";
+    if (!confirm(question)) return;
     button.disabled = true;
     fetch("classification", {method: "POST", cache: "no-store",
       headers: {"Content-Type": "application/json", "X-RG2W": "1"},
@@ -1432,9 +1439,10 @@ const num = v => v == null ? "-" : nf.format(v);
 const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
 function documentStatusEl(r) {
   const box = mk("span");
-  box.append(mk("span", r.state), mk("br"), mk("span", "analysis " + r.ast));
-  const tallyLabel = {selected: "Counted round", superseded: "Superseded by repeat vote",
-    quarantined: "Excluded from round selection", pending: "Pending round selection"}[r.tally_state];
+  box.append(mk("span", r.state), mk("br"), mk("span", "analysis " + ({done: "complete", pending: "pending",
+    failed: "failed", retrying: "retrying", off: "off"}[r.ast] || r.ast)));
+  const tallyLabel = {selected: "selected for tally", superseded: "superseded by repeat vote",
+    quarantined: "excluded from tally selection", pending: "tally selection pending"}[r.tally_state];
   if (tallyLabel) box.append(mk("br"), mk("span", tallyLabel));
   if (r.classification && r.classification.status !== "confirmed_rg2")
     box.append(mk("br"), mk("span", classificationLabel(r.classification), "warn"));

@@ -152,12 +152,34 @@ def test_browse_exposes_quarantined_content_classification(tmp_path):
     (row,) = rows_of(out)
     assert row["classification"] == {
         "kind": "rg7", "evidence": "typed correction decision", "override": False,
-        "status": "quarantined_rg7",
+        "override_action": None, "legacy": False, "status": "quarantined_rg7",
     }
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "function classificationBox(" in html
     assert 'fetch("classification"' in html
-    assert "Confirm as RG-2" in html and "Revoke RG-2 confirmation" in html
+    assert "confirm as RG-2" in html and "revoke RG-2 confirmation" in html
+    assert "mark as mislabeled RG-7" in html
+
+
+def test_successful_legacy_analysis_displays_as_rg2_without_reanalysis(tmp_path):
+    s = store()
+    d = doc(BASE + "/e/legacy.pdf", no="1", dt=15)
+    add(s, d)
+    rep = clean_report()
+    rep.pop("document_classification")
+    model = "claude-sonnet-5-5"
+    s.save_analysis(d.url, AnalysisResult(rep, 0, 0, 0, model, "stop"), "v9", parent="adhoc")
+
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs", cfg=Config(model=model))
+
+    (row,) = rows_of(out)
+    assert row["classification"]["status"] == "confirmed_rg2"
+    assert row["classification"]["evidence"] == "successful legacy analysis"
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'selected: "selected for tally"' in html
+    assert 'pending: "classification pending"' in html
+    assert 'analysis " + ({done: "complete"' in html
 
 
 def test_result_inclusion_analysis_status_filter_and_models_column_are_present():

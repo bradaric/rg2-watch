@@ -213,6 +213,9 @@ corrected view; the as-filed view preserves the original RG-2 readings. RIK's of
 never fetched. An unanalysed or excluded selected legitimate repeat never falls back to an obsolete
 earlier result. A scan classified as RG-7, another document, or uncertain is quarantined instead of
 displacing a legitimate RG-2; an audited exact-URL operator confirmation can admit it as RG-2.
+A successful analysis from an older RG-2 prompt is treated as RG-2 without another model call.
+Known legacy misuploads can be marked **mislabeled RG-7** from the form details; this exact-URL,
+audited and reversible override excludes them from RG-2 selection.
 A form contributes to aggregates only when registered, voted, valid and invalid are
 readable, its expected list rows are complete, and those list votes sum to valid. Until corrected, an
 incomplete or unreconciled form contributes no registered, turnout, ballots, valid, invalid, outside

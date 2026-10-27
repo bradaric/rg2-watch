@@ -128,17 +128,20 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     arows = [a for a in store.browse_analyses(parent, PROMPT_VERSION)
              if a["prompt_version"].startswith("v")]
     report_json = store.analysis_reports([a["id"] for a in arows])
-    selected_model_analyses = [a for a in arows
-                               if a["model"] == model and a["prompt_version"] == PROMPT_VERSION]
+    selected_model_analyses = [a for a in arows if a["model"] == model]
     classification_reports = report_json
     classifications = {}
     for a in selected_model_analyses:
         try:
+            legacy = a["prompt_version"] != PROMPT_VERSION
             value = json.loads(classification_reports[a["id"]]).get("document_classification", {})
-            kind = value.get("kind")
+            kind = "rg2" if legacy else value.get("kind")
             if kind in ("rg2", "rg7", "other", "uncertain"):
                 classifications[a["document_id"]] = {
-                    "kind": kind, "evidence": str(value.get("evidence") or "")[:500]}
+                    "kind": kind,
+                    "evidence": ("successful legacy analysis" if legacy else
+                                 str(value.get("evidence") or "")[:500]),
+                    "legacy": legacy}
         except (KeyError, TypeError, ValueError, AttributeError):
             pass
     overrides = store.latest_classification_overrides(parent)
@@ -188,7 +191,9 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         if source["doc_type"] not in (10, 15, 16) or source["station_key"] is None:
             continue
         value = classifications.get(source["id"], {})
-        legitimate = (overrides.get(source["url"]) == "confirm_rg2" or value.get("kind") == "rg2")
+        override = overrides.get(source["url"])
+        legitimate = (override == "confirm_rg2" or
+                      (override != "quarantine_rg7" and value.get("kind") == "rg2"))
         if legitimate and (at := uploaded(source["uploaded_at"])):
             starts = round_starts.setdefault((source["parent"], source["station_key"]), {})
             starts[source["doc_type"]] = min(starts.get(source["doc_type"], at), at)
@@ -241,13 +246,18 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         for version in (row, *row["v"]):
             source = docs_by_url.get(version["u"])
             value = classifications.get(source["id"] if source is not None else None,
-                                        {"kind": "uncertain", "evidence": "classification pending"})
-            override = overrides.get(version["u"]) == "confirm_rg2"
-            kind = "rg2" if override else value["kind"]
+                                        {"kind": "uncertain", "evidence": "classification pending",
+                                         "legacy": False})
+            override_action = overrides.get(version["u"])
+            kind = ("rg2" if override_action == "confirm_rg2" else "rg7"
+                    if override_action == "quarantine_rg7" else value["kind"])
             status = {"rg2": "confirmed_rg2", "rg7": "quarantined_rg7",
                       "other": "quarantined_other", "uncertain": "pending"}[kind]
-            version["classification"] = {**value, "kind": kind, "override": override,
-                                           "status": status}
+            evidence = ("operator marked mislabeled RG-7" if override_action == "quarantine_rg7"
+                        else value["evidence"])
+            version["classification"] = {**value, "kind": kind, "evidence": evidence,
+                                           "override": override_action in ("confirm_rg2", "quarantine_rg7"),
+                                           "override_action": override_action, "status": status}
     try:
         tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
                             cache=None if cache is None else cache.setdefault("tally", {}),

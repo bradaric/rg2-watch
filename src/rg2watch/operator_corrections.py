@@ -138,17 +138,19 @@ class OperatorCorrections:
             round_docs = [d for d in self.store.browse_rows(row["parent"])[0]
                           if d["station_key"] == row["station_key"] and d["doc_type"] in (10, 15, 16)]
             round_analyses = [a for a in self.store.browse_analyses(row["parent"], PROMPT_VERSION)
-                              if a["model"] == self.model and a["prompt_version"] == PROMPT_VERSION]
+                              if a["model"] == self.model]
             round_by_doc = {a["document_id"]: a for a in round_analyses}
             round_reports = self.store.analysis_reports([a["id"] for a in round_analyses])
             overrides = self.store.latest_classification_overrides(row["parent"])
             for d in round_docs:
                 a = round_by_doc.get(d["id"])
                 confirmed = overrides.get(d["url"]) == "confirm_rg2"
+                if overrides.get(d["url"]) == "quarantine_rg7":
+                    continue
                 if not confirmed:
                     try:
-                        confirmed = (a is not None and
-                                     json.loads(round_reports[a["id"]])["document_classification"]["kind"] == "rg2")
+                        confirmed = (a is not None and (a["prompt_version"] != PROMPT_VERSION or
+                                     json.loads(round_reports[a["id"]])["document_classification"]["kind"] == "rg2"))
                     except (KeyError, TypeError, ValueError):
                         confirmed = False
                 if not confirmed:

@@ -240,8 +240,9 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "body is not JSON"})
         if not (isinstance(req, dict) and set(req) == {"url", "action"}
                 and isinstance(req["url"], str)
-                and req["action"] in ("confirm_rg2", "revoke")):
-            return self._json(400, {"error": "expected {url, action: confirm_rg2|revoke}"})
+                and req["action"] in ("confirm_rg2", "quarantine_rg7", "revoke")):
+            return self._json(
+                400, {"error": "expected {url, action: confirm_rg2|quarantine_rg7|revoke}"})
         try:
             result = self.server.classification_api(req["url"], req["action"])
         except ValueError as exc:
