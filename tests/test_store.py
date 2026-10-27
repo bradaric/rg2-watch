@@ -61,6 +61,9 @@ def test_classification_override_is_append_only_and_exact_url_scoped():
     revoked = s.add_classification_override(d.url, "revoke")
     assert revoked["id"] > confirmed["id"]
     assert s.latest_classification_overrides(P) == {d.url: "revoke"}
+    quarantined = s.add_classification_override(d.url, "quarantine_rg7")
+    assert quarantined["action"] == "quarantine_rg7"
+    assert s.latest_classification_overrides(P) == {d.url: "quarantine_rg7"}
     assert s.add_classification_override("https://x/missing.pdf", "confirm_rg2") is None
     other = doc("https://x/rg9.pdf", dt=9)
     s.apply_events(P, s.start_sweep(P, "rare"), [Event("added", other)])

@@ -20,7 +20,8 @@ are accepted only from the page itself - Host
 127.0.0.1/localhost on the server's port, `Sec-Fetch-Site: same-origin` (or no such header and an
 `Origin` equal to the server's), `Content-Type: application/json`, header `X-RG2W: 1` (a cross-site
 form or fetch cannot send it without a preflight, which is never answered), a bounded JSON body and
-an exact stored document URL. Classification accepts only confirm-as-RG-2 or revocation for a
+an exact stored document URL. Classification accepts only confirm-as-RG-2, quarantine-as-mislabeled-
+RG-7, or revocation for a
 RIK-listed RG-2 URL; review accepts verdict `ok`/`escalate`/`unsure` and a note of at most 500
 characters. Anything else is 403/400 and nothing is written.
 

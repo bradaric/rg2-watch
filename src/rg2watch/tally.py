@@ -382,11 +382,16 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     classification_overrides = store.latest_classification_overrides(parent)
 
     def content_kind(d) -> str | None:
-        if classification_overrides.get(d["url"]) == "confirm_rg2":
+        override = classification_overrides.get(d["url"])
+        if override == "confirm_rg2":
             return "rg2"
+        if override == "quarantine_rg7":
+            return "rg7"
         a = by_doc.get(d["id"], {}).get(model)
-        if a is None or a["prompt_version"] != PROMPT_VERSION:
+        if a is None:
             return None
+        if a["prompt_version"] != PROMPT_VERSION:
+            return "rg2"
         try:
             classification = json.loads(classification_reports[a["id"]]).get(
                 "document_classification", {})

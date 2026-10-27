@@ -61,7 +61,10 @@ Provide an operator action on an RG-7, `other`, or `uncertain` document to confi
 
 To use a quarantined document's correction manually, the operator opens numeric verification for the selected legitimate RG-2, enters a complete corrected snapshot, and records a reason referencing the mislabeled document's RIK link. The quarantined document itself remains unchanged and unapplied.
 
-Adding content classification changes the analysis schema and prompt version. Existing reports have no inferred classification and require reanalysis before classification-dependent behavior is available. Reanalysis can incur model API cost; ordinary analysis should not require an additional model request.
+Adding content classification changes the analysis schema and prompt version. A successful analysis
+stored under an older RG-2 prompt is treated as RG-2 without a paid reanalysis. An exact-URL audited
+override can quarantine a known legacy misupload as RG-7; revoking the override restores the legacy
+default. Missing analyses and malformed current-version classification remain pending.
 
 ## Operator and Public Presentation
 
@@ -86,7 +89,8 @@ Public results use the resulting selected-round totals and may identify the sour
 - First-round decisions never affect a selected repeat form, repeat decisions never affect a selected original form, and repeat decisions bound to an earlier repeat never affect a later one.
 - A classification override affects only its exact document URL.
 - Removing or replacing a document recomputes selection from the remaining active candidates.
-- Missing or malformed classification data fails to the pending-review state rather than being treated as a confirmed RG-2.
+- Missing analysis or malformed current-version classification fails to the pending-review state;
+  successful legacy RG-2 analyses use the documented RG-2 compatibility default.
 - Missing, equal, or malformed decision/round upload times fail to an unapplied ambiguous-decision state.
 
 ## Verification

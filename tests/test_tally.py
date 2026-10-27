@@ -526,6 +526,24 @@ def test_exact_url_override_can_confirm_and_revoke_quarantined_repeat():
     assert tally(s)["overall"]["all"]["registered"] == 1000
 
 
+def test_successful_legacy_repeat_is_rg2_unless_exact_url_is_quarantined():
+    s = store()
+    form(s, 12, clean_report())
+    repeat = doc(BASE + "/e/legacy-repeat-II.pdf", muni="Alpha", no="12", dt=15,
+                 up="2026-10-20T20:15")
+    add(s, repeat)
+    legacy = report(registered=nf(500), voted=nf(400), ballots_in_box=nf(400),
+                    invalid=nf(10), valid=nf(390),
+                    list_votes=[{"row": 1, "field": nf(300)}, {"row": 2, "field": nf(90)}])
+    legacy.pop("document_classification")
+    s.save_analysis(repeat.url, AnalysisResult(legacy, 0, 0, 0.0, M, "stop"), "v9", parent="adhoc")
+
+    assert tally(s)["overall"]["all"]["registered"] == 500
+
+    s.add_classification_override(repeat.url, "quarantine_rg7")
+    assert tally(s)["overall"]["all"]["registered"] == 1000
+
+
 def test_per_municipality_coverage_and_unknown_municipality():
     s = store()
     s.save_municipalities(P, {"1": "Alpha", "2": "Beta"})

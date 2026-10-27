@@ -133,11 +133,13 @@ def _doc(row) -> Doc:
                row["doc_type"], row["url"], row["uploaded_at"])
 
 
-def _selected_rg2_urls(rows) -> set[str]:
+def _selected_rg2_urls(rows, prompt_version: str) -> set[str]:
     eligible = []
     for row in rows:
         if row["class_override"] == "confirm_rg2":
             eligible.append(row)
+            continue
+        if row["class_override"] == "quarantine_rg7":
             continue
         if row["result_json"] is None:
             if row["doc_type"] == 6:
@@ -147,7 +149,8 @@ def _selected_rg2_urls(rows) -> set[str]:
             if json.loads(row["result_json"])["document_classification"]["kind"] == "rg2":
                 eligible.append(row)
         except (KeyError, TypeError, ValueError):
-            pass
+            if row["analysis_prompt_version"] != prompt_version:
+                eligible.append(row)
     ranks = {6: 0, 10: 1, 15: 2, 16: 3}
     groups = {}
     for row in eligible:
@@ -215,8 +218,8 @@ class Store:
             return self._db.execute(sql, args)
 
     def add_classification_override(self, url: str, action: str) -> sqlite3.Row | None:
-        if action not in ("confirm_rg2", "revoke"):
-            raise ValueError("classification action must be confirm_rg2 or revoke")
+        if action not in ("confirm_rg2", "quarantine_rg7", "revoke"):
+            raise ValueError("classification action must be confirm_rg2, quarantine_rg7 or revoke")
         with self._lock, self._db:
             doc = self._db.execute("SELECT id,doc_type FROM documents WHERE url=?", (url,)).fetchone()
             if doc is None:
@@ -244,28 +247,30 @@ class Store:
         """Highest legitimate active RG-2 round for a station, using current content classifications."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT d.*,a.result_json,(SELECT o.action FROM classification_overrides o "
+                "SELECT d.*,a.result_json,a.prompt_version AS analysis_prompt_version,"
+                "(SELECT o.action FROM classification_overrides o "
                 "WHERE o.url=d.url ORDER BY o.id DESC LIMIT 1) AS class_override "
                 "FROM documents d LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x "
-                "WHERE x.document_id=d.id AND x.model=? AND x.prompt_version=? AND x.status='done' "
-                "AND x.result_json IS NOT NULL ORDER BY x.id DESC LIMIT 1) "
+                "WHERE x.document_id=d.id AND x.model=? AND x.status='done' "
+                "AND x.result_json IS NOT NULL ORDER BY x.prompt_version IS ? DESC,x.id DESC LIMIT 1) "
                 "WHERE d.parent=? AND d.station_key=? AND d.active=1 AND d.doc_type IN (6,10,15,16)",
                 (model, prompt_version, parent, station_key)).fetchall()
-        selected = _selected_rg2_urls(rows)
+        selected = _selected_rg2_urls(rows, prompt_version)
         return next(iter(selected), None)
 
     def selected_rg2_urls(self, parent: str, model: str, prompt_version: str) -> set[str]:
         """Selected legitimate active RG-2 URL for every station in an election."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT d.*,a.result_json,(SELECT o.action FROM classification_overrides o "
+                "SELECT d.*,a.result_json,a.prompt_version AS analysis_prompt_version,"
+                "(SELECT o.action FROM classification_overrides o "
                 "WHERE o.url=d.url ORDER BY o.id DESC LIMIT 1) AS class_override "
                 "FROM documents d LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x "
-                "WHERE x.document_id=d.id AND x.model=? AND x.prompt_version=? AND x.status='done' "
-                "AND x.result_json IS NOT NULL ORDER BY x.id DESC LIMIT 1) "
+                "WHERE x.document_id=d.id AND x.model=? AND x.status='done' "
+                "AND x.result_json IS NOT NULL ORDER BY x.prompt_version IS ? DESC,x.id DESC LIMIT 1) "
                 "WHERE d.parent=? AND d.active=1 AND d.doc_type IN (6,10,15,16)",
                 (model, prompt_version, parent)).fetchall()
-        return _selected_rg2_urls(rows)
+        return _selected_rg2_urls(rows, prompt_version)
 
     def upsert_election(self, e: Election) -> None:
         self._write(
