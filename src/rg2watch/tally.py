@@ -234,13 +234,16 @@ def reasons(ex: dict, dis: list[dict], rows: list[int]) -> list[str]:
 
 def _acc(nlists: int) -> dict:
     return {**{k: 0 for k in COUNTED}, "vote_forms": 0, "withheld_valid": 0,
-            "lists": [0] * nlists, "lv": 0, "tv": 0, "tr": 0}
+            "lists": [0] * nlists, "lv": 0, "lb": 0, "lb_complete": True,
+            "tv": 0, "tr": 0}
 
 
 def _contrib(ex: dict, rows: list[int]) -> dict:
     """What one form adds to a totals block, by term. Every term is only counted when all its numbers
     are known, so ratios share a denominator: registered and voted ("rv") come from forms with both,
-    list votes plus valid ("lists") from forms with every list row (of the expected set) and valid."""
+    list votes, valid, and ballots in the box ("lists") from forms with every list row (of the
+    expected set) and valid. A missing ballots-in-box value makes that cohort's share denominator
+    unavailable rather than silently narrowing the cohort."""
     n = ex["n"]
     c = {k: n[k] for k in ("ballots_in_box", "outside_voted") if n[k] is not None}
     if n["voted"] is not None and n["registered"] is not None:
@@ -250,7 +253,7 @@ def _contrib(ex: dict, rows: list[int]) -> dict:
                 and n["valid"] is not None and sum(vals) == n["valid"])
     if eligible:
         c["valid"] = n["valid"]
-        c["lists"] = (vals, n["valid"])
+        c["lists"] = (vals, n["valid"], n["ballots_in_box"])
         c["vote_forms"] = 1
         if n["invalid"] is not None:
             c["invalid"] = n["invalid"]
@@ -291,6 +294,10 @@ def _put(acc: dict, c: dict, terms=None) -> None:
         elif t == "lists":
             acc["lists"] = [a + x for a, x in zip(acc["lists"], v[0])]
             acc["lv"] += v[1]
+            if v[2] is None:
+                acc["lb_complete"] = False
+            else:
+                acc["lb"] += v[2]
         else:
             acc[t] += v
 
@@ -303,6 +310,7 @@ def _tot(acc: dict) -> dict:
     return {**{k: acc[k] for k in COUNTED},
             **{k: acc[k] for k in ("vote_forms", "withheld_valid")},
             "lists": acc["lists"], "lists_valid": acc["lv"],
+            "lists_ballots_in_box": acc["lb"] if acc["lb_complete"] else None,
             "turnout": acc["voted"] / acc["registered"] if acc["registered"] else None}
 
 
@@ -572,9 +580,10 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             row.update({"nlists": 0, "names": [], "fallback_name_indices": [],
                         "names_note": UNKNOWN_MUNI_NOTE})
             for key in acc:
-                del row[key]["lists"], row[key]["lists_valid"]
+                del row[key]["lists"], row[key]["lists_valid"], row[key]["lists_ballots_in_box"]
             for p in row["pair"].values():
-                del p["c"]["lists"], p["c"]["lists_valid"], p["f"]["lists"], p["f"]["lists_valid"]
+                del p["c"]["lists"], p["c"]["lists_valid"], p["c"]["lists_ballots_in_box"]
+                del p["f"]["lists"], p["f"]["lists_valid"], p["f"]["lists_ballots_in_box"]
         elif not national:
             row.update(ballot(name, len(mrows)) if mine else
                        {"nlists": 0, "names": [], "fallback_name_indices": [], "names_note": None})
@@ -590,9 +599,10 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
               "pair": {k: _pair_tot(p) for k, p in opair.items()}}
     if not national:
         for key in overall:
-            del total[key]["lists"], total[key]["lists_valid"]
+            del total[key]["lists"], total[key]["lists_valid"], total[key]["lists_ballots_in_box"]
         for p in total["pair"].values():
-            del p["c"]["lists"], p["c"]["lists_valid"], p["f"]["lists"], p["f"]["lists_valid"]
+            del p["c"]["lists"], p["c"]["lists_valid"], p["c"]["lists_ballots_in_box"]
+            del p["f"]["lists"], p["f"]["lists_valid"], p["f"]["lists_ballots_in_box"]
     total["excluded"] = total["counted"] - total["clean"]
     total["fexcluded"] = total["counted"] - total["fclean"]
     # top-level nlists/names/names_note describe the national ballot; in municipal scope they are
@@ -653,6 +663,9 @@ def _delta(t: dict, f: dict) -> dict:
     if "lists" in t:
         out["lists"] = [a - b for a, b in zip(t["lists"], f["lists"])]
         out["lists_valid"] = t["lists_valid"] - f["lists_valid"]
+        out["lists_ballots_in_box"] = (None if t["lists_ballots_in_box"] is None
+                                         or f["lists_ballots_in_box"] is None else
+                                         t["lists_ballots_in_box"] - f["lists_ballots_in_box"])
     return out
 
 
@@ -675,7 +688,7 @@ def _list_table(names: list[str], rows: list[dict], key: str, diff: bool = False
     if diff:
         body = [[r["m"], *(_sgn(v) for v in r[key]["lists"])] for r in rows]
     else:
-        body = [[r["m"], *(f"{v:,} ({_pct(v / r[key]['lists_valid'] if r[key]['lists_valid'] else None)})"
+        body = [[r["m"], *(f"{v:,} ({_pct(v / r[key]['lists_ballots_in_box'] if r[key]['lists_ballots_in_box'] else None)})"
                            for v in r[key]["lists"])] for r in rows]
     return _table(["municipality", *names], body)
 
@@ -717,7 +730,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
     out += _table(head, body)
     if t["scope"] == "national":
         if t["nlists"]:
-            out += ["", "votes per list (share of reconciled valid votes)"]
+            out += ["", "votes per list (share of ballots in the box for reconciled vote forms)"]
             out += _list_table(t["names"], rows, key, diff)
         if t["names_note"]:
             out += ["", "warning: " + t["names_note"]]
@@ -726,7 +739,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
             out += ["", "warning: " + t["scope_note"]]
         for r in t["munis"]:
             if r["nlists"]:
-                out += ["", f"{r['m']}: votes per list (share of reconciled valid votes)"]
+                out += ["", f"{r['m']}: votes per list (share of ballots in the box for reconciled vote forms)"]
                 out += _list_table(r["names"], [{**r, key: _delta(r["pair"][key]["c"], r["pair"][key]["f"])} if diff else r],
                                    key, diff)
                 if r["names_note"]:

@@ -1384,7 +1384,7 @@ function deltaOf(a, b) {  // totals block: corrected minus as filed (turnout and
   o.turnout = a.turnout == null || b.turnout == null ? null : a.turnout - b.turnout;
   if (a.lists) {
     o.lists = a.lists.map((v, i) => v - b.lists[i]);
-    o.sh = a.lists.map((v, i) => { const x = ratio(v, a.lists_valid), y = ratio(b.lists[i], b.lists_valid); return x == null || y == null ? null : x - y; });
+    o.sh = a.lists.map((v, i) => { const x = ratio(v, a.lists_ballots_in_box), y = ratio(b.lists[i], b.lists_ballots_in_box); return x == null || y == null ? null : x - y; });
   }
   return o;
 }
@@ -1429,7 +1429,7 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come
     ["Unreconciled turnout gap (signed)", gap, snum]);
   if (T.scope === "municipal" || !T.names.length)
     c.push(["List totals availability", listAvailability, s => s]);
-  const share = (r, i) => dg ? t(r).sh[i] : ratio(t(r).lists[i], t(r).lists_valid);
+  const share = (r, i) => dg ? t(r).sh[i] : ratio(t(r).lists[i], t(r).lists_ballots_in_box);
   T.names.forEach((nm, i) => {
     c.push([(i + 1) + " \u00b7 " + nm + " votes", r => t(r).lists[i], n]);
     c.push([(i + 1) + " \u00b7 " + nm + (dg ? " % (pp)" : " %"), r => share(r, i), p, r => share(r, i) == null ? "" : (100 * share(r, i)).toFixed(1)]);
@@ -1455,7 +1455,7 @@ function tallyCsv() {
     const shared = cols.slice(1), out = [];
     for (const r of rows) {
       const t = r[mode], tot = shared.map(c => csvCell(c.c(r)));
-      const sh = i => NV() === "diff" ? t.sh[i] : ratio(t.lists[i], t.lists_valid);
+      const sh = i => NV() === "diff" ? t.sh[i] : ratio(t.lists[i], t.lists_ballots_in_box);
       const unavailable = listAvailability(r);
       const ls = r.names && r.names.length ? r.names.map((n, i) => [i + 1, n, t.lists[i],
         sh(i) == null ? "" : (100 * sh(i)).toFixed(1)]) : [["", unavailable, "", ""]];
@@ -1484,7 +1484,7 @@ function listsOf(r) {  // municipal scope: this municipality's own lists, in bal
   tbl.append(hr);
   r.names.forEach((n, i) => {
     const tr = mk("tr");
-    tr.append(mk("td", String(i + 1), "no"), mk("td", n), mk("td", dg ? dnum(t.lists[i]) : num(t.lists[i])), mk("td", dg ? dpp(t.sh[i]) : pc(ratio(t.lists[i], t.lists_valid))));
+    tr.append(mk("td", String(i + 1), "no"), mk("td", n), mk("td", dg ? dnum(t.lists[i]) : num(t.lists[i])), mk("td", dg ? dpp(t.sh[i]) : pc(ratio(t.lists[i], t.lists_ballots_in_box))));
     tbl.append(tr);
   });
   box.append(tbl);
@@ -1712,8 +1712,9 @@ function stationOutcome(station, owner, viewName) {
   const rows = names.map((name, i) => {
     const c = corrected.lists[i], f = filed.lists[i];
     const value = diff ? c == null || f == null ? null : c - f : chosen.lists[i];
-    const share = diff ? c == null || f == null || !corrected.valid || !filed.valid ? null
-      : c / corrected.valid - f / filed.valid : value == null || !chosen.valid ? null : value / chosen.valid;
+    const share = diff ? c == null || f == null || !corrected.ballots_in_box || !filed.ballots_in_box ? null
+      : c / corrected.ballots_in_box - f / filed.ballots_in_box
+      : value == null || !chosen.ballots_in_box ? null : value / chosen.ballots_in_box;
     return {name, no: i + 1, value, share};
   }).filter(row => row.value != null);
   if (!rows.length) return {name: "—", no: null, share: null, margin: null, marginShare: null, value: null, leaders: []};
@@ -1723,10 +1724,11 @@ function stationOutcome(station, owner, viewName) {
   }
   rows.sort((a, b) => b.value - a.value || a.no - b.no);
   const top = rows[0], second = rows[1], tied = second && second.value === top.value;
-  if (tied) return {name: "Нерешено", no: null, share: top.share, margin: 0, marginShare: 0,
+  if (tied) return {name: "Нерешено", no: null, share: top.share, margin: 0,
+    marginShare: chosen.ballots_in_box ? 0 : null,
     value: top.value, leaders: rows};
   const margin = top.value - (second ? second.value : 0);
-  return {...top, margin, marginShare: chosen.valid ? margin / chosen.valid : null, leaders: rows};
+  return {...top, margin, marginShare: chosen.ballots_in_box ? margin / chosen.ballots_in_box : null, leaders: rows};
 }
 function stationMiniBars(outcome, count, diff) {
   const cell = mk("span", null, "stationshare" + (count === 1 ? " single" : "")), shown = outcome.leaders.slice(0, count);
@@ -1747,7 +1749,7 @@ function stationMargin(outcome, diff) {
   if (outcome.margin == null) return mk("span", "—", "stationmargin");
   const cell = mk("span", null, "stationmargin visual"), track = mk("span", null, "stationmargintrack"),
     fill = mk("span", null, "stationmarginfill"), values = mk("span", null, "stationmarginvalues"),
-    pp = mk("span", outcome.margin === 0 ? "0.0 п. п." : dpp(outcome.marginShare) + " п. п.", "stationmarginpp"),
+    pp = mk("span", outcome.marginShare == null ? "—" : outcome.margin === 0 ? "0.0 п. п." : dpp(outcome.marginShare) + " п. п.", "stationmarginpp"),
     votes = mk("span", outcome.margin === 0 ? "Нерешено" : "+" + num(outcome.margin), "stationmarginvotes");
   fill.style.width = Math.min(100, Math.abs(outcome.marginShare || 0) * 100) + "%";
   if (outcome.margin > 0) fill.style.minWidth = "2px";
@@ -1839,8 +1841,9 @@ function renderStationChart(body, station, owner, viewName) {
     const c = corrected.lists[i], f = filed.lists[i];
     const value = diff ? c == null || f == null ? null : c - f : chosen.lists[i];
     const share = diff
-      ? c == null || f == null || !corrected.valid || !filed.valid ? null : c / corrected.valid - f / filed.valid
-      : value == null || !chosen.valid ? null : value / chosen.valid;
+      ? c == null || f == null || !corrected.ballots_in_box || !filed.ballots_in_box ? null
+        : c / corrected.ballots_in_box - f / filed.ballots_in_box
+      : value == null || !chosen.ballots_in_box ? null : value / chosen.ballots_in_box;
     return {name, no: i + 1, value, share};
   }).sort((a, b) => diff ? Math.abs(b.value || 0) - Math.abs(a.value || 0) || a.no - b.no
     : (b.value || 0) - (a.value || 0) || a.no - b.no);
@@ -2081,7 +2084,7 @@ function renderHero() {
         "; неупарене ставке су изостављене (можда се променила читљивост, избор записника без уочених проблема или прихватљивост усаглашених гласова)." : "",
       muniScope && allMunis ? "Локални избори — листе се разликују по општинама; изаберите општину за резултате по листама." : "",
       cover != null && cover < 0.1 ? "Рани резултати — обрађено је мало бирачких места; проценти се могу знатно променити." : ""].filter(Boolean).join(" ");
-  const noChartLists = !t.lists || (dg ? !t.sh || t.sh.every(x => x == null) : !t.lists_valid);
+  const noChartLists = !t.lists || (!dg && !t.vote_forms) || (dg && (!t.sh || t.sh.every(x => x == null)));
   const rows = none || (muniScope && allMunis) || noChartLists ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
     .sort((a, b) => dg ? Math.abs(b.v) - Math.abs(a.v) || a.i - b.i : b.v - a.v || a.i - b.i);
   const shown = rows;
@@ -2091,12 +2094,12 @@ function renderHero() {
     const e = shown[k];
     s.row.hidden = !e;
     if (!e) return;
-    const share = dg ? e.s : e.v / t.lists_valid;
+    const share = dg ? e.s : ratio(e.v, t.lists_ballots_in_box);
     s.no.textContent = e.i < 0 ? "" : String(e.i + 1);  // ballot number = the list row on the form
     s.no.hidden = e.i < 0;
     s.nm.textContent = e.n; s.row.title = e.n;
     resultValue(s.val, e.v, share, dg);
-    s.fill.style.width = (dg ? Math.abs(e.v) / maxAbs * 100 : Math.min(100, share * 100)) + "%";
+    s.fill.style.width = (dg || share == null ? Math.abs(e.v) / maxAbs * 100 : Math.min(100, share * 100)) + "%";
     s.fill.style.backgroundColor = RESULT_BAR_COLOR;
   });
   renderStationResults();

@@ -68,12 +68,12 @@ function make(tag,text,className){const el=document.createElement(tag);if(text!=
 const MUNICIPALITY_BY_NAME=new Map(DATA.municipalities.map(row=>[row.m,row]));
 function stationNames(station){const configured=namesFor(MUNICIPALITY_BY_NAME.get(station.m));return station.lists.map((_,i)=>configured[i]||"Листа "+(i+1))}
 function stationOutcome(station){
-  const names=stationNames(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!station.valid?null:value/station.valid})).filter(row=>row.value!=null);
+  const names=stationNames(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!station.ballots_in_box?null:value/station.ballots_in_box})).filter(row=>row.value!=null);
   rows.sort((a,b)=>b.value-a.value||a.no-b.no);
   if(!rows.length)return {name:"—",no:null,share:null,margin:null,marginShare:null,leaders:[]};
   const second=rows[1],tied=second&&rows[0].value===second.value;
-  if(tied)return {name:"Нерешено",no:null,share:rows[0].share,margin:0,marginShare:0,leaders:rows};
-  const margin=rows[0].value-(second?second.value:0),marginShare=!station.valid?null:margin/station.valid;
+  if(tied)return {name:"Нерешено",no:null,share:rows[0].share,margin:0,marginShare:station.ballots_in_box?0:null,leaders:rows};
+  const margin=rows[0].value-(second?second.value:0),marginShare=!station.ballots_in_box?null:margin/station.ballots_in_box;
   return {...rows[0],margin,marginShare,leaders:rows};
 }
 function stationTurnout(station){return station.registered?station.voted/station.registered:null}
@@ -86,11 +86,11 @@ function stationMargin(outcome){
   if(outcome.margin==null)return make("span","–","station-margin");
   const cell=make("span",null,"station-margin"),track=make("span",null,"track"),fill=make("span",null,"fill"),values=make("span",null,"station-margin-values");
   fill.style.width=Math.min(100,Math.abs(outcome.marginShare||0)*100)+"%";if(outcome.margin>0)fill.style.minWidth="2px";track.append(fill);
-  values.append(make("b",outcome.margin===0?"0,0 п. п.":"+"+(Math.abs(outcome.marginShare)*100).toLocaleString("sr-RS",{minimumFractionDigits:1,maximumFractionDigits:1})+" п. п."),make("small",outcome.margin===0?"Нерешено":"+"+num(outcome.margin)));
+  values.append(make("b",outcome.marginShare==null?"–":outcome.margin===0?"0,0 п. п.":"+"+(Math.abs(outcome.marginShare)*100).toLocaleString("sr-RS",{minimumFractionDigits:1,maximumFractionDigits:1})+" п. п."),make("small",outcome.margin===0?"Нерешено":"+"+num(outcome.margin)));
   cell.append(track,values);return cell;
 }
 function renderStationBody(body,station){
-  const names=stationNames(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!station.valid?null:value/station.valid})).filter(row=>row.value!=null).sort((a,b)=>b.value-a.value||a.no-b.no),max=Math.max(1,...rows.map(row=>row.value));
+  const names=stationNames(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!station.ballots_in_box?null:value/station.ballots_in_box})).filter(row=>row.value!=null).sort((a,b)=>b.value-a.value||a.no-b.no),max=Math.max(1,...rows.map(row=>row.value));
   if(!rows.length){body.append(make("p","Подаци по листама нису доступни.","note"));return}
   for(const item of rows){const row=make("div",null,"station-detail"),label=make("div",item.no+". "+item.name),track=make("div",null,"track"),fill=make("div",null,"fill"),value=make("div",num(item.value)+(item.share==null?"":" · "+pct(item.share)),"value");fill.style.width=Math.min(100,item.value/max*100)+"%";track.append(fill);row.append(label,track,value);body.append(row)}
 }
@@ -136,7 +136,7 @@ function render(){
   $("turnout").textContent=pct(t.turnout);$("turnout-sub").textContent=num(t.voted)+" од "+num(t.registered)+" уписаних";$("stations").textContent=num(row.counted);$("stations-total").textContent=row.stations?" / "+num(row.stations):"";$("stations-sub").textContent=row.stations?pct(row.counted/row.stations)+" бирачких места":"број бирачких места није познат";$("forms").textContent=num(t.vote_forms);$("forms-total").textContent=" / "+num(row.counted);
   const held=row.held||0,annulled=row.annulled||0,fs=[num(row.clean)+" без уочених проблема",reviewLine(row)];if(held)fs.push(heldLine(row));if(annulled)fs.push("Поништено: "+num(annulled)+" "+countWord(annulled,"бирачко место","бирачка места","бирачких места")+" (RG-9)");const otherExcluded=row.counted-t.vote_forms-held-annulled+(row.held_annulled||0);if(otherExcluded>0)fs.push("Није урачунато: "+num(otherExcluded)+" записника");$("forms-sub").textContent=fs.join("\n");$("valid").textContent=num(t.valid);const gap=t.voted-t.valid-t.invalid;$("valid-sub").textContent="Неважећи: "+num(t.invalid)+(gap?"\nНеусаглашено: "+signed(gap):"");
   const chart=$("chart");chart.replaceChildren();const unavailable=!t.lists||!names.length||(DATA.scope==="municipal"&&!chosen);$("chart-note").textContent=unavailable?"Изаберите општину за упоредиве резултате по листама.":"";
-  if(!unavailable){const rows=names.map((name,i)=>({name,value:t.lists[i]||0})).sort((a,b)=>b.value-a.value),max=Math.max(1,...rows.map(x=>x.value));for(const x of rows){const el=make("div",null,"row"),name=make("div",x.name),track=make("div",null,"track"),fill=make("div",null,"fill"),value=make("div",num(x.value)+(t.lists_valid?" · "+pct(x.value/t.lists_valid):""),"value");fill.style.width=x.value/max*100+"%";track.append(fill);el.append(name,track,value);chart.append(el)}}
+  if(!unavailable){const rows=names.map((name,i)=>({name,value:t.lists[i]||0})).sort((a,b)=>b.value-a.value),max=Math.max(1,...rows.map(x=>x.value));for(const x of rows){const el=make("div",null,"row"),name=make("div",x.name),track=make("div",null,"track"),fill=make("div",null,"fill"),value=make("div",num(x.value)+" · "+(t.lists_ballots_in_box?pct(x.value/t.lists_ballots_in_box):"–"),"value");fill.style.width=x.value/max*100+"%";track.append(fill);el.append(name,track,value);chart.append(el)}}
   const warnings=[DATA.scope_note,DATA.scope==="municipal"?row.names_note:DATA.names_note].filter(Boolean),warning=$("warning");warning.hidden=empty;warning.textContent=warnings.length?"Напомена: "+warnings.map(warningText).join(". "):"";renderStationResults();
 }
 const select=$("municipality");select.append(new Option("Све општине",""));for(const row of DATA.municipalities)select.append(new Option(row.generated_unknown_muni?"Непозната општина":row.m,row.m));const saved=new URLSearchParams(location.hash.slice(1)).get("municipality")||"";if(DATA.municipalities.some(row=>row.m===saved))select.value=saved;

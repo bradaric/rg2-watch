@@ -202,7 +202,8 @@ package; and confirm a completed case still displays after recording `ok`.
 `rg2watch tally [--parent P] [--municipality NAME,...] [--model M] [--clean]` and the "Results
 (unofficial)" tab of the browse page total what the watch model (`model`, or `--model`) read from the
 first-round RG-2 forms: registered, voted, ballots in box, invalid, valid, outside voted, turnout, and
-votes and share of valid votes per list, per municipality and overall, with coverage (forms counted
+votes and share of ballots in the box (`valid + invalid`) per list, per municipality and overall,
+with coverage (forms counted
 of stations known). Applied RG-7 and operator-entered corrections replace those readings in the
 corrected view; the as-filed view preserves the original RG-2 readings. RIK's official results are
 never fetched. A latest `escalate` verdict places that exact active RG-2 on hold: it remains visible as

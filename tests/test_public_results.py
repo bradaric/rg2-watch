@@ -40,11 +40,13 @@ def test_public_payload_has_only_sanitized_corrected_results_and_review_counts()
     assert data["municipalities"][0]["m"] == "Alpha"
     assert len(data["stations"]) == 2
     assert set(data["stations"][0]) == {
-        "m", "no", "name", "included", "annulled", "registered", "voted", "valid", "lists",
+        "m", "no", "name", "included", "annulled", "registered", "voted", "ballots_in_box",
+        "valid", "lists",
     }
     assert data["stations"][0] == {
         "m": "Alpha", "no": "1", "name": "ОШ", "included": True, "annulled": False,
-        "registered": 1000, "voted": 800, "valid": 780, "lists": [400, 380],
+        "registered": 1000, "voted": 800, "ballots_in_box": 800, "valid": 780,
+        "lists": [400, 380],
     }
 
     blob = json.dumps(data, ensure_ascii=False)
@@ -169,6 +171,7 @@ def test_public_page_renders_controls_summary_and_every_list():
     data["fallback_name_indices"] = []
     data["overall"]["totals"]["lists"] = list(range(1, 11))
     data["overall"]["totals"]["lists_valid"] = 55
+    data["overall"]["totals"]["lists_ballots_in_box"] = 110
     html = render_public_results(data)
     script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
     harness = r'''
@@ -193,6 +196,10 @@ assert.equal(reloadedHash,"#municipality=Alpha");
 els.municipality.value="";els.municipality.listeners.change();
 assert.equal(els.chart.children.length,10);
 assert.equal(els.chart.children[0].children[0].textContent,"Листа 10");
+assert.equal(els.chart.children[0].children[2].textContent,"10 · 9,1%");
+DATA.overall.totals.lists_ballots_in_box=null;render();
+assert.equal(els.chart.children[0].children[2].textContent,"10 · –");
+DATA.overall.totals.lists_ballots_in_box=110;render();
 assert.equal(els.chart.children[9].children[0].textContent,"Листа 1");
 assert(!els.chart.children.some(x=>x.children[0].textContent.startsWith("Остале")));
 assert.equal(els.footer.textContent,"НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а.");
@@ -261,13 +268,30 @@ const latestTimer=()=>timers.filter(timer=>!timer.cleared).at(-1);
 assert.equal(els["station-filter-in"].attrs["aria-pressed"],"true");
 assert.equal(els.stationlist.children.length,1);
 assert(els.stationlist.children[0].children[0].children[0].textContent.startsWith("Alpha · БМ 1"));
+let initialSummary=els.stationlist.children[0].children[0];
+assert.equal(initialSummary.children[4].children[0].children[2].textContent,"50,0%");
+assert.equal(initialSummary.children[4].children[1].children[2].textContent,"47,5%");
+assert.equal(initialSummary.children[5].children[1].children[0].textContent,"+2,5 п. п.");
+let initialCard=els.stationlist.children[0];initialCard.open=true;initialCard.listeners.toggle();
+assert.equal(initialCard.children[1].children[0].children[2].textContent,"400 · 50,0%");
+initialCard.open=false;initialCard.listeners.toggle();
+DATA.stations[0].ballots_in_box=null;renderStationResults();
+initialSummary=els.stationlist.children[0].children[0];
+assert.equal(initialSummary.children[4].children[0].children[2].textContent,"–");
+assert.equal(initialSummary.children[5].children[1].children[0].textContent,"–");
+assert.equal(initialSummary.children[5].children[1].children[1].textContent,"+20");
+DATA.stations[0].lists=[390,390];renderStationResults();
+initialSummary=els.stationlist.children[0].children[0];
+assert.equal(initialSummary.children[5].children[1].children[0].textContent,"–");
+assert.equal(initialSummary.children[5].children[1].children[1].textContent,"Нерешено");
+DATA.stations[0].ballots_in_box=800;
 const initialTimer=latestTimer();document.listeners.pointerdown();
 assert(initialTimer.cleared);assert.equal(latestTimer().delay,180000);
 DATA.stations[0].lists=[390,390];renderStationResults();
 assert.equal(els.stationlist.children[0].children[0].children[3].children[0].textContent,"=");
 
 DATA.stations=Array.from({length:102},(_,i)=>({m:i%2?"Beta":"Alpha",no:String(i+1),name:"Школа "+(i+1),
-  included:i!==101,registered:1000,voted:500+i,valid:490+i,lists:[300+i,190]}));
+  included:i!==101,registered:1000,voted:500+i,ballots_in_box:500+i,valid:490+i,lists:[300+i,190]}));
 let stationOutcomeCalls=0;const realStationOutcome=stationOutcome;
 stationOutcome=(...args)=>{stationOutcomeCalls++;return realStationOutcome(...args)};
 setStationFilter("in");

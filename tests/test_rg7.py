@@ -711,6 +711,35 @@ def test_diff_is_like_for_like_stations_joining_a_total_are_counted_separately()
     assert "+500" not in row and "+400" not in row  # not shown as voter deltas
 
 
+def test_paired_list_denominators_preserve_vote_cohort_and_propagate_unavailability():
+    s = bstore()
+    station(s, clean_report(), no="1")
+    station(s, clean_report(), [(rg7(table=[("ballots_in_box", 800)]),
+                                 "2026-10-20T10:00:00Z")], no="2",
+            ballots_in_box=nf(None, legible=False, mark="empty"))
+
+    paired = tally(s)["overall"]["pair"]["all"]
+
+    assert paired["pair_vote_forms"] == 2
+    assert paired["c"]["lists"] == paired["f"]["lists"] == [800, 760]
+    assert paired["c"]["lists_ballots_in_box"] == 1600
+    assert paired["f"]["lists_ballots_in_box"] is None
+
+
+def test_paired_list_denominators_track_differing_readable_corrected_and_filed_values():
+    s = bstore()
+    station(s, clean_report(), no="1")
+    station(s, clean_report(), [(rg7([("10.2", 800, 790)]),
+                                 "2026-10-20T10:00:00Z")], no="2")
+
+    paired = tally(s)["overall"]["pair"]["all"]
+
+    assert paired["pair_vote_forms"] == 2
+    assert paired["c"]["lists"] == paired["f"]["lists"] == [800, 760]
+    assert paired["c"]["lists_ballots_in_box"] == 1590
+    assert paired["f"]["lists_ballots_in_box"] == 1600
+
+
 def test_diff_clean_view_status_flip_is_a_station_change_not_a_delta():
     s = bstore()
     station(s, clean_report(), [(rg7([("10.2", 180, 178), ("10.3", 20, 18), ("10.4", 160, 160)]), "2026-10-20T10:00:00Z")],

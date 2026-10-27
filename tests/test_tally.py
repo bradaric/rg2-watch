@@ -260,7 +260,7 @@ def test_empty_list_row_counts_as_zero_when_reconciled():
     ex = extract(rep, doc(BASE + "/blank.pdf", no="12"), Config())
     assert ex["l"] == {1: 780, 2: 0}
     assert ex["bad"] == [] and not ex["rec_bad"]
-    assert _contrib(ex, [1, 2])["lists"] == ([780, 0], 780)
+    assert _contrib(ex, [1, 2])["lists"] == ([780, 0], 780, 800)
 
 
 def test_disagreement_between_models_marks_form_and_shows_values():
@@ -526,6 +526,35 @@ def test_all_mode_denominators_are_paired():
     a = tally(s)["overall"]["all"]
     assert a["registered"] == 1000 and a["voted"] == 800 and a["turnout"] == pytest.approx(0.8)
     assert a["lists"] == [400, 380] and a["lists_valid"] == 780
+    assert a["lists_ballots_in_box"] == 800
+
+
+def test_list_share_denominator_is_unavailable_if_a_contributing_form_lacks_ballots_in_box():
+    s = store()
+    form(s, 1, report(ballots_in_box=nf(None, legible=False)))
+
+    totals = tally(s)["overall"]["all"]
+
+    assert totals["lists"] == [400, 380]
+    assert totals["lists_valid"] == 780
+    assert totals["lists_ballots_in_box"] is None
+    result = tally(s)
+    for view in ("corrected", "filed"):
+        text = format_tally(result, view=view)
+        assert "share of ballots in the box for reconciled vote forms" in text
+        assert "400 (-)" in text
+
+
+def test_cli_list_shares_use_ballots_in_box_in_national_and_municipal_scopes():
+    s = store()
+    form(s, 1, clean_report())
+
+    for cfg in (NAT, muni_cfg()):
+        result = tally(s, cfg=cfg)
+        for view in ("corrected", "filed"):
+            text = format_tally(result, view=view)
+            assert "400 (50.0%)" in text
+            assert "380 (47.5%)" in text
 
 
 def test_vote_totals_only_include_reconciled_forms_but_turnout_stays_independent():
@@ -902,7 +931,7 @@ for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, 
 function totals(valid, lists) {
   const o = {registered: 1000, voted: 100, turnout: .1, ballots_in_box: 100, invalid: 0,
     valid, outside_voted: 0, vote_forms: lists ? 1 : 0, withheld_valid: lists ? 0 : 100,
-    lists: lists || [0, 0], lists_valid: valid};
+    lists: lists || [0, 0], lists_valid: valid, lists_ballots_in_box: lists ? 100 : 0};
   return o;
 }
 function row(correctedLists, filedLists) {
@@ -944,6 +973,29 @@ assert.equal(slots[0].val.children[1].textContent, "60.0%");
 assert.equal(slots[0].val.children[1].className, "resultpct");
 assert.equal(slots[0].nm.textContent, "Листа А");
 assert.equal(slots[1].nm.textContent, "Листа 2");
+const ballotDenominator = row([400, 380], null);
+for (const key of ["all", "cl"]) Object.assign(ballotDenominator[key],
+  {valid: 780, ballots_in_box: 800, lists_valid: 780, lists_ballots_in_box: 800});
+setData(ballotDenominator); renderHero();
+assert.equal(slots[0].val.children[1].textContent, "50.0%");
+assert.equal(slots[1].val.children[1].textContent, "47.5%");
+assert.equal(csvValue(tallyCsv(), "1 · Листа А %"), "50.0");
+ballotDenominator.all.lists_ballots_in_box = null;
+renderHero();
+assert.equal(slots[0].val.children[0].textContent, "400");
+assert.equal(slots[0].val.children[1].textContent, "-");
+ballotDenominator.all.lists_ballots_in_box = 800;
+const differingDenominators = deltaOf(
+  {...totals(100, [60, 40]), lists_ballots_in_box: 200},
+  {...totals(100, [55, 45]), lists_ballots_in_box: 100});
+assert.equal(differingDenominators.lists[0], 5);
+assert(Math.abs(differingDenominators.sh[0] + .25) < 1e-12);
+const missingPairedDenominator = deltaOf(
+  {...totals(100, [60, 40]), lists_ballots_in_box: null},
+  {...totals(100, [55, 45]), lists_ballots_in_box: 100});
+assert.equal(missingPairedDenominator.lists[0], 5);
+assert.equal(missingPairedDenominator.sh[0], null);
+setData(r); renderHero();
 T.names = ["List 1", "List 2"];
 T.fallback_name_indices = [1];
 renderHero();
@@ -1189,8 +1241,8 @@ renderHero();
 assert.equal(els.hmuni.options.find(o => o.value === "Ћуприја").textContent, "Ћуприја");
 assert(els.herotitle.textContent.startsWith("Ћуприја"));
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
-  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
-  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, valid: 780, lists: [390, 390]}}];
 D.rows = [{id: 9, u: "u9", rv: {v: "escalate", n: "Проверити потписе"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
 els.stationbars.value = "2";
 renderHero();
@@ -1205,13 +1257,31 @@ assert.equal(stationWinner.title, "A");
 let stationShares = stationCard.children[0].children.find(x => x.className.startsWith("stationshare"));
 assert.equal(stationShares.className, "stationshare");
 assert.equal(stationShares.children.length, 2);
-assert.equal(stationShares.children[0].children[2].textContent, "51.3%");
+assert.equal(stationShares.children[0].children[2].textContent, "50.0%");
 assert.equal(stationShares.children[1].children[0].textContent, "2");
-assert.equal(stationShares.children[1].children[2].textContent, "48.7%");
+assert.equal(stationShares.children[1].children[2].textContent, "47.5%");
 const stationMarginEl = stationCard.children[0].children.find(x => x.className === "stationmargin visual");
-assert(Math.abs(parseFloat(stationMarginEl.children[0].children[0].style.width) - 20 / 780 * 100) < 1e-9);
-assert.equal(stationMarginEl.children[1].children[0].textContent, "+2.6 п. п.");
+assert(Math.abs(parseFloat(stationMarginEl.children[0].children[0].style.width) - 20 / 800 * 100) < 1e-9);
+assert.equal(stationMarginEl.children[1].children[0].textContent, "+2.5 п. п.");
 assert.equal(stationMarginEl.children[1].children[1].textContent, "+20");
+T.station_results[0].corrected.ballots_in_box = null;
+renderHero();
+let unavailableCard = els.stationlist.children[0];
+let unavailableShares = unavailableCard.children[0].children.find(x => x.className.startsWith("stationshare"));
+assert.equal(unavailableShares.children[0].children[2].textContent, "—");
+let unavailableMargin = unavailableCard.children[0].children.find(x => x.className === "stationmargin visual");
+assert.equal(unavailableMargin.children[1].children[0].textContent, "—");
+assert.equal(unavailableMargin.children[1].children[1].textContent, "+20");
+T.station_results[0].corrected.lists = [390, 390];
+renderHero();
+unavailableCard = els.stationlist.children[0];
+unavailableMargin = unavailableCard.children[0].children.find(x => x.className === "stationmargin visual");
+assert.equal(unavailableMargin.children[1].children[0].textContent, "—");
+assert.equal(unavailableMargin.children[1].children[1].textContent, "Нерешено");
+T.station_results[0].corrected.ballots_in_box = 800;
+T.station_results[0].corrected.lists = [400, 380];
+renderHero();
+stationCard = els.stationlist.children[0];
 let stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
 let stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
 assert(stationActions, "station status must have a compact actions menu");
@@ -1284,7 +1354,7 @@ assert.equal(stationReviewEl().textContent, "прихваћен");
 assert.equal(stationReviewEl().dataset.note, "Проверено");
 function sortableStation(id, no, voted, lists) {
   const result = {clean: true, included: false, reason: "test reason", registered: 1000,
-    voted, valid: lists[0] + lists[1], lists};
+    voted, ballots_in_box: lists[0] + lists[1], valid: lists[0] + lists[1], lists};
   return {id, m: "Ћуприја", no: String(no), name: "БМ " + no, corrected: result, filed: result};
 }
 T.station_results = [
@@ -1368,8 +1438,8 @@ heroMuni = ""; els.stationsort.value = "winner"; renderHero();
 assert.equal(els.sortwinner.hidden, true);
 assert.equal(els.stationsort.value, "station");
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
-  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
-  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, valid: 780, lists: [390, 390]}}];
 setStationFilter("all");
 els.stationsort.value = "station";
 REV = null; els.tview.value = "corrected";
@@ -1426,7 +1496,7 @@ T.scope = "municipal"; T.names = []; alpha.names = ["A", "B"];
 
 unknown.generated_unknown_muni = true;
 unknown.names = ["List 1", "Стварна листа"]; unknown.fallback_name_indices = [0]; unknown.nlists = 2;
-for (const k of ["all", "cl", "fall", "fcl"]) { unknown[k].lists = [60, 40]; unknown[k].lists_valid = 100; unknown[k].vote_forms = 1; }
+for (const k of ["all", "cl", "fall", "fcl"]) { unknown[k].lists = [60, 40]; unknown[k].lists_valid = 100; unknown[k].lists_ballots_in_box = 100; unknown[k].vote_forms = 1; }
 heroMuni = "(unknown)"; heroPicked = true;
 renderHero();
 assert.equal(els.hmuni.options.find(o => o.value === "(unknown)").textContent, "Непозната општина");
