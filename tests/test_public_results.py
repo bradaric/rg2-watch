@@ -21,7 +21,7 @@ def config(**kw):
     return Config(model=M, tally_scope={P: "national"}, list_names={P: ["Листа А", "Листа Б"]}, **kw)
 
 
-def test_public_payload_has_only_aggregate_corrected_results_and_review_counts():
+def test_public_payload_has_only_sanitized_corrected_results_and_review_counts():
     s = store()
     form(s, 1, clean_report())
     flagged = form(s, 2, report(ballots_in_box=nf(900)))
@@ -29,7 +29,7 @@ def test_public_payload_has_only_aggregate_corrected_results_and_review_counts()
 
     data = build_public_results(s, config(), P)
 
-    assert data["version"] == 1 and data["title"] == "Title" and data["scope"] == "national"
+    assert data["version"] == 2 and data["title"] == "Title" and data["scope"] == "national"
     assert data["names"] == ["Листа А", "Листа Б"]
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", data["built"])
     row = data["overall"]
@@ -38,10 +38,19 @@ def test_public_payload_has_only_aggregate_corrected_results_and_review_counts()
     assert row["totals"]["voted"] == 1600 and row["totals"]["valid"] == 1560
     assert row["totals"]["lists"] == [800, 760]
     assert data["municipalities"][0]["m"] == "Alpha"
+    assert len(data["stations"]) == 2
+    assert set(data["stations"][0]) == {
+        "m", "no", "name", "included", "registered", "voted", "valid", "lists",
+    }
+    assert data["stations"][0] == {
+        "m": "Alpha", "no": "1", "name": "ОШ", "included": True,
+        "registered": 1000, "voted": 800, "valid": 780, "lists": [400, 380],
+    }
 
     blob = json.dumps(data, ensure_ascii=False)
     for private in (BASE, flagged.url, "private operator note", "claude", "A1", "arithmetic",
-                    '"id"', '"no"', '"db"', '"model"', '"operator_corrected"'):
+                    '"id"', '"reason"', '"filed"', '"rv"',
+                    '"db"', '"model"', '"operator_corrected"'):
         assert private not in blob
 
 
@@ -97,6 +106,7 @@ def test_public_results_hold_escalated_form_out_of_totals():
     assert data["overall"]["held"] == 1
     assert data["overall"]["totals"]["registered"] == 1000
     assert data["overall"]["totals"]["valid"] == 780
+    assert [row["included"] for row in data["stations"]] == [True, False]
     assert "Изузето из резултата" in render_public_results(data)
 
 
@@ -147,7 +157,7 @@ def test_public_page_renders_controls_summary_and_every_list():
     script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
     harness = r'''
 const assert=require("assert"),els={};let refresh,refreshDelay,reloadedHash;
-class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className="";this.hidden=false;this.listeners={}}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(type,fn){this.listeners[type]=fn}}
+class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className="";this.hidden=false;this.listeners={};this.attrs={}}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(type,fn){this.listeners[type]=fn}setAttribute(k,v){this.attrs[k]=String(v)}}
 global.document={getElementById:id=>els[id]??=(new El()),createElement:()=>new El()};
 global.Option=function(text,value){const x=new El();x.textContent=text;x.value=value;return x};
 global.location={hash:"#municipality=Alpha",pathname:"/",search:"",reload(){reloadedHash=this.hash}};
@@ -206,6 +216,69 @@ console.log(JSON.stringify({ok:true}));
     assert json.loads(result.stdout) == {"ok": True}
 
 
+def test_public_page_renders_sanitized_station_results_with_global_progressive_filters():
+    s = store()
+    form(s, 1, clean_report())
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert 'id="station-results"' in html
+    assert 'data-station-filter="in"' in html
+    assert 'data-station-filter="out"' in html
+    assert 'id="station-more"' in html
+
+    script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+    harness = r'''
+const assert=require("assert"),els={};let refresh;
+class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.dataset={};this.className="";this.hidden=false;this.open=false;this.listeners={};this.attrs={}}
+append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(type,fn){this.listeners[type]=fn}setAttribute(k,v){this.attrs[k]=String(v)}}
+global.document={getElementById:id=>els[id]??=(new El()),createElement:()=>new El()};
+global.Option=function(text,value){const x=new El();x.textContent=text;x.value=value;return x};
+global.location={hash:"",pathname:"/",search:"",reload(){}};
+global.history={replaceState(){}};
+global.setTimeout=(fn)=>{refresh=fn};
+''' + script + r'''
+assert.equal(els["station-filter-in"].attrs["aria-pressed"],"true");
+assert.equal(els.stationlist.children.length,1);
+assert(els.stationlist.children[0].children[0].children[0].textContent.startsWith("Alpha · БМ 1"));
+DATA.stations[0].lists=[390,390];renderStationResults();
+assert.equal(els.stationlist.children[0].children[0].children[3].children[0].textContent,"=");
+
+DATA.stations=Array.from({length:102},(_,i)=>({m:i%2?"Beta":"Alpha",no:String(i+1),name:"Школа "+(i+1),
+  included:i!==101,registered:1000,voted:500+i,valid:490+i,lists:[300+i,190]}));
+setStationFilter("in");
+assert.equal(els.stationlist.children.length,100);
+assert.equal(els.stationcount.textContent,"100 од 101 бирачког места");
+assert.equal(els["station-more"].hidden,false);
+assert.equal(els["station-more"].textContent,"Прикажи још (1)");
+els["station-more"].listeners.click();
+assert.equal(els.stationlist.children.length,101);
+assert.equal(els["station-more"].hidden,true);
+
+setStationFilter("out");
+assert.equal(els.stationlist.children.length,1);
+const excluded=els.stationlist.children[0];
+assert(excluded.className.includes("excluded"));
+assert.equal(excluded.children[0].children.at(-1).textContent,"Није урачунато");
+excluded.open=true;excluded.listeners.toggle();
+assert(excluded.children[1].children.length>=2,"expanded station must show every list");
+
+setStationFilter("all");
+els.municipality.value="Alpha";render();
+assert.equal(els.stationlist.children.length,51,"a selected municipality renders its complete station list");
+assert.equal(els["station-more"].hidden,true);
+assert(!els.stationlist.children[0].children[0].children[0].textContent.startsWith("Alpha ·"));
+
+DATA.scope="municipal";els.stationsort.value="winner";els.municipality.value="";render();
+assert.equal(els.sortstationwinner.hidden,true,"winner sorting is unavailable across different local ballots");
+assert.equal(els.stationsort.value,"station");
+assert.equal($("stationfilters").hidden,false);
+console.log(JSON.stringify({ok:true}));
+'''
+    result = subprocess.run(["node", "-e", harness], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"ok": True}
+
+
 def test_public_page_uses_wide_layout_nonwrapping_ratios_and_unofficial_badge():
     s = store()
     form(s, 1, clean_report())
@@ -250,7 +323,7 @@ def test_public_page_aligns_chart_bars_and_values_in_shared_columns():
     assert "grid-template-columns:minmax(16rem,30%) minmax(8rem,1fr) 12rem" in html
     assert ".value{font-variant-numeric:tabular-nums;white-space:nowrap" in html
     assert "@media(max-width:780px)" in html
-    assert ".row{grid-template-columns:1fr auto}" in html
+    assert ".row{grid-template-columns:1fr auto}.row>.track{grid-column:1/-1;grid-row:2}" in html
 
 
 def test_public_page_uses_adaptive_navy_serbian_theme():

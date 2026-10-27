@@ -1,4 +1,4 @@
-"""Sanitized, self-contained public export of the unofficial corrected tally."""
+"""Sanitized, self-contained public export of unofficial aggregate and station results."""
 
 import re
 import unicodedata
@@ -29,6 +29,12 @@ def _serbian_sort_key(text: str) -> tuple[int, ...]:
     normalized = unicodedata.normalize("NFKC", text).casefold()
     return tuple(-1 if char.isspace() else _SERBIAN_ORDER.get(char, 1000 + ord(char))
                  for char in normalized)
+
+
+def _station_sort_key(station: dict) -> tuple:
+    number = tuple((0, int(part)) if part.isdigit() else (1, _serbian_sort_key(part))
+                   for part in re.split(r"(\d+)", str(station["no"])) if part)
+    return _serbian_sort_key(station["m"]), number
 
 
 def _review_counts(items: list[dict], verdicts: dict[int, str]) -> dict[str, int]:
@@ -63,9 +69,23 @@ def _public_row(row: dict, flagged: list[dict], verdicts: dict[int, str]) -> dic
     return out
 
 
+def _public_station(station: dict) -> dict:
+    corrected = station["corrected"]
+    return {
+        "m": station["m"],
+        "no": station["no"],
+        "name": station["name"],
+        "included": corrected["included"],
+        "registered": corrected["registered"],
+        "voted": corrected["voted"],
+        "valid": corrected["valid"],
+        "lists": corrected["lists"],
+    }
+
+
 def build_public_results(store: Store, cfg: Config, parent: str) -> dict:
-    """Return aggregate-only data suitable for public distribution."""
-    tally = build_tally(store, cfg, parent, stored_model(cfg.model))
+    """Return sanitized aggregate and corrected station data for public distribution."""
+    tally = build_tally(store, cfg, parent, stored_model(cfg.model), include_station_results=True)
     verdicts = {row["document_id"]: row["verdict"] for row in store.latest_reviews(parent)
                 if row["active"] and not row["superseded"]}
     excluded = tally["excluded"]
@@ -74,7 +94,7 @@ def build_public_results(store: Store, cfg: Config, parent: str) -> dict:
         return excluded if row is tally["overall"] else [x for x in excluded if x["m"] == row["m"]]
 
     return {
-        "version": 1,
+        "version": 2,
         "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "title": _display_title(tally["title"]),
         "scope": tally["scope"],
@@ -85,6 +105,8 @@ def build_public_results(store: Store, cfg: Config, parent: str) -> dict:
         "overall": _public_row(tally["overall"], flagged_for(tally["overall"]), verdicts),
         "municipalities": [_public_row(row, flagged_for(row), verdicts)
                            for row in sorted(tally["munis"], key=lambda x: _serbian_sort_key(x["m"]))],
+        "stations": [_public_station(station)
+                     for station in sorted(tally["station_results"], key=_station_sort_key)],
     }
 
 
