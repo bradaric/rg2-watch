@@ -5,6 +5,7 @@ import subprocess
 
 import pytest
 
+import rg2watch.operator_corrections as operator_corrections_module
 from rg2watch.analyze import AnalysisResult
 from rg2watch.browse import STATIC, build_data, build_page
 from rg2watch.config import Config
@@ -65,6 +66,31 @@ def test_selected_repeat_form_supports_operator_numeric_correction():
 
     result = build_tally(s, Config(model=MODEL, tally_scope={P: "national"}), P, MODEL)
     assert result["overall"]["all"]["registered"] == 900
+
+
+def test_legacy_operator_correction_survives_prompt_upgrade(monkeypatch, tmp_path):
+    s = correction_store()
+    s.save_analysis(URL, AnalysisResult(clean_report(), 0, 0, 0.0, MODEL, "stop"),
+                    "v9", parent=P)
+    cfg = Config(model=MODEL, tally_scope={P: "national"})
+    with monkeypatch.context() as old_prompt:
+        old_prompt.setattr(operator_corrections_module, "PROMPT_VERSION", "v9")
+        old_service = OperatorCorrections(s, cfg, MODEL)
+        old_state = old_service.state(URL)
+        old_service.save(URL, snapshot(registered=900), "legacy correction",
+                         old_state["source_token"])
+
+    state = OperatorCorrections(s, cfg, MODEL).state(URL)
+    assert state["status"] == "active"
+    assert state["active_snapshot"]["registered"] == 900
+
+    tally = build_tally(s, cfg, P, MODEL)
+    assert tally["overall"]["all"]["registered"] == 900
+    assert tally["operator_corrected"][0]["reason"] == "legacy correction"
+
+    row = build_data(s, tmp_path, cfg=cfg)["rows"][0]
+    assert row["oc"]["status"] == "active"
+    assert row["rec"]["result"]["corrected"] == {"included": True, "reason": None}
 
 
 def test_operator_correction_rejects_rg2_superseded_by_repeat_round():

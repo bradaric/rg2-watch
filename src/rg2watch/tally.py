@@ -492,7 +492,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             if d["url"] not in latest_operator:
                 continue
             source = by_doc.get(d["id"], {}).get(model)
-            if source is None or source["prompt_version"] != PROMPT_VERSION:
+            if source is None or not source["prompt_version"].startswith("v"):
                 continue
             try:
                 operator_states[d["id"]] = service.state(d["url"])
