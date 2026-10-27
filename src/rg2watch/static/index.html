@@ -159,6 +159,7 @@ td.disagree{color:var(--hi);font-weight:700}
 .rv-ok{border-color:var(--good);color:var(--good)}
 .rv-unsure{border-style:dashed;border-color:var(--mut);color:var(--mut)}
 .rv.pending{opacity:.55}
+.rv.hasnote{position:relative;cursor:help;text-decoration:underline dotted;text-underline-offset:2px}.rv.hasnote::after{content:attr(data-note);position:absolute;z-index:30;right:0;bottom:calc(100% + 6px);display:none;width:max-content;max-width:min(24rem,70vw);padding:7px 9px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008;color:var(--fg);font-size:12px;font-weight:400;line-height:1.35;text-align:left;letter-spacing:normal;text-transform:none;white-space:normal}.rv.hasnote:hover::after,.rv.hasnote:focus::after{display:block}
 .rv-older{display:table;margin-top:var(--s1);font-size:10px;line-height:15px}
 td .rv+.rv-older{margin-top:var(--s1)}
 .review{margin:var(--s1) 0 var(--s2);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
@@ -729,8 +730,9 @@ function reviewCounts() {  // the chosen election, else the status panel's
 }
 function verdictHtml(x) {  // fixed class names; the label goes through esc
   if (!x) return "";
-  const k = VERDICTS.includes(x.v) ? x.v : "";
-  return '<span class="rv rv-' + k + (x.pending ? " pending" : "") + '">' + esc(VLABEL[k] || String(x.v)) + "</span>";
+  const k = VERDICTS.includes(x.v) ? x.v : "", note = k === "escalate" && x.n ? String(x.n) : "",
+    attrs = note ? ' data-note="' + esc(note) + '" tabindex="0" aria-label="' + esc((VLABEL[k] || String(x.v)) + ": " + note) + '"' : "";
+  return '<span class="rv rv-' + k + (x.pending ? " pending" : "") + (note ? " hasnote" : "") + '"' + attrs + '>' + esc(VLABEL[k] || String(x.v)) + "</span>";
 }
 function verdictEl(x) {
   const k = VERDICTS.includes(x.v) ? x.v : "";

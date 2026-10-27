@@ -52,7 +52,8 @@ ntfy message is sent for a verdict.
   UNSURE (the typed note goes with it). The verdict shows at once and is confirmed by the server
   (a refusal reverts it with the reason; the buttons wait while it is saving). The "Review" column
   shows the verdict, the "review" filter shows to review, escalated, unsure or ok, and the status
-  panel counts them for the chosen (else the watched) election. "To review" is one rule everywhere
+  panel counts them for the chosen (else the watched) election. Hover or keyboard-focus a current
+  `escalate` verdict in the forms table to see its note when one was recorded. "To review" is one rule everywhere
   (page, counter, `review --list todo`): the current version is active, has stored findings and no
   verdict; removed forms are not to review. An escalation never drops out: a form whose older
   version was escalated shows "older version escalated", stays under "escalated" and in the count,
@@ -235,6 +236,8 @@ scope it is long format, one row per municipality and list with that municipalit
 Operator and public station-result cards optionally enrich the RIK venue name with settlement data
 from a bundled snapshot of [ИТ Блокада's polling-place map](https://bm.itblokada.org/). The snapshot
 records its source revision and retrieval date, and matching uses municipality plus station number.
+For foreign stations whose source settlement is empty, a concise city and country label is derived
+from the bundled address (or only the country when no city is present).
 Addresses are not rendered in station cards or included in the public payload; a single attribution
 appears beneath each station list. Location enrichment is display-only and never affects station
 identity, inclusion or totals. Exported pages make no runtime request to the external site.

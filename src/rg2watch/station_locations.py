@@ -1,6 +1,7 @@
 """Optional polling-place location enrichment from a locally cached public dataset."""
 
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -16,6 +17,7 @@ _ALIASES = {
     "УПРАВА ЗА ИЗВРШЕЊЕ ЗАВОДСКИХ САНКЦИЈА": "ЗАВОДИ ЗА ИЗВРШЕЊЕ КРИВИЧНИХ САНКЦИЈА",
 }
 _CITY_PREFIXES = ("БЕОГРАД-", "НИШ-", "ПОЖАРЕВАЦ-", "УЖИЦЕ-")
+_CYRILLIC = re.compile(r"[А-ЯЈЉЊЂЋЏ]")
 
 
 def _key(name: str) -> str:
@@ -42,11 +44,38 @@ def _data(path: Path | None = None) -> dict:
     return {**raw, "municipalities": municipalities}
 
 
+def _foreign_settlement(address: str) -> str:
+    parts = [part.strip() for part in address.split(",") if part.strip()]
+    if not parts:
+        return ""
+    tail = parts[-1]
+    if "БОСНА И " in tail:
+        before, _ = tail.split("БОСНА И ", 1)
+        country = "БОСНА И ХЕРЦЕГОВИНА"
+        candidates = [before, *reversed(parts[:-1])]
+    else:
+        match = _CYRILLIC.search(tail)
+        country = tail[match.start():].strip() if match else tail
+        candidates = list(reversed(parts[:-1]))
+    for candidate in candidates:
+        match = _CYRILLIC.search(candidate)
+        if match:
+            city = re.match(r"[А-ЯЈЉЊЂЋЏ ]+", candidate[match.start():]).group().strip()
+        else:
+            city = candidate.strip() if re.search(r"[A-Z]", candidate) and not re.search(r"\d", candidate) else ""
+        if city and city != country:
+            return f"{city} · {country}"
+    return country
+
+
 def station_location(municipality: str, station_no: str) -> dict[str, str] | None:
     values = _data()["municipalities"].get(_key(municipality), {}).get(str(station_no))
     if values is None:
         return None
-    return {"settlement": values[0], "address": values[1]}
+    settlement, address = values
+    if not settlement and _key(municipality) == "ИНОСТРАНСТВО":
+        settlement = _foreign_settlement(address)
+    return {"settlement": settlement, "address": address}
 
 
 def station_coordinates(municipality: str, station_no: str) -> dict[str, float | int] | None:
