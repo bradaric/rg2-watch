@@ -186,6 +186,17 @@ def test_result_inclusion_analysis_status_filter_and_models_column_are_present()
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert 'id="ri"' in html
+    inclusion = html[html.index('result inclusion <select id="ri"'):html.index('</select>', html.index('result inclusion <select id="ri"'))]
+    assert all(f'<option value="{value}">{label}</option>' in inclusion for value, label in (
+        ("counted-both", "counted in both"),
+        ("corrected-only", "corrected only"),
+        ("filed-only", "as filed only"),
+        ("not-counted", "not counted"),
+        ("not-in-tally", "not in tally"),
+        ("excluded-filed", "excluded as filed"),
+    ))
+    assert 'not counted with corrections' not in inclusion
+    assert 'not counted as filed' not in inclusion
     assert ('analysis status <select id="ast"><option value="">any</option>' in html and
             all(f'<option value="{status}">{status}</option>' in html
                 for status in ("pending", "done", "failed", "off")))
@@ -194,6 +205,25 @@ def test_result_inclusion_analysis_status_filter_and_models_column_are_present()
     assert 'title: "Result inclusion"' in html
     assert 'data: "mods", title: "Models", visible: false' in html
     assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
+
+
+def test_result_inclusion_filter_uses_the_same_five_states_as_the_column():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function resultInclusionStatus(")
+    code = html[start:html.index("function resultInclusionEl(", start)]
+    script = f"""
+const assert = require("assert");
+{code}
+const result = (corrected, filed) => ({{corrected: {{included: corrected}}, filed: {{included: filed}}}});
+assert.equal(resultInclusionStatus(result(true, true)), "counted-both");
+assert.equal(resultInclusionStatus(result(true, false)), "corrected-only");
+assert.equal(resultInclusionStatus(result(false, true)), "filed-only");
+assert.equal(resultInclusionStatus(result(false, false)), "not-counted");
+assert.equal(resultInclusionStatus(result(null, null)), "not-in-tally");
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert 'ri === "excluded-filed" ? r.rec.result.filed.included === false' in html
 
 
 def test_document_type_and_decision_status_filters_are_in_their_workflow_sections():
@@ -226,7 +256,7 @@ def test_common_review_filter_presets_preserve_scope_and_auto_refresh_setting():
 const assert = require("assert");
 {code}
 assert.deepEqual(presetControls("review-filed", {{e: "779676", m: "Alpha", auto: false}}),
-  {{e: "779676", m: "Alpha", auto: false, rv: "todo", ri: "filed", ast: "done", an: "not"}});
+  {{e: "779676", m: "Alpha", auto: false, rv: "todo", ri: "excluded-filed", ast: "done", an: "not"}});
 assert.deepEqual(presetControls("review-v13", {{e: "779676", m: "Alpha", auto: false}}),
   {{e: "779676", m: "Alpha", auto: false, rv: "todo", ast: "done", rules: ["V13"]}});
 """

@@ -24,9 +24,11 @@ See [File layout and local server](reference.md#file-layout-and-local-server) fo
   filter selects those current states, nonzero turnout gaps, or A1-A5 individually. A nonzero
   `voted - valid - invalid` contribution is shown as **Gap ±N** in the Numbers column; sort that
   column to bring the largest gaps together. **Result inclusion** says whether list totals count with
-  corrections and as filed, with the exact omission reason in its tooltip; its filter finds forms
-  omitted from either view. The existing rule filter continues to select original stored findings for
-  audit. Station, times and status are merged columns; a "columns" menu shows or hides any column.
+  corrections and as filed, with the exact omission reason in its tooltip. Its filter mirrors the five
+  displayed states—counted in both, corrected only, as filed only, not counted, and not in tally—and
+  also offers **excluded as filed** for the review workflow. The existing rule filter continues to
+  select original stored findings for audit. Station, times and status are merged columns; a "columns"
+  menu shows or hides any column.
   The Models column starts hidden. Columns "Local PDF" (only when cached under `pdfs/` next to the DB) and "RIK" open in
   a new tab. Times are Serbian local time, DD/MM/YYYY HH:MM.
 - **Status panel** (top of the page, updates in place, nothing reloads): watcher (running since, last
