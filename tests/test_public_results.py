@@ -40,11 +40,12 @@ def test_public_payload_has_only_sanitized_corrected_results_and_review_counts()
     assert data["municipalities"][0]["m"] == "Alpha"
     assert len(data["stations"]) == 2
     assert set(data["stations"][0]) == {
-        "m", "no", "name", "included", "annulled", "registered", "voted", "ballots_in_box",
+        "m", "no", "name", "included", "annulled", "undetermined", "registered", "voted", "ballots_in_box",
         "invalid", "valid", "lists",
     }
     assert data["stations"][0] == {
         "m": "Alpha", "no": "1", "name": "ОШ", "included": True, "annulled": False,
+        "undetermined": False,
         "registered": 1000, "voted": 800, "ballots_in_box": 800, "invalid": 20, "valid": 780,
         "lists": [400, 380],
     }
@@ -70,6 +71,23 @@ def test_public_rg9_station_is_annulled_without_exposing_the_document():
     assert data["stations"][0]["included"] is False
     assert data["stations"][0]["annulled"] is True
     assert "private-rg9" not in json.dumps(data)
+
+
+def test_public_rg8_station_is_undetermined_without_exposing_the_document():
+    s = store()
+    form(s, 1, clean_report())
+    rg8 = doc(BASE + "/private-rg8.pdf", muni="Alpha", no="1", dt=8)
+    add(s, rg8)
+
+    data = build_public_results(s, config(), P)
+
+    assert data["overall"]["totals"]["registered"] == 0
+    assert data["overall"]["undetermined"] == 1
+    assert data["municipalities"][0]["undetermined"] == 1
+    assert data["stations"][0]["included"] is False
+    assert data["stations"][0]["undetermined"] is True
+    assert data["stations"][0]["annulled"] is False
+    assert "private-rg8" not in json.dumps(data)
 
 
 def test_public_payload_sorts_municipalities_by_serbian_cyrillic_alphabet():
@@ -249,6 +267,7 @@ def test_public_page_renders_sanitized_station_results_with_global_progressive_f
     assert 'data-station-filter="in"' in html
     assert 'data-station-filter="out"' in html
     assert 'data-station-filter="annulled"' in html
+    assert 'data-station-filter="undetermined"' in html
     assert 'id="station-more"' in html
     assert '.station-more[hidden]{display:none}' in html
 
@@ -321,6 +340,16 @@ assert.equal(els.stationlist.children.length,1);
 setStationFilter("out");
 DATA.overall.annulled=0;
 DATA.stations.at(-1).annulled=false;renderStationResults();
+DATA.stations.at(-1).undetermined=true;renderStationResults();
+assert.equal(els.stationlist.children[0].children[0].children.at(-1).textContent,"Резултати се не могу утврдити");
+assert.equal(els["station-filter-undetermined"].textContent,"Не могу се утврдити 1");
+DATA.overall.undetermined=1;DATA.overall.decision_excluded=1;render();
+assert(els["forms-sub"].textContent.includes("Резултати се не могу утврдити: 1 бирачко место (RG-8)"));
+setStationFilter("undetermined");
+assert.equal(els.stationlist.children.length,1);
+setStationFilter("out");
+DATA.overall.undetermined=0;DATA.overall.decision_excluded=0;
+DATA.stations.at(-1).undetermined=false;renderStationResults();
 const excluded=els.stationlist.children[0];
 assert(excluded.className.includes("excluded"));
 assert.equal(excluded.children[0].children.at(-1).textContent,"Није урачунато");

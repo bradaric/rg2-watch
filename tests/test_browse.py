@@ -128,18 +128,20 @@ def test_result_inclusion_analysis_status_filter_and_models_column_are_present()
     assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
 
 
-def test_document_type_and_annulment_filters_are_in_their_workflow_sections():
+def test_document_type_and_decision_status_filters_are_in_their_workflow_sections():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     scope = html[html.index('id="scopefilters"'):html.index('id="reviewfilters"')]
     review = html[html.index('id="reviewfilters"'):html.index('id="morefilters"')]
     assert 'document type <select id="dt">' in scope
-    assert 'annulment <select id="an">' in review
+    assert 'decision status <select id="an">' in review
+    assert '<option value="undetermined">cannot be determined (RG-8)</option>' in review
     assert '<option value="annulled">annulled by RG-9</option>' in review
-    assert '<option value="not">not annulled</option>' in review
+    assert '<option value="not">no RG-8/RG-9 decision</option>' in review
+    assert 'id="ud"' not in review
     assert '"e", "dt", "mod"' in html and '"ri", "an", "ast"' in html
     assert '(!sel("dt") || String(r.doc_type) === sel("dt"))' in html
-    assert '(!sel("an") || (r.rec.annulled ? "annulled" : "not") === sel("an"))' in html
+    assert '(!sel("an") || (r.rec.annulled ? "annulled" : r.rec.undetermined ? "undetermined" : "not") === sel("an"))' in html
     assert 'optsOf($("dt"), "all document types"' in html
 
 

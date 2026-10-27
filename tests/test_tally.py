@@ -70,7 +70,7 @@ def test_tally_exposes_per_station_results_for_operator_drilldown():
 
     assert result["station_results"] == [{
         "id": result["station_results"][0]["id"], "m": "Alpha", "no": "12", "name": "ОШ",
-        "annulled": None,
+        "annulled": None, "undetermined": None,
         "corrected": {"clean": True, "included": True, "reason": None,
                       "registered": 1000, "voted": 800, "ballots_in_box": 800,
                       "invalid": 20, "valid": 780, "outside_voted": 5,
@@ -128,6 +128,55 @@ def test_removed_rg9_does_not_annul_station():
 
     assert result["overall"]["all"]["registered"] == 1000
     assert result["station_results"][0]["annulled"] is None
+
+
+def test_active_rg8_marks_results_undetermined_and_removes_station_from_every_tally_view(tmp_path):
+    s = store()
+    form(s, 12, clean_report())
+    rg8 = doc("/extfile/rg8.pdf", muni="Alpha", no="12", dt=8)
+    add(s, rg8)
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["counted"] == 1
+    assert result["overall"]["undetermined"] == 1
+    assert result["munis"][0]["undetermined"] == 1
+    for view in ("all", "cl", "fall", "fcl"):
+        assert result["overall"][view]["registered"] == 0
+        assert result["overall"][view]["valid"] == 0
+        assert result["overall"][view]["lists"] == [0, 0]
+    assert why(result) == {"12": ["results cannot be determined by RG-8"]}
+    rec = result["reconciliation"][0]
+    assert rec["result"] == {
+        "corrected": {"included": False, "reason": "results cannot be determined by RG-8"},
+        "filed": {"included": False, "reason": "results cannot be determined by RG-8"},
+    }
+    station = result["station_results"][0]
+    assert station["corrected"]["included"] is False
+    assert station["undetermined"]["rik"] == BASE + "/extfile/rg8.pdf"
+    assert result["undetermined"] == [{"id": station["id"], "m": "Alpha", "no": "12",
+                                        "rik": BASE + "/extfile/rg8.pdf"}]
+    text = format_tally(result)
+    assert "резултати се не могу утврдити (RG-8):" in text
+    assert "Alpha БМ 12: Резултати се не могу утврдити" in text
+    browse_row = build_data(s, tmp_path, parent=P,
+                            cfg=Config(model=M, tally_scope={P: "national"}))["rows"][0]
+    assert browse_row["rec"]["undetermined"]["rik"] == BASE + "/extfile/rg8.pdf"
+
+
+def test_rg9_takes_display_precedence_when_rg8_and_rg9_are_both_active():
+    s = store()
+    form(s, 12, clean_report())
+    add(s, doc(BASE + "/extfile/rg8.pdf", muni="Alpha", no="12", dt=8))
+    add(s, doc(BASE + "/extfile/rg9.pdf", muni="Alpha", no="12", dt=9))
+
+    result = tally(s, include_station_results=True)
+
+    assert (result["overall"]["undetermined"], result["overall"]["annulled"],
+            result["overall"]["decision_excluded"]) == (1, 1, 1)
+    station = result["station_results"][0]
+    assert station["undetermined"] is not None and station["annulled"] is not None
+    assert station["corrected"]["reason"] == "annulled by RG-9"
 
 
 def test_current_escalated_form_is_held_from_every_tally_view():
@@ -897,6 +946,7 @@ def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_
     assert 'const RESULT_BAR_COLOR = "var(--bar)"' in html
     assert 'id="stationresults"' in html and "function renderStationResults(" in html
     assert 'data-station-filter="annulled"' in html
+    assert 'data-station-filter="undetermined"' in html
     helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
     hero = html[html.index("const RESULT_BAR_COLOR") : html.index('$("herobtn").onclick')]
     status = html[html.index("function paintHero"):html.index("// ---- table")]
@@ -1330,6 +1380,28 @@ assert(formStatus.children.some(x => x.textContent === "Поништено — R
 assert.equal(formStatus.children.at(-1).textContent, "RG-9");
 T.station_results[0].annulled = null;
 T.overall.annulled = T.munis[0].annulled = 0;
+renderHero();
+T.station_results[0].undetermined = {rik: "https://example.test/rg8.pdf"};
+T.overall.undetermined = T.munis[0].undetermined = 1;
+T.overall.decision_excluded = T.munis[0].decision_excluded = 1;
+renderHero();
+assert(els["hs-forms-context"].textContent.includes("Резултати се не могу утврдити: 1 бирачко место (RG-8)"));
+stationCard = els.stationlist.children[0];
+stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
+assert.equal(stationStatusEl.children[0].textContent, "Резултати се не могу утврдити");
+stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "RG-8", "прикажи"]);
+assert.equal(els["stationfilter-undetermined"].textContent, "Не могу се утврдити 1");
+setStationFilter("undetermined");
+assert.equal(els.stationlist.children.length, 1);
+const rg8FormStatus = documentStatusEl({state: "current", ast: "done",
+  rec: {annulled: null, undetermined: {rik: "https://example.test/rg8.pdf"}}});
+assert(rg8FormStatus.children.some(x => x.textContent === "Резултати се не могу утврдити — RG-8"));
+assert.equal(rg8FormStatus.children.at(-1).textContent, "RG-8");
+T.station_results[0].undetermined = null;
+T.overall.undetermined = T.munis[0].undetermined = 0;
+T.overall.decision_excluded = T.munis[0].decision_excluded = 0;
+setStationFilter("all");
 renderHero();
 let prevented = 0, stopped = 0;
 stationActions.button.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});

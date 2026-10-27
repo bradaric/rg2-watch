@@ -211,6 +211,11 @@ readable, its expected list rows are complete, and those list votes sum to valid
 incomplete or unreconciled form contributes no registered, turnout, ballots, valid, invalid, outside
 or list totals. The aggregate ballots/share denominator is `valid + invalid`; a missing standalone
 ballots-in-box reading does not by itself prevent an otherwise complete form from contributing. A
+matching active first-round RG-8 (results cannot be determined) or RG-9 (voting annulled) decision
+also excludes every number from that station. The operator and public results keep separate RG-8 and
+RG-9 counts and station filters, while the Forms tab uses one decision-status filter; decision links
+remain operator-only. If both decisions are active for one station, RG-9 is the displayed final
+status. Existing stored decisions apply after restart without reanalysis or migration. A
 latest `escalate` verdict places that exact active RG-2 on hold: it remains visible as
 processed and escalated (and flagged when its findings warrant), but contributes no numbers to
 corrected, as-filed, clean or default

@@ -202,6 +202,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         log.exception("tally could not be built")
         tally = None
     annulled = {x["id"]: {"rik": x["rik"]} for x in (tally or {}).get("annulled", [])}
+    undetermined = {x["id"]: {"rik": x["rik"]} for x in (tally or {}).get("undetermined", [])}
     rec = {x["id"]: {k: x[k] for k in ("status", "rules", "details", "gap", "result")}
            for x in (tally or {}).pop("reconciliation", [])}
     for row in rows:
@@ -215,6 +216,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                                               "filed": {"included": included, "reason": reason},
                                           }})
         row["rec"]["annulled"] = annulled.get(row["id"])
+        row["rec"]["undetermined"] = undetermined.get(row["id"])
     return {"db": store.name, "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
             "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally,
             "rules": RULE_INFO}
