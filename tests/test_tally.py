@@ -401,7 +401,7 @@ def test_hero_markup_labelled_and_safe():
     assert "#hs-forms-context{border-top:1px solid var(--line2)" in html
     assert '"За проверу: " + num(seen.size)' in html and 'serbianCount(seen.size, "записник"' in html
     assert "урачунато у резултат" in html
-    assert "Held by escalation" in html and "Задржано из резултата" in html
+    assert "Held by escalation" in html and "Изузето из резултата" in html
     assert "Ван заједничког збира: " in html
     assert '"Неусаглашено: " + snum(gap)' in html
     assert "само са исправкама: " in html and "само оригинално: " in html
@@ -837,6 +837,8 @@ function alertForm() {}
 function localHref() {}
 function rikHref() {}
 function setTab(name) { selectedTab = name; }
+let shownForm = null;
+function showForm(id, label) { shownForm = [id, label]; }
 let redrawCalls = 0;
 function redraw() { redrawCalls++; }
 els.tview = {value: "corrected"};
@@ -928,8 +930,8 @@ assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
 r.held = 1;
 renderHero();
 assert.equal(heldReviewSummary(13,11),
-  "Задржано из резултата: 13 ескалираних записника — 11 из скупа за проверу · 2 додатно");
-assert(els["hs-forms-context"].textContent.includes("Задржано из резултата: 1 ескалирани записник"));
+  "Изузето из резултата: 13 ескалираних записника — 11 из скупа за проверу · 2 додатно");
+assert(els["hs-forms-context"].textContent.includes("Изузето из резултата: 1 ескалирани записник"));
 assert(els["hs-forms-context"].textContent.includes(
   "Није урачунато: 2 записника — подаци по листама нису потпуни или усаглашени"));
 r.held = 0;
@@ -1134,6 +1136,7 @@ assert(els.herotitle.textContent.startsWith("Ћуприја"));
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
   filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+els.stationbars.value = "2";
 renderHero();
 assert.equal(els.stationresults.hidden, false);
 assert.equal(els.stationcount.textContent, "1 записник");
@@ -1141,23 +1144,35 @@ let stationCard = els.stationlist.children[0];
 assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 — ОШ"));
 const stationWinner = stationCard.children[0].children.find(x => x.className === "stationwinner");
 assert.equal(stationWinner.children[0].textContent, "1");
-assert.equal(stationWinner.children[1].textContent, "A");
+assert.equal(stationWinner.children.length, 1, "compact winner column must show only the list number");
+assert.equal(stationWinner.title, "A");
 let stationShares = stationCard.children[0].children.find(x => x.className.startsWith("stationshare"));
-assert.equal(stationShares.className, "stationshare single");
-assert.equal(stationShares.children.length, 1);
-assert.equal(stationShares.children[0].children[2].textContent, "51.3%");
-assert.equal(stationCard.children[0].children.find(x => x.className === "stationmargin").textContent, "+20 · +2.6 п. п.");
-els.stationbars.value = "2";
-renderHero();
-stationCard = els.stationlist.children[0];
-stationShares = stationCard.children[0].children.find(x => x.className.startsWith("stationshare"));
 assert.equal(stationShares.className, "stationshare");
 assert.equal(stationShares.children.length, 2);
+assert.equal(stationShares.children[0].children[2].textContent, "51.3%");
 assert.equal(stationShares.children[1].children[0].textContent, "2");
 assert.equal(stationShares.children[1].children[2].textContent, "48.7%");
+assert.equal(stationCard.children[0].children.find(x => x.className === "stationmargin").textContent, "+20 · +2.6 п. п.");
+let stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
+let stationLink = (stationStatusEl.children || []).find(x => x.className === "stationformlink");
+assert(stationLink, "station status must link to the source form");
+let prevented = 0, stopped = 0;
+stationLink.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
+assert.deepEqual(shownForm, [9, "Ћуприја BM 12"]);
+assert.equal(prevented, 1); assert.equal(stopped, 1);
+els.tview.value = "diff";
+renderHero();
+stationCard = els.stationlist.children[0];
+stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
+assert.equal(stationStatusEl.textContent, "Поређење");
+assert((stationStatusEl.children || []).some(x => x.className === "stationformlink"));
+els.tview.value = "corrected";
 els.stationbars.value = "1";
 renderHero();
 stationCard = els.stationlist.children[0];
+stationShares = stationCard.children[0].children.find(x => x.className.startsWith("stationshare"));
+assert.equal(stationShares.className, "stationshare single");
+assert.equal(stationShares.children.length, 1);
 assert.equal(stationCard.children[1].children, undefined, "station chart is lazy");
 setAllStations(true);
 assert.equal(stationCard.open, true);

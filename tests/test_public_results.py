@@ -97,7 +97,7 @@ def test_public_results_hold_escalated_form_out_of_totals():
     assert data["overall"]["held"] == 1
     assert data["overall"]["totals"]["registered"] == 1000
     assert data["overall"]["totals"]["valid"] == 780
-    assert "Задржано из резултата" in render_public_results(data)
+    assert "Изузето из резултата" in render_public_results(data)
 
 
 def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
@@ -177,7 +177,7 @@ DATA.overall.totals.vote_forms=983;render();
 assert.deepEqual(els["forms-sub"].textContent.split("\n"),[
   "843 без уочених проблема",
   "За проверу: 151 записник — 26 прихваћено · 11 ескалирано · 114 без одлуке",
-  "Задржано из резултата: 13 ескалираних записника — 11 из скупа за проверу · 2 додатно",
+  "Изузето из резултата: 13 ескалираних записника — 11 из скупа за проверу · 2 додатно",
 ]);
 Object.assign(DATA.overall,{counted:original.counted,clean:original.clean,held:original.held,
   flagged:original.flagged,review:original.review});

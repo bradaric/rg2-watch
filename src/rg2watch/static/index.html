@@ -276,7 +276,7 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 #stationhead h3{font-size:1rem;color:var(--fg);margin:0}#stationcount{color:var(--mut);margin-left:auto}
 #stationtools{display:flex;justify-content:flex-end;align-items:center;gap:var(--s2);padding:var(--s1) 0 var(--s2)}
 #stationtools label{display:flex;align-items:center;gap:var(--s1);color:var(--mut)}
-.stationcols,.station summary{display:grid;grid-template-columns:auto minmax(14rem,1.4fr) 5.5rem 5.5rem minmax(10rem,1fr) minmax(9rem,.8fr) 10rem 6.5rem;gap:var(--s3);align-items:center}
+.stationcols,.station summary{display:grid;grid-template-columns:auto minmax(14rem,1.4fr) 5.5rem 5.5rem 3.5rem minmax(9rem,.8fr) 10rem 9rem;gap:var(--s3);align-items:center}
 .stationcols{padding:var(--s1) var(--s2);color:var(--mut);font-size:10.5px;font-weight:750;text-transform:uppercase;letter-spacing:.055em;border-bottom:2px solid var(--line2)}
 .stationcols span:nth-child(3),.stationcols span:nth-child(4),.stationcols span:nth-child(6),.stationcols span:nth-child(7){text-align:right}
 .station{border-top:1px solid var(--line)}.station:first-child{border-top:0}
@@ -284,10 +284,10 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .station summary::-webkit-details-marker{display:none}.station summary::before{content:"▸";color:var(--accent);font-weight:800}
 .station[open] summary::before{content:"▾"}.stationname{font-weight:750;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .stationmetric,.stationshare,.stationmargin{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
-.stationwinner{display:flex;align-items:center;gap:var(--s1);min-width:0;font-weight:700}.stationwinner .no{flex:none;min-width:1.8em;padding:1px 5px;border-radius:4px;background:var(--fg);color:var(--panel);text-align:center}.stationwinner .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stationwinner{display:flex;align-items:center;justify-content:center;font-weight:700}.stationwinner .no{flex:none;min-width:1.8em;padding:1px 5px;border-radius:4px;background:var(--fg);color:var(--panel);text-align:center}
 .stationshare{display:grid;gap:2px}.minibar{display:grid;grid-template-columns:1.2em minmax(2.5rem,1fr) 3.2em;gap:3px;align-items:center;height:8px;font-size:9px;line-height:8px}.minino{color:var(--mut);text-align:right}.minitrack{height:4px;background:var(--track);border-radius:2px;overflow:hidden}.minifill{display:block;height:100%;background:var(--bar);border-radius:2px}.minipct{text-align:right}
 .stationshare.single .minibar{height:12px;font-size:11px;line-height:12px}.stationshare.single .minitrack{height:6px}.stationshare.single .minipct{font-weight:700}
-.stationstatus{color:var(--mut);white-space:nowrap}.stationstatus.in::before{content:"●";color:var(--good);margin-right:5px}.stationstatus.out::before{content:"●";color:var(--hi);margin-right:5px}
+.stationstatus{color:var(--mut);white-space:nowrap}.stationstatus.in::before{content:"●";color:var(--good);margin-right:5px}.stationstatus.out::before{content:"●";color:var(--hi);margin-right:5px}.stationformlink{border:0;background:none;color:var(--accent);font:inherit;text-decoration:underline;padding:0;margin-left:var(--s1);cursor:pointer}
 .stationbody{padding:0 var(--s3) var(--s3) 2rem}.stationnote{color:var(--mut);margin:var(--s2) 0}
 .stationbar{display:grid;grid-template-columns:minmax(12rem,30%) minmax(8rem,1fr) 11rem;gap:var(--s3);align-items:center;padding:5px 0}
 .stationbar .track{height:11px;background:var(--track);border-radius:6px;overflow:hidden}.stationbar .fill{height:100%;background:var(--bar);border-radius:6px}
@@ -434,7 +434,7 @@ stroke-width:2.5;
 <div id="herocharthead"><div class="hero-eyebrow">Пресек резултата</div></div>
 <div id="herochart"></div>
 <details id="stationresults" hidden><summary id="stationhead"><h3>Резултати по бирачким местима</h3><span id="stationcount"></span></summary>
-<div id="stationtools"><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2">Топ 2</option><option value="3">Топ 3</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
+<div id="stationtools"><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2" selected>Топ 2</option><option value="3">Топ 3</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
 <div class="stationcols" aria-hidden="true"><span></span><span>Бирачко место</span><span>Излазност</span><span>Важећи</span><span id="stationwinnerlabel">Победник</span><span id="stationsharelabel">Удео</span><span id="stationmarginlabel">Маргина</span><span>Статус</span></div>
 <div id="stationlist"></div></details>
 <div id="herofoot"></div>
@@ -1646,7 +1646,7 @@ function flaggedReviewSummary(flagged) {
 }
 function heldReviewSummary(held, escalatedAmongFlagged) {
   const inReview = Math.min(held, escalatedAmongFlagged), extra = held - inReview;
-  let text = "Задржано из резултата: " + num(held) + " " +
+  let text = "Изузето из резултата: " + num(held) + " " +
     serbianCount(held, "ескалирани записник", "ескалирана записника", "ескалираних записника");
   if (inReview && extra) text += " — " + num(inReview) + " из скупа за проверу · " + num(extra) + " додатно";
   else if (inReview) text += " — сви из скупа за проверу";
@@ -1799,12 +1799,19 @@ function renderStationResults() {
     const valid = viewName === "diff" ? corrected.valid == null || filed.valid == null ? null
       : corrected.valid - filed.valid : chosen.valid;
     const details = mk("details", null, "station"), summary = mk("summary"), body = mk("div", null, "stationbody"),
-      winner = mk("span", null, "stationwinner");
-    if (outcome.no != null) winner.append(mk("span", String(outcome.no), "no"));
-    winner.append(mk("span", outcome.name, "name"));
+      winner = mk("span", null, "stationwinner"), winnerNo = outcome.no == null ? outcome.name === "Нерешено" ? "=" : "—" : String(outcome.no);
+    winner.append(mk("span", winnerNo, "no"));
+    winner.title = outcome.name;
     const status = viewName === "diff" ? "Поређење" : chosen.included ? "Урачунат" : "Није урачунат",
       statusEl = mk("span", status, "stationstatus" + (viewName === "diff" ? "" : chosen.included ? " in" : " out"));
     if (chosen.reason) statusEl.title = chosen.reason;
+    const formLink = mk("button", "прикажи", "stationformlink");
+    formLink.type = "button";
+    formLink.onclick = ev => {
+      ev.preventDefault(); ev.stopPropagation();
+      showForm(station.id, station.m + " BM " + station.no);
+    };
+    statusEl.append(formLink);
     summary.append(mk("span", "БМ " + station.no + (station.name ? " — " + station.name : ""), "stationname"),
       mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric"),
       mk("span", valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid), "stationmetric"), winner,
