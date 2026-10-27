@@ -135,14 +135,14 @@ def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
     assert checked.returncode == 0, checked.stderr
 
 
-def test_public_page_refreshes_the_whole_snapshot_every_minute():
+def test_public_page_refreshes_after_three_minutes_of_inactivity():
     s = store()
     form(s, 1, clean_report())
 
     html = render_public_results(build_public_results(s, config(), P))
 
     assert '<meta http-equiv="refresh"' not in html
-    assert "setTimeout(()=>location.reload(),60000)" in html
+    assert "const REFRESH_IDLE_MS=180000,REFRESH_RESUME_MS=60000" in html
 
 
 def test_public_page_renders_controls_summary_and_every_list():
@@ -158,11 +158,12 @@ def test_public_page_renders_controls_summary_and_every_list():
     harness = r'''
 const assert=require("assert"),els={};let refresh,refreshDelay,reloadedHash;
 class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className="";this.hidden=false;this.listeners={};this.attrs={}}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(type,fn){this.listeners[type]=fn}setAttribute(k,v){this.attrs[k]=String(v)}}
-global.document={getElementById:id=>els[id]??=(new El()),createElement:()=>new El()};
+global.document={hidden:false,listeners:{},getElementById:id=>els[id]??=(new El()),createElement:()=>new El(),addEventListener(type,fn){this.listeners[type]=fn}};
 global.Option=function(text,value){const x=new El();x.textContent=text;x.value=value;return x};
 global.location={hash:"#municipality=Alpha",pathname:"/",search:"",reload(){reloadedHash=this.hash}};
 global.history={replaceState(_state,_title,url){location.hash=url.includes("#")?url.slice(url.indexOf("#")):""}};
 global.setTimeout=(fn,delay)=>{refresh=fn;refreshDelay=delay};
+global.clearTimeout=()=>{};
 ''' + script + r'''
 assert.equal(els.title.textContent,"Title");
 assert.equal(els.municipality.children.length,2);
@@ -171,7 +172,7 @@ els.municipality.value="";els.municipality.listeners.change();
 assert.equal(location.hash,"");
 els.municipality.value="Alpha";els.municipality.listeners.change();
 assert.equal(location.hash,"#municipality=Alpha");
-assert.equal(refreshDelay,60000);refresh();
+assert.equal(refreshDelay,180000);refresh();
 assert.equal(reloadedHash,"#municipality=Alpha");
 els.municipality.value="";els.municipality.listeners.change();
 assert.equal(els.chart.children.length,10);
@@ -228,18 +229,22 @@ def test_public_page_renders_sanitized_station_results_with_global_progressive_f
 
     script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
     harness = r'''
-const assert=require("assert"),els={};let refresh;
+const assert=require("assert"),els={};let reloaded=0,nextTimer=1,timers=[];
 class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.dataset={};this.className="";this.hidden=false;this.open=false;this.listeners={};this.attrs={}}
 append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(type,fn){this.listeners[type]=fn}setAttribute(k,v){this.attrs[k]=String(v)}}
-global.document={getElementById:id=>els[id]??=(new El()),createElement:()=>new El()};
+global.document={hidden:false,listeners:{},getElementById:id=>els[id]??=(new El()),createElement:()=>new El(),addEventListener(type,fn){this.listeners[type]=fn}};
 global.Option=function(text,value){const x=new El();x.textContent=text;x.value=value;return x};
-global.location={hash:"",pathname:"/",search:"",reload(){}};
+global.location={hash:"",pathname:"/",search:"",reload(){reloaded++}};
 global.history={replaceState(){}};
-global.setTimeout=(fn)=>{refresh=fn};
+global.setTimeout=(fn,delay)=>{const timer={id:nextTimer++,fn,delay,cleared:false};timers.push(timer);return timer.id};
+global.clearTimeout=id=>{const timer=timers.find(item=>item.id===id);if(timer)timer.cleared=true};
+const latestTimer=()=>timers.filter(timer=>!timer.cleared).at(-1);
 ''' + script + r'''
 assert.equal(els["station-filter-in"].attrs["aria-pressed"],"true");
 assert.equal(els.stationlist.children.length,1);
 assert(els.stationlist.children[0].children[0].children[0].textContent.startsWith("Alpha · БМ 1"));
+const initialTimer=latestTimer();document.listeners.pointerdown();
+assert(initialTimer.cleared);assert.equal(latestTimer().delay,180000);
 DATA.stations[0].lists=[390,390];renderStationResults();
 assert.equal(els.stationlist.children[0].children[0].children[3].children[0].textContent,"=");
 
@@ -261,9 +266,29 @@ assert(excluded.className.includes("excluded"));
 assert.equal(excluded.children[0].children.at(-1).textContent,"Није урачунато");
 excluded.open=true;excluded.listeners.toggle();
 assert(excluded.children[1].children.length>=2,"expanded station must show every list");
+let timer=latestTimer();
+assert.equal(timer.delay,180000);timer.cleared=true;timer.fn();
+assert.equal(reloaded,0,"an expanded station defers refresh");
+excluded.open=false;excluded.listeners.toggle();
+timer=latestTimer();assert.equal(timer.delay,60000);timer.cleared=true;timer.fn();
+assert.equal(reloaded,1,"refresh resumes after one idle minute");
+
+document.hidden=true;scheduleRefresh();timer=latestTimer();timer.cleared=true;timer.fn();
+assert.equal(reloaded,1,"a hidden page defers refresh");
+document.hidden=false;document.listeners.visibilitychange();
+assert.equal(latestTimer().delay,60000);
+timer=latestTimer();timer.cleared=true;timer.fn();
+assert.equal(reloaded,2);
+
+excluded.open=true;excluded.listeners.toggle();
+scheduleRefresh();timer=latestTimer();timer.cleared=true;timer.fn();
+assert.equal(reloaded,2);
+els.municipality.value="Alpha";render();
+timer=latestTimer();assert.equal(timer.delay,60000);timer.cleared=true;timer.fn();
+assert.equal(reloaded,3,"a filtered-out expanded station does not defer refresh");
 
 setStationFilter("all");
-els.municipality.value="Alpha";render();
+render();
 assert.equal(els.stationlist.children.length,51,"a selected municipality renders its complete station list");
 assert.equal(els["station-more"].hidden,true);
 assert(!els.stationlist.children[0].children[0].children[0].textContent.startsWith("Alpha ·"));
