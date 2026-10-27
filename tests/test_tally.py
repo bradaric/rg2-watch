@@ -850,6 +850,12 @@ def test_operator_results_use_editorial_accents():
     assert ".stationshare.single .minibar{" in html
 
 
+def test_operator_station_result_names_get_more_room_than_bars():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert ".stationbar{display:grid;grid-template-columns:minmax(12rem,38%) minmax(8rem,1fr) 11rem" in html
+
+
 def test_operator_results_sort_municipality_picker_by_serbian_alphabet():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl")' in html
