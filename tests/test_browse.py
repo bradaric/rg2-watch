@@ -213,7 +213,9 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
     assert '<details id="stationresults" hidden open>' not in html
     assert 'id="stationsort"' in html and 'id="stationbars"' in html and 'id="stationtoggle"' in html
     assert all(f'<option value="{n}">' in html for n in (1, 2, 3))
-    assert '<option value="2" selected>Топ 2</option>' in html
+    assert '<option value="1">1 листа</option>' in html
+    assert '<option value="2" selected>2 листе</option>' in html
+    assert '<option value="3">3 листе</option>' in html
     assert all(label in html for label in (
         "Бирачко место", "Излазност", "Важећи", "Победник", "Удео", "Маргина", "Статус"))
     assert 'Прошири све' in html and 'Скупи све' in html
