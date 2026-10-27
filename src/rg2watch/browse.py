@@ -255,6 +255,16 @@ def _write_pair(out_dir: Path, name: str, glob: str, data) -> None:
     _atomic(out_dir / f"{name}.js", f"window.{glob} = {blob};\n")
 
 
+def _data_meta(data: dict) -> dict:
+    corrections = {}
+    for row in data["rows"]:
+        for version in [row, *row["v"]]:
+            correction = version.get("oc")
+            if correction and correction.get("revision") is not None:
+                corrections[version["u"]] = correction["revision"]
+    return {"built": data["built"], "corrections": corrections}
+
+
 def _clean(out_dir: Path) -> None:
     """Remove temp files left by a crashed write (old enough not to be another writer's)."""
     for t in out_dir.glob("*.tmp"):
@@ -309,6 +319,7 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
     if Path(out_path).name != "index.html":
         _atomic(Path(out_path), (STATIC / "index.html").read_bytes())
     _write_pair(out_dir, "data", "RG2_DATA", data)
+    _atomic(out_dir / "data-meta.json", _json(_data_meta(data)))
     if with_status:
         write_status(store, out_path, parent, cache_dir=cache_dir)
     log.info("browse page built: %d form(s), %d second opinion(s); data %.2f s, total %.2f s",

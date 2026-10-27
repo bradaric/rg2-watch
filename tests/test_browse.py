@@ -381,6 +381,20 @@ def test_script_close_tag_escaped_in_utf8_files(tmp_path):
     assert rows_of(out)[0]["muni"] == "</script><b>x"
 
 
+def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
+    s = store()
+    add(s, doc(BASE + "/e/a.pdf"))
+    out = tmp_path / "index.html"
+
+    build_page(s, out, tmp_path / "pdfs")
+
+    data = json.loads((tmp_path / "data.json").read_text(encoding="utf-8"))
+    meta_path = tmp_path / "data-meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta == {"built": data["built"], "corrections": {}}
+    assert meta_path.stat().st_size < 200
+
+
 def test_atomic_write_leaves_no_temp_and_keeps_old_on_failure(tmp_path, monkeypatch):
     s = store()
     add(s, doc(BASE + "/e/a.pdf"))

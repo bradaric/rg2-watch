@@ -1119,18 +1119,43 @@ function correctionStateInData(data, url, state) {
   }
   return false;
 }
+function correctionMetaReady(meta, url, state) {
+  return !!meta && !!meta.corrections && meta.corrections[url] === state.revision;
+}
+function correctionRowFromData(data, url) {
+  return (data.rows || []).find(row => [row, ...(row.v || [])].some(v => v.u === url)) || null;
+}
+function applyCorrectionData(data, url) {
+  const source = correctionRowFromData(data, url), index = source && rows.findIndex(row => row.id === source.id);
+  if (!source || index < 0) return false;
+  const fresh = prep(source), row = rowOf(fresh.id), shown = row && row.child.isShown();
+  D = data; rows[index] = fresh; T = data.tally;
+  if (row) {
+    row.data(fresh).draw(false);
+    if (shown) row.child(child(fresh)).show();
+  }
+  renderTally();
+  $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
+  return true;
+}
+function retryCorrectionData(url, state, attempt) {
+  if (attempt < 60) setTimeout(() => waitForCorrectionData(url, state, attempt + 1), 1000);
+}
 function waitForCorrectionData(url, state, attempt = 0) {
-  fetch("data.json?t=" + Date.now(), {cache: "no-store"})
+  fetch("data-meta.json?t=" + Date.now(), {cache: "no-store"})
     .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+    .then(meta => {
+      if (!correctionMetaReady(meta, url, state)) { retryCorrectionData(url, state, attempt); return null; }
+      return fetch("data.json?t=" + Date.now(), {cache: "no-store"})
+        .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)));
+    })
     .then(data => {
-      if (correctionStateInData(data, url, state)) {
-        applyData(data); dataBuilt = data.built;
-      } else if (attempt < 60) {
-        setTimeout(() => waitForCorrectionData(url, state, attempt + 1), 1000);
-      }
+      if (!data) return;
+      if (correctionStateInData(data, url, state) && applyCorrectionData(data, url)) dataBuilt = data.built;
+      else retryCorrectionData(url, state, attempt);
     }, e => {
-      if (attempt < 60) setTimeout(() => waitForCorrectionData(url, state, attempt + 1), 1000);
-      else console.error("refreshing corrected totals failed", e);
+      retryCorrectionData(url, state, attempt);
+      if (attempt >= 60) console.error("refreshing corrected totals failed", e);
     });
 }
 function submitCorrection(action) {

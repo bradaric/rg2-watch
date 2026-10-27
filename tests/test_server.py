@@ -18,6 +18,7 @@ def srv(tmp_path_factory):
     cache.mkdir()
     (out / "index.html").write_text("<html>page</html>")
     (out / "data.json").write_text('{"rows": []}')
+    (out / "data-meta.json").write_text('{"built":"now","corrections":{}}')
     (out / "status.js").write_text("window.RG2_STATUS = {};")
     (out / "status.json").write_text("{}")
     (out / "official-results.json").write_text('{"lists": []}')
@@ -51,6 +52,7 @@ def test_serves_allow_listed_files(srv):
     assert "default-src 'self'" in r.getheader("Content-Security-Policy")
     assert req(srv, "/index.html?t=1")[0] == 200
     assert req(srv, "/data.json")[:2] == (200, "application/json")
+    assert req(srv, "/data-meta.json")[:2] == (200, "application/json")
     assert req(srv, "/official-results.json")[:2] == (200, "application/json")
     s, ct, body, r = req(srv, f"/pdfs/{H}.pdf")
     assert (s, ct, body) == (200, "application/pdf", b"%PDF-1.4 body")

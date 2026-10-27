@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from rg2watch.analyze import AnalysisResult
-from rg2watch.browse import STATIC, build_data
+from rg2watch.browse import STATIC, build_data, build_page
 from rg2watch.config import Config
 from rg2watch.operator_corrections import (CorrectionConflict, OperatorCorrections,
                                            apply_operator_snapshot, validate_snapshot)
@@ -383,6 +383,10 @@ def test_browse_row_has_compact_operator_correction_status(tmp_path):
     assert isinstance(row["oc"]["revision"], int)
     assert row["rec"]["status"] == "ok"
 
+    build_page(s, tmp_path / "index.html", tmp_path, cfg=Config(model=MODEL))
+    meta = json.loads((tmp_path / "data-meta.json").read_text(encoding="utf-8"))
+    assert meta["corrections"] == {URL: row["oc"]["revision"]}
+
 
 def test_browse_build_loads_expected_ballot_rows_once_for_national_corrections(tmp_path,
                                                                                monkeypatch):
@@ -512,6 +516,14 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "waitForCorrectionData(ocUrl, state);" in success
     assert "dataBuilt = null;" not in success
     assert "function waitForCorrectionData(" in html
+    wait = html[html.index("function waitForCorrectionData("):html.index("function submitCorrection(")]
+    assert wait.index('fetch("data-meta.json') < wait.index('fetch("data.json')
+    assert "correctionMetaReady(meta, url, state)" in wait
+    assert "applyCorrectionData(data, url)" in wait
+    assert "applyData(data)" not in wait
+    apply = html[html.index("function applyCorrectionData("):html.index("function waitForCorrectionData(")]
+    assert "row.data(fresh).draw(false)" in apply
+    assert "table.clear()" not in apply
     assert "v.oc.revision === state.revision" in html
     assert '$("ocdlg").close();' in success
     assert '$("ocdlg").close();' not in failure
