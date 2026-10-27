@@ -245,6 +245,15 @@ def test_operator_page_has_separate_official_rik_results_tab():
     assert "РИК" in html and "НЕЗВАНИЧНО" in html
 
 
+def test_operator_page_preserves_active_tab_in_url_hash():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "function activeTab()" in html
+    assert 'if (activeTab() !== "forms") p.set("tab", activeTab());' in html
+    assert 'setTab(p.get("tab"), false);' in html
+    assert 'function setTab(name, updateHash = true)' in html
+
+
 def test_json_is_ascii_even_with_lone_surrogate():
     from rg2watch.browse import _json
     blob = _json({"x": "a\ud800b\u2028</script>"})

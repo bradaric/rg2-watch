@@ -1984,13 +1984,18 @@ function loadOfficialResults() {
     });
 }
 
-function setTab(name) {
+function activeTab() {
+  return !$("resview").hidden ? "results" : !$("officialview").hidden ? "official" : "forms";
+}
+function setTab(name, updateHash = true) {
+  name = ["results", "official"].includes(name) ? name : "forms";
   const res = name === "results", official = name === "official";
   $("formsview").hidden = res || official; $("resview").hidden = !res; $("officialview").hidden = !official;
   $("tabforms").classList.toggle("on", !res && !official); $("tabres").classList.toggle("on", res);
   $("tabofficial").classList.toggle("on", official);
   if (res && tmTable) { tmTable.columns.adjust(); teTable.columns.adjust(); }
   if (official) loadOfficialResults();
+  if (updateHash) writeHash();
 }
 $("tabforms").onclick = () => setTab("forms");
 $("tabres").onclick = () => setTab("results");
@@ -2035,6 +2040,7 @@ function readHash() {
   setHeroMunicipality(o.m || "", true);
   const nv = p.get("nv");
   $("tview").value = ["corrected", "filed", "diff"].includes(nv) ? nv : "corrected";
+  setTab(p.get("tab"), false);
 }
 function writeHash() {
   const c = readCtl(), p = new URLSearchParams();
@@ -2045,6 +2051,7 @@ function writeHash() {
   }
   if (c.rules.length) p.set("rules", c.rules.join(","));
   if (NV() !== "corrected") p.set("nv", NV());
+  if (activeTab() !== "forms") p.set("tab", activeTab());
   try { history.replaceState(null, "", "#" + p); } catch (e) {}
 }
 function redraw() {
