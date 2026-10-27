@@ -287,7 +287,8 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .stationwinner{display:flex;align-items:center;justify-content:center;font-weight:700}.stationwinner .no{flex:none;min-width:1.8em;padding:1px 5px;border-radius:4px;background:var(--fg);color:var(--panel);text-align:center}
 .stationshare{display:grid;gap:2px}.minibar{display:grid;grid-template-columns:1.2em minmax(2.5rem,1fr) 3.2em;gap:3px;align-items:center;height:8px;font-size:9px;line-height:8px}.minino{color:var(--mut);text-align:right}.minitrack{height:4px;background:var(--track);border-radius:2px;overflow:hidden}.minifill{display:block;height:100%;background:var(--bar);border-radius:2px}.minipct{text-align:right}
 .stationshare.single .minibar{height:12px;font-size:11px;line-height:12px}.stationshare.single .minitrack{height:6px}.stationshare.single .minipct{font-weight:700}
-.stationstatus{color:var(--mut);white-space:nowrap}.stationstatus.in::before{content:"●";color:var(--good);margin-right:5px}.stationstatus.out::before{content:"●";color:var(--hi);margin-right:5px}.stationformlink{border:0;background:none;color:var(--accent);font:inherit;text-decoration:underline;padding:0;margin-left:var(--s1);cursor:pointer}
+.stationstatus{color:var(--mut);white-space:nowrap}.stationstatus.in::before{content:"●";color:var(--good);margin-right:5px}.stationstatus.out::before{content:"●";color:var(--hi);margin-right:5px}
+.stationactions{position:relative;display:inline-flex;margin-left:var(--s1)}.stationmenubtn{width:1.8rem;height:1.65rem;border:1px solid var(--line2);border-radius:5px;background:var(--surface);color:var(--fg);font-weight:800;line-height:1;cursor:pointer}.stationmenu{position:absolute;z-index:20;right:0;top:calc(100% + 3px);display:grid;min-width:8rem;padding:4px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008}.stationmenu[hidden]{display:none}.stationmenuitem{display:block;border:0;border-radius:4px;background:none;color:var(--fg);font:inherit;text-align:left;text-decoration:none;padding:6px 8px;cursor:pointer}.stationmenuitem:hover,.stationmenuitem:focus{background:var(--surface);color:var(--accent)}
 .stationbody{padding:0 var(--s3) var(--s3) 2rem}.stationnote{color:var(--mut);margin:var(--s2) 0}
 .stationbar{display:grid;grid-template-columns:minmax(12rem,30%) minmax(8rem,1fr) 11rem;gap:var(--s3);align-items:center;padding:5px 0}
 .stationbar .track{height:11px;background:var(--track);border-radius:6px;overflow:hidden}.stationbar .fill{height:100%;background:var(--bar);border-radius:6px}
@@ -1724,6 +1725,46 @@ function stationMiniBars(outcome, count, diff) {
   if (!shown.length) cell.textContent = "—";
   return cell;
 }
+let openStationActions = null;
+function setStationActionsOpen(actions, open) {
+  if (openStationActions && openStationActions !== actions) {
+    openStationActions.menu.hidden = true;
+    openStationActions.button.ariaExpanded = "false";
+  }
+  actions.menu.hidden = !open;
+  actions.button.ariaExpanded = String(open);
+  openStationActions = open ? actions : null;
+}
+function closeStationActions() {
+  if (openStationActions) setStationActionsOpen(openStationActions, false);
+}
+function stationSource(id) {
+  return D.rows.find(row => String(row.id) === String(id)) || {};
+}
+function stationActionMenu(station) {
+  const actions = mk("span", null, "stationactions"), button = mk("button", "▾", "stationmenubtn"),
+    menu = mk("span", null, "stationmenu"), source = stationSource(station.id);
+  button.type = "button"; button.ariaLabel = "Actions"; button.ariaHasPopup = "menu"; button.ariaExpanded = "false";
+  menu.hidden = true; menu.role = "menu";
+  const pdf = localHref(source.pdf), rik = rikHref(source.rik);
+  if (pdf) { const item = link("PDF", pdf); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
+  if (rik) { const item = link("RIK", rik); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
+  const show = mk("button", "show", "stationmenuitem");
+  show.type = "button"; show.role = "menuitem";
+  show.onclick = ev => {
+    ev.preventDefault(); ev.stopPropagation(); closeStationActions();
+    showForm(station.id, station.m + " BM " + station.no);
+  };
+  menu.append(show);
+  button.onclick = ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    setStationActionsOpen(actions, actions.menu.hidden);
+  };
+  menu.onclick = ev => ev.stopPropagation();
+  actions.button = button; actions.menu = menu; actions.title = "";
+  actions.append(button, menu);
+  return actions;
+}
 function stationCards() { return [...$("stationlist").children].filter(card => card.stationId != null); }
 function updateStationToggle() {
   const cards = stationCards(), allOpen = cards.length && cards.every(card => card.open);
@@ -1785,7 +1826,11 @@ function renderStationResults() {
     ? (a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(a.outcome.name, b.outcome.name) || byStation(a, b)
     : sort === "share" ? (a, b) => Math.abs(b.outcome.share || 0) - Math.abs(a.outcome.share || 0) || byStation(a, b)
     : byStation);
-  const key = JSON.stringify([heroMuni, mode, viewName, T.scope, sort, barCount, heroListNames(listOwner), records]);
+  const sourceLinks = records.map(({station}) => {
+    const source = stationSource(station.id);
+    return [station.id, source.pdf || "", source.rik || ""];
+  });
+  const key = JSON.stringify([heroMuni, mode, viewName, T.scope, sort, barCount, heroListNames(listOwner), records, sourceLinks]);
   if (key === stationKey) return;
   stationKey = key;
   const open = new Set([...list.children].filter(card => card.open).map(card => String(card.stationId)));
@@ -1805,13 +1850,7 @@ function renderStationResults() {
     const status = viewName === "diff" ? "Поређење" : chosen.included ? "Урачунат" : "Није урачунат",
       statusEl = mk("span", status, "stationstatus" + (viewName === "diff" ? "" : chosen.included ? " in" : " out"));
     if (chosen.reason) statusEl.title = chosen.reason;
-    const formLink = mk("button", "прикажи", "stationformlink");
-    formLink.type = "button";
-    formLink.onclick = ev => {
-      ev.preventDefault(); ev.stopPropagation();
-      showForm(station.id, station.m + " BM " + station.no);
-    };
-    statusEl.append(formLink);
+    statusEl.append(stationActionMenu(station));
     summary.append(mk("span", "БМ " + station.no + (station.name ? " — " + station.name : ""), "stationname"),
       mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric"),
       mk("span", valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid), "stationmetric"), winner,
@@ -1938,7 +1977,10 @@ function setHero(on) {
   if (on) setTab("results");
 }
 $("herobtn").onclick = () => setHero(!document.body.classList.contains("hero"));
-document.addEventListener("keydown", ev => { if (ev.key === "Escape") setHero(false); });
+document.addEventListener("click", closeStationActions);
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape") { if (openStationActions) closeStationActions(); else setHero(false); }
+});
 $("hmuni").addEventListener("input", () => setSharedMunicipality($("hmuni").value));
 $("hmode").addEventListener("input", () => { $("tmode").value = $("hmode").value; if (T) renderTally(); });
 $("hview").addEventListener("input", () => { $("tview").value = $("hview").value; writeHash(); if (T) renderTally(); });

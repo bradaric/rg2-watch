@@ -834,8 +834,9 @@ function ruleEl() {}
 function when() {}
 function reviewCounts() {}
 function alertForm() {}
-function localHref() {}
-function rikHref() {}
+function localHref(value) { return value ? "local:" + value : null; }
+function rikHref(value) { return value ? value : null; }
+function link(text, href) { const a = mk("a", text); a.href = href; return a; }
 function setTab(name) { selectedTab = name; }
 let shownForm = null;
 function showForm(id, label) { shownForm = [id, label]; }
@@ -1136,6 +1137,7 @@ assert(els.herotitle.textContent.startsWith("Ћуприја"));
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
   filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+D.rows = [{id: 9, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
 els.stationbars.value = "2";
 renderHero();
 assert.equal(els.stationresults.hidden, false);
@@ -1154,18 +1156,30 @@ assert.equal(stationShares.children[1].children[0].textContent, "2");
 assert.equal(stationShares.children[1].children[2].textContent, "48.7%");
 assert.equal(stationCard.children[0].children.find(x => x.className === "stationmargin").textContent, "+20 · +2.6 п. п.");
 let stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
-let stationLink = (stationStatusEl.children || []).find(x => x.className === "stationformlink");
-assert(stationLink, "station status must link to the source form");
+let stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
+assert(stationActions, "station status must have a compact actions menu");
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "show"]);
+assert.equal(stationActions.menu.hidden, true);
 let prevented = 0, stopped = 0;
-stationLink.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
+stationActions.button.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
+assert.equal(stationActions.menu.hidden, false);
+const stationShow = stationActions.menu.children.find(x => x.textContent === "show");
+stationShow.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
 assert.deepEqual(shownForm, [9, "Ћуприја BM 12"]);
-assert.equal(prevented, 1); assert.equal(stopped, 1);
+assert.equal(prevented, 2); assert.equal(stopped, 2);
+D.rows = [{id: 9}];
+renderHero();
+stationCard = els.stationlist.children[0];
+stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
+stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["show"],
+  "unavailable PDF and RIK actions must be omitted after a live refresh");
 els.tview.value = "diff";
 renderHero();
 stationCard = els.stationlist.children[0];
 stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
 assert.equal(stationStatusEl.textContent, "Поређење");
-assert((stationStatusEl.children || []).some(x => x.className === "stationformlink"));
+assert((stationStatusEl.children || []).some(x => x.className === "stationactions"));
 els.tview.value = "corrected";
 els.stationbars.value = "1";
 renderHero();
