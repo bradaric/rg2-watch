@@ -688,6 +688,8 @@ def test_operator_results_use_editorial_accents():
     assert ".resultvotes{" in html and ".resultpct{" in html
     assert ".resultvotes{color:var(--mut)" in html
     assert ".resultpct{color:var(--fg);font-weight:800" in html
+    assert ".minifill{display:block;" in html
+    assert ".stationshare.single .minibar{" in html
 
 
 def test_operator_results_sort_municipality_picker_by_serbian_alphabet():
@@ -1140,14 +1142,16 @@ assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 — �
 const stationWinner = stationCard.children[0].children.find(x => x.className === "stationwinner");
 assert.equal(stationWinner.children[0].textContent, "1");
 assert.equal(stationWinner.children[1].textContent, "A");
-let stationShares = stationCard.children[0].children.find(x => x.className === "stationshare");
+let stationShares = stationCard.children[0].children.find(x => x.className.startsWith("stationshare"));
+assert.equal(stationShares.className, "stationshare single");
 assert.equal(stationShares.children.length, 1);
 assert.equal(stationShares.children[0].children[2].textContent, "51.3%");
 assert.equal(stationCard.children[0].children.find(x => x.className === "stationmargin").textContent, "+20 · +2.6 п. п.");
 els.stationbars.value = "2";
 renderHero();
 stationCard = els.stationlist.children[0];
-stationShares = stationCard.children[0].children.find(x => x.className === "stationshare");
+stationShares = stationCard.children[0].children.find(x => x.className.startsWith("stationshare"));
+assert.equal(stationShares.className, "stationshare");
 assert.equal(stationShares.children.length, 2);
 assert.equal(stationShares.children[1].children[0].textContent, "2");
 assert.equal(stationShares.children[1].children[2].textContent, "48.7%");

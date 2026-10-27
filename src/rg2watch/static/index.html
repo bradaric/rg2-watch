@@ -285,7 +285,8 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .station[open] summary::before{content:"▾"}.stationname{font-weight:750;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .stationmetric,.stationshare,.stationmargin{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .stationwinner{display:flex;align-items:center;gap:var(--s1);min-width:0;font-weight:700}.stationwinner .no{flex:none;min-width:1.8em;padding:1px 5px;border-radius:4px;background:var(--fg);color:var(--panel);text-align:center}.stationwinner .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.stationshare{display:grid;gap:2px}.minibar{display:grid;grid-template-columns:1.2em minmax(2.5rem,1fr) 3.2em;gap:3px;align-items:center;height:8px;font-size:9px;line-height:8px}.minino{color:var(--mut);text-align:right}.minitrack{height:4px;background:var(--track);border-radius:2px;overflow:hidden}.minifill{height:100%;background:var(--bar);border-radius:2px}.minipct{text-align:right}
+.stationshare{display:grid;gap:2px}.minibar{display:grid;grid-template-columns:1.2em minmax(2.5rem,1fr) 3.2em;gap:3px;align-items:center;height:8px;font-size:9px;line-height:8px}.minino{color:var(--mut);text-align:right}.minitrack{height:4px;background:var(--track);border-radius:2px;overflow:hidden}.minifill{display:block;height:100%;background:var(--bar);border-radius:2px}.minipct{text-align:right}
+.stationshare.single .minibar{height:12px;font-size:11px;line-height:12px}.stationshare.single .minitrack{height:6px}.stationshare.single .minipct{font-weight:700}
 .stationstatus{color:var(--mut);white-space:nowrap}.stationstatus.in::before{content:"●";color:var(--good);margin-right:5px}.stationstatus.out::before{content:"●";color:var(--hi);margin-right:5px}
 .stationbody{padding:0 var(--s3) var(--s3) 2rem}.stationnote{color:var(--mut);margin:var(--s2) 0}
 .stationbar{display:grid;grid-template-columns:minmax(12rem,30%) minmax(8rem,1fr) 11rem;gap:var(--s3);align-items:center;padding:5px 0}
@@ -1710,7 +1711,7 @@ function stationOutcome(station, owner, viewName) {
   return {...top, margin, marginShare: chosen.valid ? margin / chosen.valid : null, leaders: rows};
 }
 function stationMiniBars(outcome, count, diff) {
-  const cell = mk("span", null, "stationshare"), shown = outcome.leaders.slice(0, count);
+  const cell = mk("span", null, "stationshare" + (count === 1 ? " single" : "")), shown = outcome.leaders.slice(0, count);
   const max = Math.max(1e-9, ...shown.map(row => Math.abs(row.share || 0)));
   for (const item of shown) {
     const mini = mk("span", null, "minibar"), no = mk("span", String(item.no), "minino"),
