@@ -1549,7 +1549,7 @@ function renderTally() {
 
 // ---- hero display -------------------------------------------------------------------------
 const RESULT_BAR_COLOR = "var(--bar)";
-let heroMuni = "", heroPicked = false, slots = [];
+let heroMuni = "", heroPicked = false, slots = [], stationKey = "";
 function put(id, text) {  // set text; flash when it changed
   const el = $(id);
   if (el.textContent === text) return;
@@ -1666,7 +1666,7 @@ function renderStationChart(body, station, owner, viewName) {
     : (b.value || 0) - (a.value || 0) || a.no - b.no);
   const status = diff ? "Са исправкама: " + stationStatus(corrected) + " · Оригинално: " + stationStatus(filed)
     : stationStatus(chosen);
-  body.append(mk("p", status, "stationnote"));
+  if (diff) body.append(mk("p", status, "stationnote"));
   if (!listRows.length) { body.append(mk("p", "Подаци по листама нису доступни.", "stationnote")); return; }
   const max = Math.max(1, ...listRows.map(row => Math.abs(row.value || 0)));
   for (const item of listRows) {
@@ -1681,8 +1681,9 @@ function renderStationChart(body, station, owner, viewName) {
 }
 function renderStationResults() {
   const section = $("stationresults"), list = $("stationlist");
-  if (!T || !heroMuni) { section.hidden = true; list.replaceChildren(); return; }
+  if (!T || !heroMuni) { stationKey = ""; section.hidden = true; list.replaceChildren(); return; }
   const owner = T.munis.find(row => row.m === heroMuni), mode = $("tmode").value, viewName = NV();
+  const listOwner = T.scope === "municipal" ? owner : T;
   let stations = (T.station_results || []).filter(station => station.m === heroMuni);
   if (mode === "cl") stations = stations.filter(station => {
     const filed = station.filed || station.corrected;
@@ -1690,6 +1691,10 @@ function renderStationResults() {
       : (viewName === "filed" ? filed : station.corrected).clean;
   });
   stations.sort((a, b) => String(a.no).localeCompare(String(b.no), undefined, {numeric: true}));
+  const key = JSON.stringify([heroMuni, mode, viewName, T.scope, heroListNames(listOwner), stations]);
+  if (key === stationKey) return;
+  stationKey = key;
+  const open = new Set([...list.children].filter(card => card.open).map(card => String(card.stationId)));
   section.hidden = false;
   $("stationcount").textContent = num(stations.length) + " " +
     serbianCount(stations.length, "записник", "записника", "записника");
@@ -1705,8 +1710,11 @@ function renderStationResults() {
       mk("span", "Важећи " + (valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid))),
       mk("span", viewName === "diff" ? "Поређење приказа" : stationStatus(chosen), "stationstatus"));
     details.append(summary, body);
+    details.stationId = String(station.id);
     let rendered = false;
-    details.ontoggle = () => { if (details.open && !rendered) { rendered = true; renderStationChart(body, station, owner, viewName); } };
+    const draw = () => { if (!rendered) { rendered = true; renderStationChart(body, station, listOwner, viewName); } };
+    details.ontoggle = () => { if (details.open) draw(); };
+    if (open.has(details.stationId)) { details.open = true; draw(); }
     return details;
   });
   list.replaceChildren(...cards);

@@ -1104,6 +1104,20 @@ assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 — �
 assert.equal(stationCard.children[1].children, undefined, "station chart is lazy");
 stationCard.open = true; stationCard.ontoggle();
 assert(stationCard.children[1].children.length > 1);
+assert(!stationCard.children[1].children.some(x => x.textContent === "Урачунат"),
+  "the inclusion status already shown in the station summary must not be repeated");
+renderHero();
+assert.strictEqual(els.stationlist.children[0], stationCard,
+  "unchanged live data must not rebuild and collapse expanded stations");
+
+T.scope = "national"; T.names = ["Републичка А", "Републичка Б"]; T.fallback_name_indices = [];
+alpha.names = []; alpha.fallback_name_indices = [];
+renderHero();
+const nationalStation = els.stationlist.children[0];
+nationalStation.open = true; nationalStation.ontoggle();
+assert(nationalStation.children[1].children.some(x => x.children && x.children[0].textContent.includes("Републичка А")),
+  "national station charts must use national list names");
+T.scope = "municipal"; T.names = []; alpha.names = ["A", "B"];
 
 unknown.generated_unknown_muni = true;
 unknown.names = ["List 1", "Стварна листа"]; unknown.fallback_name_indices = [0]; unknown.nlists = 2;
