@@ -160,8 +160,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     if latest := store.latest_operator_corrections(parent):
         service = OperatorCorrections(store, cfg, model,
                                       expected_rows_cache=expected_rows_cache)
-        current = {a["document_id"] for a in arows
-                   if a["model"] == model and a["prompt_version"] == PROMPT_VERSION}
+        current = {a["document_id"] for a in arows if a["model"] == model}
         for item in latest:
             if item["document_id"] not in current:
                 continue

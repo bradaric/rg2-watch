@@ -363,16 +363,18 @@ class Store:
 
     def operator_correction_source(self, url: str, model: str,
                                    prompt_version: str) -> sqlite3.Row | None:
-        """Document plus its newest successful analysis for the correction editor."""
+        """Document plus its preferred current, otherwise newest legacy, successful analysis."""
         with self._lock:
             return self._db.execute(
-                "SELECT d.*, a.id analysis_id, a.result_json FROM documents d "
+                "SELECT d.*,a.id analysis_id,a.prompt_version analysis_prompt_version,a.result_json "
+                "FROM documents d "
                 "JOIN analyses a ON a.document_id=d.id WHERE d.url=? AND a.model=? "
-                "AND a.prompt_version=? AND a.status='done' AND a.result_json IS NOT NULL "
-                "AND a.id=(SELECT MAX(x.id) FROM analyses x WHERE x.document_id=d.id "
-                "AND x.model=? AND x.prompt_version=? AND x.status='done' "
-                "AND x.result_json IS NOT NULL)",
-                (url, model, prompt_version, model, prompt_version)).fetchone()
+                "AND a.prompt_version LIKE 'v%' AND a.status='done' AND a.result_json IS NOT NULL "
+                "AND a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
+                "AND x.model=? AND x.prompt_version LIKE 'v%' AND x.status='done' "
+                "AND x.result_json IS NOT NULL "
+                "ORDER BY x.prompt_version IS ? DESC,x.id DESC LIMIT 1)",
+                (url, model, model, prompt_version)).fetchone()
 
     def known_docs(self, parent: str, scope: Scope) -> dict[tuple[str, int | str], Doc]:
         sql, args = "SELECT * FROM documents WHERE parent=? AND active=1", [parent]
