@@ -232,10 +232,11 @@ V4 signatures never flag); the reasons are listed, with a link to the form. List
 CSV download of the per-municipality table (cells starting with = + - @ are escaped); in municipal
 scope it is long format, one row per municipality and list with that municipality's totals.
 
-Operator and public station-result cards optionally enrich the RIK venue name with settlement and
-address data from a bundled snapshot of [ИТ Блокада's polling-place map](https://bm.itblokada.org/).
-The snapshot records its source revision and retrieval date, and matching uses municipality plus
-station number. It is display-only, is attributed in expanded station cards, and never affects station
+Operator and public station-result cards optionally enrich the RIK venue name with settlement data
+from a bundled snapshot of [ИТ Блокада's polling-place map](https://bm.itblokada.org/). The snapshot
+records its source revision and retrieval date, and matching uses municipality plus station number.
+Addresses are not rendered in station cards or included in the public payload; a single attribution
+appears beneath each station list. Location enrichment is display-only and never affects station
 identity, inclusion or totals. Exported pages make no runtime request to the external site.
 
 A separate bundled `static/station_coordinates.json` caches latitude, longitude and location-confidence

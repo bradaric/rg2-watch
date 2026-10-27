@@ -81,7 +81,7 @@ def _public_station(station: dict) -> dict:
         "m": station["m"],
         "no": station["no"],
         "name": station["name"],
-        **{key: station[key] for key in ("settlement", "address") if key in station},
+        **({"settlement": station["settlement"]} if "settlement" in station else {}),
         "included": corrected["included"],
         "annulled": station["annulled"] is not None,
         "undetermined": station["undetermined"] is not None,

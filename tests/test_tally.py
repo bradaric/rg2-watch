@@ -856,6 +856,13 @@ def test_operator_station_result_names_get_more_room_than_bars():
     assert ".stationbar{display:grid;grid-template-columns:minmax(12rem,38%) minmax(8rem,1fr) 11rem" in html
 
 
+def test_operator_station_results_use_one_attribution_instead_of_per_station_addresses():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<p class="note stationattribution">Подаци о насељима: <a href="https://bm.itblokada.org/"' in html
+    assert '"Адреса: " + station.address' not in html
+
+
 def test_operator_results_sort_municipality_picker_by_serbian_alphabet():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl")' in html
@@ -1338,10 +1345,7 @@ assert.equal(els.stationcount.textContent, "1 записник");
 let stationCard = els.stationlist.children[0];
 assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 · СЕЊЕ — ОШ"));
 stationCard.open = true; stationCard.ontoggle();
-const stationLocation = stationCard.children[1].children.find(x => x.className === "stationlocation");
-assert(stationLocation.textContent.includes("СЕЊЕ, ЦЕНТАР 1"));
-assert.equal(stationLocation.children.at(-1).textContent, "ИТ Блокада");
-assert.equal(stationLocation.children.at(-1).href, "https://bm.itblokada.org/");
+assert(!stationCard.children[1].children.some(x => x.className === "stationlocation"));
 stationCard.open = false; stationCard.ontoggle();
 assert(!(stationCard.children[0].children[0].children || []).some(x => x.className === "stationmap"));
 T.station_results[0].coordinates = {latitude: 44.664, longitude: 20.59089, location_confidence: 1};
@@ -1425,7 +1429,8 @@ renderHero();
 assert(els["hs-forms-context"].textContent.includes("Резултати се не могу утврдити: 1 бирачко место (RG-8)"));
 stationCard = els.stationlist.children[0];
 stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
-assert.equal(stationStatusEl.children[0].textContent, "Резултати се не могу утврдити");
+assert.equal(stationStatusEl.children[0].textContent, "Неутврђено");
+assert.equal(stationStatusEl.children[0].title, "Резултати се не могу утврдити (RG-8)");
 stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
 assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "RG-8", "прикажи"]);
 assert.equal(els["stationfilter-undetermined"].textContent, "Не могу се утврдити 1");

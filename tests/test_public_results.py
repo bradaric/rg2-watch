@@ -4,6 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from rg2watch.browse import STATIC
 from rg2watch.config import Config
 from rg2watch.cli import main
 from rg2watch.models import Election
@@ -90,7 +91,7 @@ def test_public_rg8_station_is_undetermined_without_exposing_the_document():
     assert "private-rg8" not in json.dumps(data)
 
 
-def test_public_station_includes_sanitized_location_enrichment_and_attribution():
+def test_public_station_includes_settlement_but_does_not_expose_address():
     s = store()
     form(s, 7, clean_report(), muni="Градска општина Гроцка")
 
@@ -98,8 +99,15 @@ def test_public_station_includes_sanitized_location_enrichment_and_attribution()
 
     station = data["stations"][0]
     assert station["settlement"] == "ВИНЧА"
-    assert station["address"] == "ВИНЧА, ЈОВАНА ЈОВАНОВИЋА ЗМАЈА 1"
+    assert "address" not in station
     assert data["station_location_source"]["source"] == "https://bm.itblokada.org/"
+
+
+def test_public_station_results_use_one_settlement_attribution():
+    html = (STATIC / "public_results.html").read_text(encoding="utf-8")
+
+    assert '<p class="note station-attribution">Подаци о насељима: <a href="https://bm.itblokada.org/"' in html
+    assert "station.address" not in html
 
 
 def test_public_payload_sorts_municipalities_by_serbian_cyrillic_alphabet():
@@ -204,6 +212,7 @@ def test_public_page_renders_controls_summary_and_every_list():
     data["overall"]["totals"]["lists_ballots_in_box"] = 110
     html = render_public_results(data)
     script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+    assert "station.address" not in script
     harness = r'''
 const assert=require("assert"),els={};let refresh,refreshDelay,reloadedHash;
 class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className="";this.hidden=false;this.listeners={};this.attrs={}}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(type,fn){this.listeners[type]=fn}setAttribute(k,v){this.attrs[k]=String(v)}}
@@ -303,13 +312,11 @@ let initialSummary=els.stationlist.children[0].children[0];
 assert.equal(initialSummary.children[4].children[0].children[2].textContent,"50,0%");
 assert.equal(initialSummary.children[4].children[1].children[2].textContent,"47,5%");
 assert.equal(initialSummary.children[5].children[1].children[0].textContent,"+2,5 п. п.");
-DATA.stations[0].settlement="АЛФА";DATA.stations[0].address="АЛФА, ГЛАВНА 1";renderStationResults();
+DATA.stations[0].settlement="АЛФА";renderStationResults();
 initialSummary=els.stationlist.children[0].children[0];
 assert(initialSummary.children[0].textContent.includes("БМ 1 · АЛФА — ОШ"));
 let initialCard=els.stationlist.children[0];initialCard.open=true;initialCard.listeners.toggle();
-const locationNote=initialCard.children[1].children.find(x=>x.className==="station-location");
-assert(locationNote.textContent.includes("АЛФА, ГЛАВНА 1"));
-assert.equal(locationNote.children.at(-1).textContent,"ИТ Блокада");
+assert(!initialCard.children[1].children.some(x=>x.className==="station-location"));
 assert.equal(initialCard.children[1].children.find(x=>x.className==="station-detail").children[2].textContent,"400 · 50,0%");
 initialCard.open=false;initialCard.listeners.toggle();
 DATA.stations[0].ballots_in_box=null;renderStationResults();
@@ -359,7 +366,8 @@ setStationFilter("out");
 DATA.overall.annulled=0;
 DATA.stations.at(-1).annulled=false;renderStationResults();
 DATA.stations.at(-1).undetermined=true;renderStationResults();
-assert.equal(els.stationlist.children[0].children[0].children.at(-1).textContent,"Резултати се не могу утврдити");
+assert.equal(els.stationlist.children[0].children[0].children.at(-1).textContent,"Неутврђено");
+assert.equal(els.stationlist.children[0].children[0].children.at(-1).title,"Резултати се не могу утврдити (RG-8)");
 assert.equal(els["station-filter-undetermined"].textContent,"Не могу се утврдити 1");
 DATA.overall.undetermined=1;DATA.overall.decision_excluded=1;render();
 assert(els["forms-sub"].textContent.includes("Резултати се не могу утврдити: 1 бирачко место (RG-8)"));

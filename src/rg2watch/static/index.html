@@ -444,7 +444,7 @@ stroke-width:2.5;
 <details id="stationresults" hidden><summary id="stationhead"><h3>Резултати по бирачким местима</h3><span id="stationcount"></span></summary>
 <div id="stationtools"><div id="stationfilters" role="group" aria-label="Филтер бирачких места"><button type="button" id="stationfilter-all" class="stationfilter" data-station-filter="all" aria-pressed="true">Сва бирачка места</button><button type="button" id="stationfilter-out" class="stationfilter" data-station-filter="out" aria-pressed="false">Није урачунато</button><button type="button" id="stationfilter-undetermined" class="stationfilter" data-station-filter="undetermined" aria-pressed="false">Не могу се утврдити</button><button type="button" id="stationfilter-annulled" class="stationfilter" data-station-filter="annulled" aria-pressed="false">Поништено</button><button type="button" id="stationfilter-escalate" class="stationfilter" data-station-filter="escalate" aria-pressed="false">Ескалирано</button><button type="button" id="stationfilter-unsure" class="stationfilter" data-station-filter="unsure" aria-pressed="false">Несигурно</button><button type="button" id="stationfilter-undecided" class="stationfilter" data-station-filter="undecided" aria-pressed="false">Без одлуке</button></div><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option><option id="sortmarginclose" value="margin-close">Најтешња трка</option><option id="sortmarginwide" value="margin-wide">Највећа маргина</option><option id="sortturnouthigh" value="turnout-high">Највећа излазност</option><option id="sortturnoutlow" value="turnout-low">Најмања излазност</option><option id="sortreview" value="review">Статус провере</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2" selected>2 листе</option><option value="3">3 листе</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
 <div class="stationcols" aria-hidden="true"><span></span><span>Бирачко место</span><span>Излазност</span><span>Важећи</span><span id="stationwinnerlabel">Победник</span><span id="stationsharelabel">Удео</span><span id="stationmarginlabel">Маргина</span><span>Статус</span></div>
-<div id="stationlist"></div><button id="stationmore" type="button" hidden>Прикажи још</button></details>
+<div id="stationlist"></div><button id="stationmore" type="button" hidden>Прикажи још</button><p class="note stationattribution">Подаци о насељима: <a href="https://bm.itblokada.org/" target="_blank" rel="noopener">ИТ Блокада</a></p></details>
 <div id="herofoot"></div>
 </section>
 <p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
@@ -1875,12 +1875,6 @@ function renderStationChart(body, station, owner, viewName) {
     return {name, no: i + 1, value, share};
   }).sort((a, b) => diff ? Math.abs(b.value || 0) - Math.abs(a.value || 0) || a.no - b.no
     : (b.value || 0) - (a.value || 0) || a.no - b.no);
-  if (station.address) {
-    const location = mk("p", "Адреса: " + station.address + " · Извор локације: ", "stationlocation"),
-      source = rikHref(T.station_location_source && T.station_location_source.source);
-    if (source) location.append(link("ИТ Блокада", source));
-    body.append(location);
-  }
   const status = diff ? "Са исправкама: " + stationStatus(corrected) + " · Оригинално: " + stationStatus(filed)
     : stationStatus(chosen);
   if (diff) body.append(mk("p", status, "stationnote"));
@@ -2005,14 +1999,16 @@ function renderStationResults() {
       winner = mk("span", null, "stationwinner"), winnerNo = outcome.no == null ? outcome.name === "Нерешено" ? "=" : "—" : String(outcome.no);
     winner.append(mk("span", winnerNo, "no"));
     winner.title = outcome.name;
-    const status = station.annulled ? "Поништено" : station.undetermined ? "Резултати се не могу утврдити"
+    const undeterminedTitle = "Резултати се не могу утврдити (RG-8)",
+      status = station.annulled ? "Поништено" : station.undetermined ? "Неутврђено"
       : viewName === "diff" ? "Поређење" : chosen.included ? "Урачунат" : "Није урачунат",
       statusEl = mk("span", null, "stationstatus" + (station.annulled || station.undetermined ? " out" : viewName === "diff" ? "" : chosen.included ? " in" : " out"));
     const statusMain = mk("span", status, "stationstatusmain" + (chosen.reason && !chosen.included ? " hasreason" : ""));
+    if (station.undetermined) statusMain.title = undeterminedTitle;
     if (chosen.reason && !chosen.included) {
-      statusMain.dataset.reason = chosen.reason;
+      statusMain.dataset.reason = station.undetermined ? undeterminedTitle : chosen.reason;
       statusMain.tabIndex = 0;
-      statusMain.ariaLabel = status + ": " + chosen.reason;
+      statusMain.ariaLabel = status + ": " + statusMain.dataset.reason;
     }
     statusEl.append(statusMain);
     if (viewName !== "diff" && !chosen.included) {
