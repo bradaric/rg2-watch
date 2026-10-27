@@ -809,7 +809,7 @@ function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "",
   classList: {remove() {}, add() {}, toggle() {}}, append(...x) { this.children.push(...x); },
   replaceChildren(...x) { this.children = x; }, get options() { return this.children; }}; }
 const $ = el;
-function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}, append(...nodes) { this.children = this.children || []; this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }}; }
+function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}, dataset: {}, append(...nodes) { this.children = this.children || []; this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }}; }
 function epoch() { return "20:00"; }
 function shortTitle(x) { return x; }
 function Option(text, value) { this.textContent = text; this.value = value; }
@@ -1137,7 +1137,7 @@ assert(els.herotitle.textContent.startsWith("Ћуприја"));
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
   filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
-D.rows = [{id: 9, u: "u9", rv: {v: "escalate"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
+D.rows = [{id: 9, u: "u9", rv: {v: "escalate", n: "Проверити потписе"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
 els.stationbars.value = "2";
 renderHero();
 assert.equal(els.stationresults.hidden, false);
@@ -1172,19 +1172,25 @@ assert.equal(stationShow.href, "#form=9");
 assert.equal(stationShow.target, "_blank");
 assert.equal(shownForm, null, "opening a deep link must leave the current Results tab untouched");
 assert.equal(prevented, 1); assert.equal(stopped, 1);
-function stationReviewText() {
+function stationReviewEl() {
   const card = els.stationlist.children[0], status = card.children[0].children.find(x => x.className.startsWith("stationstatus"));
-  return (status.children || []).find(x => x.className.startsWith("stationreview")).textContent;
+  return (status.children || []).find(x => x.className.startsWith("stationreview"));
 }
 els.tview.value = "filed";
 renderHero();
-assert.equal(stationReviewText(), "ескалиран");
-REV = {u9: {v: "unsure"}}; renderHero();
-assert.equal(stationReviewText(), "несигуран");
+assert.equal(stationReviewEl().textContent, "ескалиран");
+assert.equal(stationReviewEl().dataset.note, "Проверити потписе");
+assert.equal(stationReviewEl().tabIndex, 0);
+assert(stationReviewEl().className.includes("hasnote"));
+REV = {u9: {v: "unsure", n: "Поново упоредити"}}; renderHero();
+assert.equal(stationReviewEl().textContent, "несигуран");
+assert.equal(stationReviewEl().dataset.note, "Поново упоредити");
 REV = {}; renderHero();
-assert.equal(stationReviewText(), "без одлуке");
-REV = {u9: {v: "ok"}}; renderHero();
-assert.equal(stationReviewText(), "прихваћен");
+assert.equal(stationReviewEl().textContent, "без одлуке");
+assert(!stationReviewEl().className.includes("hasnote"));
+REV = {u9: {v: "ok", n: "Проверено"}}; renderHero();
+assert.equal(stationReviewEl().textContent, "прихваћен");
+assert.equal(stationReviewEl().dataset.note, "Проверено");
 REV = null; els.tview.value = "corrected";
 D.rows = [{id: 9}];
 renderHero();

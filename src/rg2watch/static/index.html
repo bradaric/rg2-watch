@@ -288,7 +288,7 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .stationshare{display:grid;gap:2px}.minibar{display:grid;grid-template-columns:1.2em minmax(2.5rem,1fr) 3.2em;gap:3px;align-items:center;height:8px;font-size:9px;line-height:8px}.minino{color:var(--mut);text-align:right}.minitrack{height:4px;background:var(--track);border-radius:2px;overflow:hidden}.minifill{display:block;height:100%;background:var(--bar);border-radius:2px}.minipct{text-align:right}
 .stationshare.single .minibar{height:12px;font-size:11px;line-height:12px}.stationshare.single .minitrack{height:6px}.stationshare.single .minipct{font-weight:700}
 .stationmargin.visual{display:grid;grid-template-columns:minmax(2.5rem,1fr) auto;gap:var(--s2);align-items:center}.stationmargintrack{height:5px;background:var(--track);border-radius:3px;overflow:hidden}.stationmarginfill{display:block;height:100%;background:var(--bar);border-radius:3px}.stationmarginvalues{display:grid;line-height:1.05}.stationmarginpp{font-weight:800}.stationmarginvotes{margin-top:3px;color:var(--mut);font-size:.8em}
-.stationstatus{display:grid;grid-template-columns:auto auto auto;align-items:center;justify-content:end;color:var(--mut);white-space:nowrap}.stationstatus.in::before,.stationstatus.out::before{grid-column:1;grid-row:1/3;margin-right:5px}.stationstatus.in::before{content:"●";color:var(--good)}.stationstatus.out::before{content:"●";color:var(--hi)}.stationstatusmain{grid-column:2;grid-row:1;text-align:right}.stationreview{font-size:.8em;grid-column:2;grid-row:2;text-align:right;color:var(--mut)}.stationreview.escalate{color:var(--hi)}.stationreview.unsure{color:var(--md)}.stationreview.ok{color:var(--good)}
+.stationstatus{display:grid;grid-template-columns:auto auto auto;align-items:center;justify-content:end;color:var(--mut);white-space:nowrap}.stationstatus.in::before,.stationstatus.out::before{grid-column:1;grid-row:1/3;margin-right:5px}.stationstatus.in::before{content:"●";color:var(--good)}.stationstatus.out::before{content:"●";color:var(--hi)}.stationstatusmain{grid-column:2;grid-row:1;text-align:right}.stationreview{font-size:.8em;grid-column:2;grid-row:2;text-align:right;color:var(--mut)}.stationreview.escalate{color:var(--hi)}.stationreview.unsure{color:var(--md)}.stationreview.ok{color:var(--good)}.stationreview.hasnote{position:relative;cursor:help;text-decoration:underline dotted;text-underline-offset:2px}.stationreview.hasnote::after{content:attr(data-note);position:absolute;z-index:30;right:0;bottom:calc(100% + 6px);display:none;width:max-content;max-width:min(24rem,70vw);padding:7px 9px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008;color:var(--fg);font-size:12px;font-weight:400;line-height:1.35;text-align:left;white-space:normal}.stationreview.hasnote:hover::after,.stationreview.hasnote:focus::after{display:block}
 .stationactions{position:relative;display:inline-flex;grid-column:3;grid-row:1/3;margin-left:var(--s1)}.stationmenubtn{display:inline-grid;place-items:center;width:1.8rem;height:1.65rem;padding:0;border:1px solid var(--line2);border-radius:5px;background:var(--surface);color:var(--fg);cursor:pointer}.stationmenubtn::before{content:"";width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid currentColor}.stationmenu{position:absolute;z-index:20;right:0;top:calc(100% + 3px);display:grid;min-width:8rem;padding:4px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008}.stationmenu[hidden]{display:none}.stationmenuitem{display:block;border:0;border-radius:4px;background:none;color:var(--fg);font:inherit;text-align:left;text-decoration:none;padding:6px 8px;cursor:pointer}.stationmenuitem:hover,.stationmenuitem:focus{background:var(--surface);color:var(--accent)}
 .stationbody{padding:0 var(--s3) var(--s3) 2rem}.stationnote{color:var(--mut);margin:var(--s2) 0}
 .stationbar{display:grid;grid-template-columns:minmax(12rem,30%) minmax(8rem,1fr) 11rem;gap:var(--s3);align-items:center;padding:5px 0}
@@ -1754,9 +1754,9 @@ function stationSource(id) {
   return D.rows.find(row => String(row.id) === String(id)) || {};
 }
 function stationReview(id) {
-  const source = stationSource(id), verdict = source.u ? (rvOf(source) || {}).v || "" : "";
+  const source = stationSource(id), review = source.u ? rvOf(source) || {} : {}, verdict = review.v || "";
   const labels = {ok: "прихваћен", escalate: "ескалиран", unsure: "несигуран"};
-  return {verdict, label: labels[verdict] || "без одлуке"};
+  return {verdict, label: labels[verdict] || "без одлуке", note: review.n || ""};
 }
 function stationActionMenu(station) {
   const actions = mk("span", null, "stationactions"), button = mk("button", null, "stationmenubtn"),
@@ -1866,8 +1866,14 @@ function renderStationResults() {
     if (chosen.reason) statusEl.title = chosen.reason;
     statusEl.append(mk("span", status, "stationstatusmain"));
     if (viewName !== "diff" && !chosen.included) {
-      const review = stationReview(station.id);
-      statusEl.append(mk("span", review.label, "stationreview " + (review.verdict || "undecided")));
+      const review = stationReview(station.id), reviewEl = mk("span", review.label,
+        "stationreview " + (review.verdict || "undecided") + (review.note ? " hasnote" : ""));
+      if (review.note) {
+        reviewEl.dataset.note = review.note;
+        reviewEl.tabIndex = 0;
+        reviewEl.ariaLabel = review.label + ": " + review.note;
+      }
+      statusEl.append(reviewEl);
     }
     statusEl.append(stationActionMenu(station));
     summary.append(mk("span", "БМ " + station.no + (station.name ? " — " + station.name : ""), "stationname"),

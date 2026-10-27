@@ -223,6 +223,7 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
     assert '.stationmenubtn{display:inline-grid;place-items:center;' in html
     assert '.stationmenubtn::before{content:"";' in html
     assert '.stationreview{font-size:.8em;' in html
+    assert '.stationreview.hasnote:hover::after,.stationreview.hasnote:focus::after{display:block}' in html
     assert '.stationmarginfill{display:block;height:100%;background:var(--bar)' in html
 
 
