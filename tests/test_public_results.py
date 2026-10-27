@@ -226,6 +226,7 @@ def test_public_page_renders_sanitized_station_results_with_global_progressive_f
     assert 'data-station-filter="in"' in html
     assert 'data-station-filter="out"' in html
     assert 'id="station-more"' in html
+    assert '.station-more[hidden]{display:none}' in html
 
     script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
     harness = r'''
