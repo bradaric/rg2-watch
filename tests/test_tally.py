@@ -685,6 +685,9 @@ def test_operator_results_use_editorial_accents():
     assert '<div class="hero-eyebrow">Пресек резултата</div>' in html
     assert ".resultgroup h3{" in html and "border-left:3px solid var(--accent)" in html
     assert "body.hero>*:not(#resview):not(.serbian-flag-bg){display:none!important}" in html
+    assert ".resultvotes{" in html and ".resultpct{" in html
+    assert ".resultvotes{color:var(--mut)" in html
+    assert ".resultpct{color:var(--fg);font-weight:800" in html
 
 
 def test_operator_results_sort_municipality_picker_by_serbian_alphabet():
@@ -804,7 +807,7 @@ function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "",
   classList: {remove() {}, add() {}, toggle() {}}, append(...x) { this.children.push(...x); },
   replaceChildren(...x) { this.children = x; }, get options() { return this.children; }}; }
 const $ = el;
-function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}, append(...nodes) { this.children = this.children || []; this.children.push(...nodes); }}; }
+function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}, append(...nodes) { this.children = this.children || []; this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }}; }
 function epoch() { return "20:00"; }
 function shortTitle(x) { return x; }
 function Option(text, value) { this.textContent = text; this.value = value; }
@@ -837,7 +840,7 @@ function redraw() { redrawCalls++; }
 els.tview = {value: "corrected"};
 els.tmode = {value: "all"};
 ''' + helpers + hero + paint + refresh + r'''
-for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, nm: {}, fill: {style: {}}, val: {}});
+for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, nm: {}, fill: {style: {}}, val: mk("div")});
 function totals(valid, lists) {
   const o = {registered: 1000, voted: 100, turnout: .1, ballots_in_box: 100, invalid: 0,
     valid, outside_voted: 0, vote_forms: lists ? 1 : 0, withheld_valid: lists ? 0 : 100,
@@ -876,6 +879,10 @@ assert.equal(csvValue(csv, "Unreconciled turnout gap (signed)"), "0");
 renderHero();
 assert(els["hs-valid-primary"].textContent.includes("Неусаглашено: 0"));
 assert(els.herotitle.textContent.includes("Избори Ћирилица"));
+assert.equal(slots[0].val.children[0].textContent, "60");
+assert.equal(slots[0].val.children[0].className, "resultvotes");
+assert.equal(slots[0].val.children[1].textContent, "60.0%");
+assert.equal(slots[0].val.children[1].className, "resultpct");
 assert.equal(slots[0].nm.textContent, "Листа А");
 assert.equal(slots[1].nm.textContent, "Листа 2");
 T.names = ["List 1", "List 2"];
@@ -1030,7 +1037,7 @@ r = row(null, [55, 45]);
 setData(r);
 renderHero();
 assert.equal(slots[0].row.hidden, false, "filed-only eligible selected view must show the chart");
-assert(!slots[0].val.textContent.includes("NaN"));
+assert(!slots[0].val.children.map(x => x.textContent).join(" ").includes("NaN"));
 
 els.tview.value = "diff";
 r = row([60, 40], [55, 45]);
@@ -1071,7 +1078,7 @@ assert.deepEqual(els["hs-valid-primary"].textContent.split("\n").slice(0, 3), [
 assert(els["hs-valid-primary"].textContent.includes("Разлика неурачунатих важећих гласова: −8"));
 assert(els["hs-valid-primary"].textContent.includes("Разлика неусаглашене излазности: ·"));
 els.tmode.value = "all";
-assert(slots[0].val.textContent.includes("п. п."));
+assert(slots[0].val.children[1].textContent.includes("п. п."));
 const diffCols = resultCols("all");
 const selected = diffCols.find(x => x.t === "Selected in both views");
 assert.equal(selected.f(selected.v(vrow(r))), "13");
@@ -1156,6 +1163,9 @@ assert.equal(stationCard.open, false);
 assert.equal(els.stationtoggle.textContent, "Прошири све");
 stationCard.open = true; stationCard.ontoggle();
 assert(stationCard.children[1].children.length > 1);
+const firstStationValue = stationCard.children[1].children.find(x => x.className === "stationbar").children[2];
+assert.equal(firstStationValue.children[0].className, "resultvotes");
+assert.equal(firstStationValue.children[1].className, "resultpct");
 assert(!stationCard.children[1].children.some(x => x.textContent === "Урачунат"),
   "the inclusion status already shown in the station summary must not be repeated");
 renderHero();

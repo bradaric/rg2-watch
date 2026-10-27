@@ -266,6 +266,8 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .hrow .track{background:var(--track);border-radius:3px;height:1.05em;overflow:hidden}
 .hrow .fill{height:100%;width:0;min-width:3px;border-radius:0 3px 3px 0;background:var(--bar);transition:width .8s ease}
 .hrow .val{text-align:right;font-variant-numeric:tabular-nums;white-space:pre;font-weight:700;letter-spacing:-.01em}
+.hrow .val,.stationbar .value{display:flex;justify-content:flex-end;align-items:baseline;gap:.45em}
+.resultvotes{color:var(--mut);font-size:.82em;font-weight:600}.resultpct{color:var(--fg);font-weight:800}
 #stationresults{margin-top:var(--s5);border-top:2px solid var(--accent);padding-top:var(--s3)}
 #stationresults[hidden]{display:none}
 #stationhead{cursor:pointer;display:flex;align-items:baseline;gap:var(--s3);list-style:none;padding:0 0 var(--s2)}
@@ -1348,6 +1350,10 @@ function applyData(data) {
 const nf = new Intl.NumberFormat("en-GB");
 const num = v => v == null ? "-" : nf.format(v);
 const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
+function resultValue(el, votes, share, diff) {
+  el.replaceChildren(mk("span", diff ? dnum(votes) : num(votes), "resultvotes"),
+    mk("span", diff ? dpp(share) + " п. п." : pc(share), "resultpct"));
+}
 const ratio = (a, b) => b ? a / b : null;
 const NV = () => $("tview").value;  // numbers: corrected | filed | diff
 const NV_LABEL = {corrected: "With RG-7 and operator-entered corrections.", filed: "As filed on the RG-2 forms (RG-7 and operator corrections not applied).",
@@ -1751,8 +1757,7 @@ function renderStationChart(body, station, owner, viewName) {
       track = mk("div", null, "track"), fill = mk("div", null, "fill"), value = mk("div", null, "value");
     fill.style.width = item.value == null ? "0" : (diff ? Math.abs(item.value) / max * 100
       : Math.min(100, (item.share || 0) * 100)) + "%";
-    value.textContent = item.value == null ? "—" : diff ? dnum(item.value) + "  " + dpp(item.share) + " п. п."
-      : num(item.value) + "  " + pc(item.share);
+    resultValue(value, item.value, item.share, diff);
     track.append(fill); row.append(label, track, value); body.append(row);
   }
 }
@@ -1913,7 +1918,7 @@ function renderHero() {
     s.no.textContent = e.i < 0 ? "" : String(e.i + 1);  // ballot number = the list row on the form
     s.no.hidden = e.i < 0;
     s.nm.textContent = e.n; s.row.title = e.n;
-    s.val.textContent = dg ? dnum(e.v) + "  " + dpp(share) + " п. п." : num(e.v) + "  " + pc(share);
+    resultValue(s.val, e.v, share, dg);
     s.fill.style.width = (dg ? Math.abs(e.v) / maxAbs * 100 : Math.min(100, share * 100)) + "%";
     s.fill.style.backgroundColor = RESULT_BAR_COLOR;
   });
