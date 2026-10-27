@@ -238,6 +238,15 @@ The snapshot records its source revision and retrieval date, and matching uses m
 station number. It is display-only, is attributed in expanded station cards, and never affects station
 identity, inclusion or totals. Exported pages make no runtime request to the external site.
 
+A separate bundled `static/station_coordinates.json` caches latitude, longitude and location-confidence
+flags from the same source revision for future use. It records the source URL, revision, retrieval date,
+SHA-256 of the downloaded bundle and field order. `station_coordinates(municipality, station_no)` in
+`rg2watch.station_locations` provides an offline lookup; it returns `None` for unknown stations or
+missing coordinates. Confidence ranks are `0` (source marks confident), `1` (unverified) and `2`
+(approximate), not scan-analysis confidence. These are the source coordinates, without display offsets
+used to separate overlapping map pins. Coordinates are not currently added to result exports or any map
+UI. Check election-specific station identities before using this snapshot for another election.
+
 Scope: list totals only make sense where one ballot is used everywhere. RIK's election type 2
 (parliamentary) is `national`: list votes overall and per municipality, `"<parent>" = ["Name 1", ...]`.
 Type 3 (local) is `municipal`: every municipality has its own ballot, so the modal list-row set, names
