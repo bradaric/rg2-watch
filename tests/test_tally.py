@@ -799,8 +799,7 @@ def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_
     assert 'id="stationresults"' in html and "function renderStationResults(" in html
     helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
     hero = html[html.index("const RESULT_BAR_COLOR") : html.index('$("herobtn").onclick')]
-    assert "function paintHero" in html
-    paint = html[html.index("function paintHero"):html.index("// ---- table")]
+    status = html[html.index("function paintHero"):html.index("// ---- table")]
     refresh = html[html.index("function rowOf"):html.index("function escalatedCsv")]
     script = r'''
 const assert = require("assert");
@@ -845,7 +844,7 @@ let redrawCalls = 0;
 function redraw() { redrawCalls++; }
 els.tview = {value: "corrected"};
 els.tmode = {value: "all"};
-''' + helpers + hero + paint + refresh + r'''
+''' + helpers + hero + status + refresh + r'''
 for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, nm: {}, fill: {style: {}}, val: mk("div")});
 function totals(valid, lists) {
   const o = {registered: 1000, voted: 100, turnout: .1, ballots_in_box: 100, invalid: 0,
@@ -1257,6 +1256,43 @@ assert.equal(els.stationfilters.hidden, true);
 assert.equal(els.sortturnouthigh.textContent, "Највећа промена излазности");
 assert.equal(els.sortturnoutlow.textContent, "Најмања промена излазности");
 assert.deepEqual(stationIds(), [13, 10, 12, 11], "difference mode ignores review filters and incompatible sorts");
+T.scope = "national"; T.names = ["A", "B"];
+T.station_results = Array.from({length: 102}, (_, i) => {
+  const station = sortableStation(1000 + i, i + 1, 500 + i, [300 + i, 190]);
+  station.m = i % 2 ? "(unknown)" : "Ћуприја";
+  return station;
+});
+D.rows = T.station_results.map(station => ({id: station.id}));
+let stationSourceFinds = 0;
+const nativeStationSourceFind = D.rows.find.bind(D.rows);
+D.rows.find = (...args) => { stationSourceFinds++; return nativeStationSourceFind(...args); };
+REV = null; els.tview.value = "corrected"; els.stationsort.value = "station";
+setStationFilter("all");
+let stationOutcomeCalls = 0, stationSourceCalls = 0;
+const realStationOutcome = stationOutcome, realStationSource = stationSource;
+stationOutcome = (...args) => { stationOutcomeCalls++; return realStationOutcome(...args); };
+stationSource = (...args) => { stationSourceCalls++; return realStationSource(...args); };
+heroMuni = ""; heroPicked = true; renderHero();
+assert(stationSourceFinds <= 1, "all-municipality rendering must not scan every form for every station");
+assert(stationOutcomeCalls <= 100, "station-order rendering computes outcomes only for visible rows");
+assert(stationSourceCalls <= 205, "off-screen rows do not build action-link cache data");
+stationOutcome = realStationOutcome; stationSource = realStationSource;
+assert.equal(els.stationresults.hidden, false);
+assert.equal(stationIds().length, 100);
+assert(els.stationlist.children[0].children[0].children[0].textContent.includes(" · БМ "));
+assert.equal(els.stationmore.hidden, false);
+assert.equal(els.stationmore.textContent, "Прикажи још (2)");
+loadMoreStations();
+assert.equal(stationIds().length, 102);
+assert.equal(els.stationmore.hidden, true);
+heroMuni = "Ћуприја"; renderHero();
+assert.equal(stationIds().length, 51, "a selected municipality renders every matching station");
+assert.equal(els.stationmore.hidden, true);
+assert(!els.stationlist.children[0].children[0].children[0].textContent.startsWith("Ћуприја ·"));
+T.scope = "municipal"; unknown.names = ["X", "Y"]; unknown.nlists = 2;
+heroMuni = ""; els.stationsort.value = "winner"; renderHero();
+assert.equal(els.sortwinner.hidden, true);
+assert.equal(els.stationsort.value, "station");
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
   filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];

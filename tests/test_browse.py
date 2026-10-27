@@ -211,7 +211,9 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
 
     assert '<details id="stationresults" hidden>' in html
     assert '<details id="stationresults" hidden open>' not in html
-    assert 'id="stationsort"' in html and 'id="stationbars"' in html and 'id="stationtoggle"' in html
+    assert all(f'id="{control}"' in html for control in (
+        "stationsort", "stationbars", "stationtoggle", "stationmore"))
+    assert "#stationmore[hidden]{display:none}" in html
     assert all(f'<option value="{n}">' in html for n in (1, 2, 3))
     assert '<option value="1">1 листа</option>' in html
     assert '<option value="2" selected>2 листе</option>' in html
@@ -519,7 +521,7 @@ def test_page_marks_stale_status():
 
 def test_status_refresh_preserves_unchanged_alerts_and_skips_static_repaints():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    status = html[html.index("function paintHero"):html.index("// ---- table")]
+    status = html[html.index("let statusKey"):html.index("// ---- table")]
     script = r'''
 const assert = require("assert");
 const els = {};
@@ -543,7 +545,8 @@ function rikHref() { return null; }
 function link() { return mk("a"); }
 function showForm() {}
 const STALE_S = 60, SEV = ["HIGH", "MEDIUM", "LOW"];
-let slots = [], rows = [], D = {db: "db", built: "one"}, S = null;
+let heroPaints = 0, slots = [{}], rows = [], D = {db: "db", built: "one"}, S = null;
+function renderHero() { heroPaints++; }
 ''' + status + r'''
 const view = {
   ts: 1, watching: false, db: "db", watcher: null,
@@ -559,6 +562,7 @@ const alertReplaces = els["status-alerts"].replaceCount;
 renderStatus();
 assert.strictEqual(els["status-alerts"].children[0], alertCard, "unchanged alerts keep the same DOM node");
 assert.equal(els["status-alerts"].replaceCount, alertReplaces, "unchanged alerts are not replaced");
+assert.equal(heroPaints, 0, "status-only updates must not repaint election results");
 
 let paints = 0;
 renderStatus = () => { paints++; };

@@ -296,6 +296,7 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .stationbar{display:grid;grid-template-columns:minmax(12rem,30%) minmax(8rem,1fr) 11rem;gap:var(--s3);align-items:center;padding:5px 0}
 .stationbar .track{height:11px;background:var(--track);border-radius:6px;overflow:hidden}.stationbar .fill{height:100%;background:var(--bar);border-radius:6px}
 .stationbar .value{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:700}
+#stationmore{display:block;margin:var(--s3) auto 0}#stationmore[hidden]{display:none}
 #heronote{font-size:clamp(1rem,1.5vw,1.7rem);font-weight:700;color:var(--md);margin:var(--s2) 0}
 #heronote:empty{display:none}
 #heronames{margin-top:var(--s3);font-size:clamp(.9rem,1.2vw,1.45rem)}
@@ -440,7 +441,7 @@ stroke-width:2.5;
 <details id="stationresults" hidden><summary id="stationhead"><h3>Резултати по бирачким местима</h3><span id="stationcount"></span></summary>
 <div id="stationtools"><div id="stationfilters" role="group" aria-label="Филтер бирачких места"><button type="button" id="stationfilter-all" class="stationfilter" data-station-filter="all" aria-pressed="true">Сва бирачка места</button><button type="button" id="stationfilter-out" class="stationfilter" data-station-filter="out" aria-pressed="false">Није урачунато</button><button type="button" id="stationfilter-escalate" class="stationfilter" data-station-filter="escalate" aria-pressed="false">Ескалирано</button><button type="button" id="stationfilter-unsure" class="stationfilter" data-station-filter="unsure" aria-pressed="false">Несигурно</button><button type="button" id="stationfilter-undecided" class="stationfilter" data-station-filter="undecided" aria-pressed="false">Без одлуке</button></div><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option><option id="sortmarginclose" value="margin-close">Најтешња трка</option><option id="sortmarginwide" value="margin-wide">Највећа маргина</option><option id="sortturnouthigh" value="turnout-high">Највећа излазност</option><option id="sortturnoutlow" value="turnout-low">Најмања излазност</option><option id="sortreview" value="review">Статус провере</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2" selected>2 листе</option><option value="3">3 листе</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
 <div class="stationcols" aria-hidden="true"><span></span><span>Бирачко место</span><span>Излазност</span><span>Важећи</span><span id="stationwinnerlabel">Победник</span><span id="stationsharelabel">Удео</span><span id="stationmarginlabel">Маргина</span><span>Статус</span></div>
-<div id="stationlist"></div></details>
+<div id="stationlist"></div><button id="stationmore" type="button" hidden>Прикажи још</button></details>
 <div id="herofoot"></div>
 </section>
 <p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
@@ -591,7 +592,6 @@ function renderStatus() {
     alertsKey = null;
     ban.style.display = "block";
     ban.textContent = "no status yet";
-    paintHero();
     return;
   }
   const age = Date.now() / 1000 - S.ts;
@@ -639,7 +639,6 @@ function renderStatus() {
   cards.push(card("Review & alerts", reviewAlerts));
   box.replaceChildren(...cards);
   renderAlerts();
-  paintHero();
 }
 function applyStatus(s) {
   const key = JSON.stringify(s);
@@ -856,6 +855,7 @@ function refreshRow(id) {
   if (row.child.isShown()) row.child(child(row.data())).show();
   table.draw(false);
   renderStatus();
+  paintHero();
 }
 function submitReview(r, verdict, note, msg) {
   if (!HTTP) return;
@@ -893,6 +893,7 @@ function loadReviews() {
         table.draw(false);
       }
       renderStatus();
+      paintHero();
     }, e => console.error("fetching reviews.json failed", e));
 }
 
@@ -1574,9 +1575,11 @@ function renderTally() {
 
 // ---- hero display -------------------------------------------------------------------------
 const RESULT_BAR_COLOR = "var(--bar)";
-let heroMuni = "", heroPicked = false, slots = [], stationKey = "";
+let heroMuni = "", heroPicked = false, slots = [], stationKey = "", stationScope = null, stationLimit = 100;
 function setHeroMunicipality(value, picked = true) {
-  heroMuni = value || "";
+  const next = value || "";
+  if (heroMuni !== next) { stationLimit = 100; stationScope = next; stationKey = ""; }
+  heroMuni = next;
   heroPicked = picked;
 }
 function setSharedMunicipality(value) {
@@ -1752,11 +1755,16 @@ function setStationActionsOpen(actions, open) {
 function closeStationActions() {
   if (openStationActions) setStationActionsOpen(openStationActions, false);
 }
+let stationSourceRows = null, stationSourceById = new Map();
 function stationSource(id) {
-  return D.rows.find(row => String(row.id) === String(id)) || {};
+  if (stationSourceRows !== D.rows) {
+    stationSourceRows = D.rows;
+    stationSourceById = new Map((D.rows || []).map(row => [String(row.id), row]));
+  }
+  return stationSourceById.get(String(id)) || {};
 }
-function stationReview(id) {
-  const source = stationSource(id), review = source.u ? rvOf(source) || {} : {}, verdict = review.v || "";
+function stationReview(id, source = stationSource(id)) {
+  const review = source.u ? rvOf(source) || {} : {}, verdict = review.v || "";
   const labels = {ok: "прихваћен", escalate: "ескалиран", unsure: "несигуран"};
   return {verdict, label: labels[verdict] || "без одлуке", note: review.n || ""};
 }
@@ -1766,12 +1774,18 @@ const STATION_FILTERS = {
 let stationFilter = "all";
 function setStationFilter(value) {
   stationFilter = value in STATION_FILTERS ? value : "all";
+  stationLimit = 100;
   stationKey = "";
   if (T) renderStationResults();
 }
-function stationActionMenu(station) {
+function loadMoreStations() {
+  stationLimit += 100;
+  stationKey = "";
+  if (T) renderStationResults();
+}
+function stationActionMenu(station, source = stationSource(station.id)) {
   const actions = mk("span", null, "stationactions"), button = mk("button", null, "stationmenubtn"),
-    menu = mk("span", null, "stationmenu"), source = stationSource(station.id);
+    menu = mk("span", null, "stationmenu");
   button.type = "button"; button.ariaLabel = "Actions"; button.ariaHasPopup = "menu"; button.ariaExpanded = "false";
   menu.hidden = true; menu.role = "menu";
   const pdf = localHref(source.pdf), rik = rikHref(source.rik);
@@ -1832,10 +1846,10 @@ function renderStationChart(body, station, owner, viewName) {
 }
 function renderStationResults() {
   const section = $("stationresults"), list = $("stationlist");
-  if (!T || !heroMuni) { stationKey = ""; section.hidden = true; list.replaceChildren(); return; }
-  const owner = T.munis.find(row => row.m === heroMuni), mode = $("tmode").value, viewName = NV();
-  const listOwner = T.scope === "municipal" ? owner : T;
-  let stations = (T.station_results || []).filter(station => station.m === heroMuni);
+  if (!T) { stationKey = ""; section.hidden = true; list.replaceChildren(); $("stationmore").hidden = true; return; }
+  if (stationScope !== heroMuni) { stationScope = heroMuni; stationLimit = 100; stationKey = ""; }
+  const allScope = !heroMuni, mode = $("tmode").value, viewName = NV();
+  let stations = (T.station_results || []).filter(station => allScope || station.m === heroMuni);
   if (mode === "cl") stations = stations.filter(station => {
     const filed = station.filed || station.corrected;
     return viewName === "diff" ? station.corrected.clean && filed.clean
@@ -1843,9 +1857,12 @@ function renderStationResults() {
   });
   const requestedSort = $("stationsort").value || "station", barCount = Number($("stationbars").value) || 1,
     diff = viewName === "diff", incompatibleSort = ["margin-close", "margin-wide", "review"].includes(requestedSort),
-    sort = diff && incompatibleSort ? "station" : requestedSort;
+    localAll = T.scope === "municipal" && allScope,
+    sort = (localAll && requestedSort === "winner") || (diff && incompatibleSort) ? "station" : requestedSort;
+  if (sort !== requestedSort) $("stationsort").value = sort;
   $("stationfilters").hidden = diff;
   for (const id of ["sortmarginclose", "sortmarginwide", "sortreview"]) $(id).hidden = diff;
+  $("sortwinner").hidden = localAll;
   $("stationwinnerlabel").textContent = viewName === "diff" ? "Највећа промена" : "Победник";
   $("stationsharelabel").textContent = viewName === "diff" ? "Гласови" : "Удео";
   $("stationmarginlabel").textContent = viewName === "diff" ? "Удео" : "Маргина";
@@ -1853,14 +1870,20 @@ function renderStationResults() {
   $("sortshare").textContent = viewName === "diff" ? "Величина промене" : "Удео победника";
   $("sortturnouthigh").textContent = viewName === "diff" ? "Највећа промена излазности" : "Највећа излазност";
   $("sortturnoutlow").textContent = viewName === "diff" ? "Најмања промена излазности" : "Најмања излазност";
+  const municipalityByName = new Map(T.munis.map(row => [row.m, row]));
   let records = stations.map(station => {
     const corrected = station.corrected, filed = station.filed || corrected,
-      chosen = viewName === "filed" ? filed : corrected, review = stationReview(station.id),
+      chosen = viewName === "filed" ? filed : corrected, source = stationSource(station.id),
+      review = stationReview(station.id, source),
+      municipality = municipalityByName.get(station.m),
+      listOwner = T.scope === "municipal" ? municipality : T,
       correctedTurnout = stationTurnout(corrected), filedTurnout = stationTurnout(filed),
       turnout = diff ? correctedTurnout == null || filedTurnout == null ? null : correctedTurnout - filedTurnout
         : stationTurnout(chosen);
-    return {station, chosen, review, turnout, outcome: stationOutcome(station, listOwner, viewName)};
+    return {station, source, chosen, review, turnout, listOwner,
+      municipalityName: heroMuniName(municipality || station), outcome: null};
   });
+  const outcomeOf = record => record.outcome || (record.outcome = stationOutcome(record.station, record.listOwner, viewName));
   const allRecords = records;
   const filterMatch = (record, filter) => filter === "all" ? true : record.chosen.included ? false
     : filter === "out" ? true : filter === "undecided" ? !record.review.verdict : record.review.verdict === filter;
@@ -1870,7 +1893,9 @@ function renderStationResults() {
     button.setAttribute("aria-pressed", String(stationFilter === value));
   }
   if (!diff && stationFilter !== "all") records = records.filter(record => filterMatch(record, stationFilter));
-  const byStation = (a, b) => String(a.station.no).localeCompare(String(b.station.no), undefined, {numeric: true});
+  const byStation = (a, b) => (allScope
+    ? SERBIAN_MUNICIPALITY_COLLATOR.compare(a.municipalityName, b.municipalityName)
+    : 0) || String(a.station.no).localeCompare(String(b.station.no), undefined, {numeric: true});
   const byNumber = (getter, descending = false) => (a, b) => {
     const av = getter(a), bv = getter(b);
     if (av == null) return bv == null ? byStation(a, b) : 1;
@@ -1880,29 +1905,31 @@ function renderStationResults() {
   const reviewRank = record => record.chosen.included ? 4
     : ({escalate: 0, unsure: 1, "": 2, ok: 3}[record.review.verdict] ?? 3);
   const comparators = {
-    winner: (a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(a.outcome.name, b.outcome.name) || byStation(a, b),
-    share: byNumber(record => Math.abs(record.outcome.share || 0), true),
-    "margin-close": byNumber(record => record.outcome.marginShare),
-    "margin-wide": byNumber(record => record.outcome.marginShare, true),
+    winner: (a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(outcomeOf(a).name, outcomeOf(b).name) || byStation(a, b),
+    share: byNumber(record => Math.abs(outcomeOf(record).share || 0), true),
+    "margin-close": byNumber(record => outcomeOf(record).marginShare),
+    "margin-wide": byNumber(record => outcomeOf(record).marginShare, true),
     "turnout-high": byNumber(record => record.turnout == null ? null : Math.abs(record.turnout), true),
     "turnout-low": byNumber(record => record.turnout == null ? null : Math.abs(record.turnout)),
     review: (a, b) => reviewRank(a) - reviewRank(b) || byStation(a, b),
     station: byStation,
   };
   records.sort(comparators[sort] || byStation);
-  const sourceLinks = allRecords.map(({station, review}) => {
-    const source = stationSource(station.id);
+  const matching = records.length, shown = allScope ? Math.min(matching, stationLimit) : matching;
+  records = records.slice(0, shown);
+  for (const record of records) outcomeOf(record);
+  const sourceLinks = records.map(({station, source, review}) => {
     return [station.id, source.pdf || "", source.rik || "", review.verdict, review.note];
   });
   const key = JSON.stringify([heroMuni, mode, viewName, T.scope, sort, barCount, stationFilter,
-    heroListNames(listOwner), records, sourceLinks]);
+    stationLimit, records, sourceLinks]);
   if (key === stationKey) return;
   stationKey = key;
   section.hidden = false;
-  $("stationcount").textContent = !diff && stationFilter !== "all"
-    ? num(records.length) + " од " + num(stations.length) + " записника"
-    : num(stations.length) + " " + serbianCount(stations.length, "записник", "записника", "записника");
-  const cards = records.map(({station, outcome, chosen, review, turnout}) => {
+  $("stationcount").textContent = shown < matching ? num(shown) + " од " + num(matching) + " записника"
+    : !diff && stationFilter !== "all" ? num(matching) + " од " + num(stations.length) + " записника"
+    : num(matching) + " " + serbianCount(matching, "записник", "записника", "записника");
+  const cards = records.map(({station, source, outcome, chosen, review, turnout, listOwner, municipalityName}) => {
     const corrected = station.corrected, filed = station.filed || corrected;
     const valid = viewName === "diff" ? corrected.valid == null || filed.valid == null ? null
       : corrected.valid - filed.valid : chosen.valid;
@@ -1929,8 +1956,8 @@ function renderStationResults() {
       }
       statusEl.append(reviewEl);
     }
-    statusEl.append(stationActionMenu(station));
-    summary.append(mk("span", "БМ " + station.no + (station.name ? " — " + station.name : ""), "stationname"),
+    statusEl.append(stationActionMenu(station, source));
+    summary.append(mk("span", (allScope ? municipalityName + " · " : "") + "БМ " + station.no + (station.name ? " — " + station.name : ""), "stationname"),
       mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric"),
       mk("span", valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid), "stationmetric"), winner,
       stationMiniBars(outcome, barCount, viewName === "diff"), stationMargin(outcome, viewName === "diff"), statusEl);
@@ -1949,6 +1976,9 @@ function renderStationResults() {
   list.replaceChildren(...cards);
   if (!cards.length) list.replaceChildren(mk("p", !diff && stationFilter !== "all"
     ? "Нема записника за изабрани филтер." : "Нема записника у изабраном обухвату.", "stationnote"));
+  const more = $("stationmore");
+  more.hidden = !allScope || shown >= matching;
+  more.textContent = "Прикажи још (" + num(Math.min(100, matching - shown)) + ")";
   updateStationToggle();
 }
 function renderHero() {
@@ -2065,10 +2095,11 @@ document.addEventListener("keydown", ev => {
 $("hmuni").addEventListener("input", () => setSharedMunicipality($("hmuni").value));
 $("hmode").addEventListener("input", () => { $("tmode").value = $("hmode").value; if (T) renderTally(); });
 $("hview").addEventListener("input", () => { $("tview").value = $("hview").value; writeHash(); if (T) renderTally(); });
-$("stationsort").addEventListener("input", () => { if (T) renderStationResults(); });
+$("stationsort").addEventListener("input", () => { stationLimit = 100; stationKey = ""; if (T) renderStationResults(); });
 $("stationbars").addEventListener("input", () => { if (T) renderStationResults(); });
 for (const value of Object.keys(STATION_FILTERS)) $("stationfilter-" + value).onclick = () => setStationFilter(value);
 $("stationtoggle").onclick = () => setAllStations(!stationCards().every(card => card.open));
+$("stationmore").onclick = loadMoreStations;
 initHero();
 if (new URLSearchParams(location.search).get("hero") === "1") setHero(true);
 
