@@ -25,6 +25,31 @@ def test_station_location_handles_city_district_aliases_and_unknown_stations():
     assert station_location("Градска општина Гроцка", "999") is None
 
 
+def test_foreign_station_location_uses_city_and_country_without_exposing_street_as_settlement():
+    assert station_location("Иностранство", "79") == {
+        "settlement": "ПАРИЗ · ФРАНЦУСКА",
+        "address": "123 RUE SAINT-MARTIN, 75004 ПАРИЗ, ФРАНЦУСКА",
+    }
+    assert station_location("Иностранство", "11") == {
+        "settlement": "БАЊА ЛУКА · БОСНА И ХЕРЦЕГОВИНА",
+        "address": "ВОЈВОДЕ РАДОМИРА ПУТНИКА 2, 78000 БАЊА ЛУКА, БОСНА И ХЕРЦЕГОВИНА",
+    }
+
+
+@pytest.mark.parametrize("number,expected", [
+    ("1", "МЕЛБУРН · АУСТРАЛИЈА"),
+    ("10", "САРАЈЕВО · БОСНА И ХЕРЦЕГОВИНА"),
+    ("12", "БОСНА И ХЕРЦЕГОВИНА"),
+    ("52", "BEGGEN · ЛУКСЕМБУРГ"),
+    ("53", "FLORIANA · МАЛТА"),
+    ("71", "ВАШИНГТОН · СЈЕДИЊЕНЕ АМЕРИЧКЕ ДРЖАВЕ"),
+    ("77", "ЛОНДОН · УЈЕДИЊЕНО КРАЉЕВСТВО"),
+    ("92", "МАДРИД · ШПАНИЈА"),
+])
+def test_foreign_station_location_handles_source_address_variants(number, expected):
+    assert station_location("Иностранство", number)["settlement"] == expected
+
+
 @pytest.mark.parametrize("municipality", ["Градска општина Гроцка", "БЕОГРАД-ГРОЦКА",
                                           "Gradska opština Grocka"])
 def test_station_coordinates_are_available_offline_with_existing_name_matching(municipality):

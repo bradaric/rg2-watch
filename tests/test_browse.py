@@ -262,6 +262,29 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
     assert '.stationmarginfill{display:block;height:100%;background:var(--bar)' in html
 
 
+def test_current_escalation_note_is_available_from_forms_table_pill():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    verdict = html[html.index("function verdictHtml"):html.index("function verdictEl")]
+    script = r'''
+const assert = require("assert");
+const VERDICTS = ["ok", "escalate", "unsure"];
+const VLABEL = {ok: "ok", escalate: "escalate", unsure: "unsure"};
+const esc = value => String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;")
+  .replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+''' + verdict + r'''
+const noted = verdictHtml({v: "escalate", n: 'Проверити "потписе" <сада>'});
+assert(noted.includes('class="rv rv-escalate hasnote"'));
+assert(noted.includes('data-note="Проверити &quot;потписе&quot; &lt;сада&gt;"'));
+assert(noted.includes('tabindex="0"'));
+assert(noted.includes('aria-label="escalate: Проверити &quot;потписе&quot; &lt;сада&gt;"'));
+assert(!verdictHtml({v: "escalate"}).includes("hasnote"));
+assert(!verdictHtml({v: "ok", n: "checked"}).includes("hasnote"));
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert ".rv.hasnote:hover::after,.rv.hasnote:focus::after{display:block}" in html
+
+
 def test_non_default_form_select_filters_use_active_filter_colors():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
