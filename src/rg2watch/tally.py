@@ -346,7 +346,8 @@ _warned: set[tuple] = set()
 
 def build_tally(store: Store, cfg: Config, parent: str, model: str,
                 municipalities: set[str] | None = None, cache: dict | None = None,
-                docs=None, arows=None, include_station_results: bool = False) -> dict:
+                docs=None, arows=None, include_station_results: bool = False,
+                expected_rows_cache: dict | None = None) -> dict:
     """Totals per municipality and overall, over all counted forms and over clean ones only.
     `model` is the stored model name; `cache` keeps extracts by analysis id between builds;
     `docs`/`arows` let the caller share its reads (browse_rows / browse_analyses)."""
@@ -383,7 +384,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     latest_operator = {r["url"]: r for r in store.latest_operator_corrections(parent)}
     operator_states = {}
     if latest_operator:
-        service = OperatorCorrections(store, cfg, model)
+        service = OperatorCorrections(store, cfg, model,
+                                      expected_rows_cache=expected_rows_cache)
         for d in mains:
             if d["url"] not in latest_operator:
                 continue

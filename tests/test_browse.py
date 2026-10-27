@@ -280,20 +280,22 @@ def test_operator_page_supports_shareable_form_deep_links():
     assert 'if (onlyId != null && activeTab() === "forms") p.set("form", String(onlyId));' in html
 
 
-def test_json_is_ascii_even_with_lone_surrogate():
+def test_json_uses_utf8_and_escapes_lone_surrogate_and_script_markup():
     from rg2watch.browse import _json
-    blob = _json({"x": "a\ud800b\u2028</script>"})
-    assert blob.isascii() and "</script>" not in blob and json.loads(blob)["x"].startswith("a")
+    blob = _json({"x": "Ћирилица a\ud800b\u2028</script>"})
+    raw = blob.encode("utf-8")
+    assert b"\\ud800" in raw and b"</script>" not in raw
+    assert "Ћирилица" in blob and json.loads(blob)["x"].startswith("Ћирилица")
 
 
-def test_script_close_tag_escaped_and_ascii_only(tmp_path):
+def test_script_close_tag_escaped_in_utf8_files(tmp_path):
     s = store()
-    add(s, doc(BASE + "/e/a.pdf", muni="</script><b>x", label="<!-- y"))
+    add(s, doc(BASE + "/e/a.pdf", muni="</script><b>x", label="Ћ<!-- y"))
     out = tmp_path / "index.html"
     build_page(s, out, tmp_path / "pdfs")
     for name in ("data.js", "data.json"):
         raw = (tmp_path / name).read_bytes()
-        assert raw.isascii() and b"</script>" not in raw and b"<!--" not in raw
+        assert "Ћ".encode() in raw and b"</script>" not in raw and b"<!--" not in raw
     assert rows_of(out)[0]["muni"] == "</script><b>x"
 
 

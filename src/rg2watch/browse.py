@@ -136,8 +136,10 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     elections = {e.parent: e for e in store.elections()}
     reviews = {r["url"]: review_record(r) for r in store.latest_reviews(parent)}
     corrections = {}
+    expected_rows_cache = {}
     if latest := store.latest_operator_corrections(parent):
-        service = OperatorCorrections(store, cfg, model)
+        service = OperatorCorrections(store, cfg, model,
+                                      expected_rows_cache=expected_rows_cache)
         current = {a["document_id"] for a in arows
                    if a["model"] == model and a["prompt_version"] == PROMPT_VERSION}
         for item in latest:
@@ -193,7 +195,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     try:
         tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
                             cache=None if cache is None else cache.setdefault("tally", {}),
-                            docs=docs, arows=arows, include_station_results=True)
+                            docs=docs, arows=arows, expected_rows_cache=expected_rows_cache,
+                            include_station_results=True)
     except Exception:
         log.exception("tally could not be built")
         tally = None
@@ -214,9 +217,10 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             "rules": RULE_INFO}
 
 
-def _json(data) -> str:
-    """ASCII-only JSON (a lone surrogate cannot break the write); `<` escaped for script safety."""
-    return json.dumps(data, ensure_ascii=True).replace("<", "\\u003c")
+def _json(data, ensure_ascii: bool = False) -> str:
+    """UTF-8 JSON; escape lone surrogates and `<` so writes and script embedding stay safe."""
+    text = json.dumps(data, ensure_ascii=ensure_ascii).replace("<", "\\u003c")
+    return text.encode("utf-8", errors="backslashreplace").decode("utf-8")
 
 
 def _atomic(path: Path, text: bytes | str) -> None:

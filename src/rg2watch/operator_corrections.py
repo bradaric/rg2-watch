@@ -73,8 +73,10 @@ def snapshot_of(report: dict, expected_rows: list[int] | None = None) -> dict:
 class OperatorCorrections:
     """Validated correction history and source/revision conflict detection."""
 
-    def __init__(self, store, cfg, model: str, on_change=None):
+    def __init__(self, store, cfg, model: str, on_change=None,
+                 expected_rows_cache: dict | None = None):
         self.store, self.cfg, self.model, self.on_change = store, cfg, model, on_change
+        self.expected_rows_cache = expected_rows_cache
 
     def _changed(self) -> None:
         if self.on_change is not None:
@@ -88,10 +90,13 @@ class OperatorCorrections:
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
     def _expected_rows(self, source) -> list[int]:
-        docs = [d for d in self.store.browse_rows(source["parent"])[0]
-                if d["doc_type"] == 6 and d["active"]]
         from .tally import scope_of
         scope = scope_of(self.store, self.cfg, source["parent"])[0]
+        key = (source["parent"], None if scope == "national" else source["municipality"])
+        if self.expected_rows_cache is not None and key in self.expected_rows_cache:
+            return list(self.expected_rows_cache[key])
+        docs = [d for d in self.store.browse_rows(source["parent"])[0]
+                if d["doc_type"] == 6 and d["active"]]
         if scope != "national":
             docs = [d for d in docs if d["municipality"] == source["municipality"]]
         ids = {d["id"] for d in docs}
@@ -101,9 +106,13 @@ class OperatorCorrections:
         sets = Counter(tuple(sorted(x["row"] for x in json.loads(reports[a["id"]])["numbers"]["list_votes"]))
                        for a in analyses)
         if not sets:
-            return []
-        most = max(sets.values())
-        return list(max((rows for rows, count in sets.items() if count == most), key=len))
+            rows = []
+        else:
+            most = max(sets.values())
+            rows = list(max((rows for rows, count in sets.items() if count == most), key=len))
+        if self.expected_rows_cache is not None:
+            self.expected_rows_cache[key] = tuple(rows)
+        return rows
 
     def _source(self, url: str) -> tuple[object, dict, str, list[int]]:
         row = self.store.operator_correction_source(url, self.model, PROMPT_VERSION)

@@ -115,7 +115,7 @@ def render_public_results(data: dict) -> str:
     marker = "__RG2_PUBLIC_DATA__"
     if template.count(marker) != 1:
         raise ValueError("public results template must contain exactly one data marker")
-    return template.replace(marker, _json(data))
+    return template.replace(marker, _json(data, ensure_ascii=True))
 
 
 def write_public_results(store: Store, cfg: Config, parent: str, out_dir: Path) -> Path:
