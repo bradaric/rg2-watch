@@ -81,6 +81,7 @@ def _public_station(station: dict) -> dict:
         "m": station["m"],
         "no": station["no"],
         "name": station["name"],
+        **{key: station[key] for key in ("settlement", "address") if key in station},
         "included": corrected["included"],
         "annulled": station["annulled"] is not None,
         "undetermined": station["undetermined"] is not None,
@@ -112,6 +113,7 @@ def build_public_results(store: Store, cfg: Config, parent: str) -> dict:
         "names": tally["names"],
         "fallback_name_indices": tally["fallback_name_indices"],
         "names_note": tally["names_note"],
+        "station_location_source": tally["station_location_source"],
         "overall": _public_row(tally["overall"], flagged_for(tally["overall"]), verdicts),
         "municipalities": [_public_row(row, flagged_for(row), verdicts)
                            for row in sorted(tally["munis"], key=lambda x: _serbian_sort_key(x["m"]))],

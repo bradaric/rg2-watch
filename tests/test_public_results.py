@@ -90,6 +90,18 @@ def test_public_rg8_station_is_undetermined_without_exposing_the_document():
     assert "private-rg8" not in json.dumps(data)
 
 
+def test_public_station_includes_sanitized_location_enrichment_and_attribution():
+    s = store()
+    form(s, 7, clean_report(), muni="Градска општина Гроцка")
+
+    data = build_public_results(s, config(), P)
+
+    station = data["stations"][0]
+    assert station["settlement"] == "ВИНЧА"
+    assert station["address"] == "ВИНЧА, ЈОВАНА ЈОВАНОВИЋА ЗМАЈА 1"
+    assert data["station_location_source"]["source"] == "https://bm.itblokada.org/"
+
+
 def test_public_payload_sorts_municipalities_by_serbian_cyrillic_alphabet():
     s = store()
     for no, municipality in enumerate(
@@ -291,8 +303,14 @@ let initialSummary=els.stationlist.children[0].children[0];
 assert.equal(initialSummary.children[4].children[0].children[2].textContent,"50,0%");
 assert.equal(initialSummary.children[4].children[1].children[2].textContent,"47,5%");
 assert.equal(initialSummary.children[5].children[1].children[0].textContent,"+2,5 п. п.");
+DATA.stations[0].settlement="АЛФА";DATA.stations[0].address="АЛФА, ГЛАВНА 1";renderStationResults();
+initialSummary=els.stationlist.children[0].children[0];
+assert(initialSummary.children[0].textContent.includes("БМ 1 · АЛФА — ОШ"));
 let initialCard=els.stationlist.children[0];initialCard.open=true;initialCard.listeners.toggle();
-assert.equal(initialCard.children[1].children[0].children[2].textContent,"400 · 50,0%");
+const locationNote=initialCard.children[1].children.find(x=>x.className==="station-location");
+assert(locationNote.textContent.includes("АЛФА, ГЛАВНА 1"));
+assert.equal(locationNote.children.at(-1).textContent,"ИТ Блокада");
+assert.equal(initialCard.children[1].children.find(x=>x.className==="station-detail").children[2].textContent,"400 · 50,0%");
 initialCard.open=false;initialCard.listeners.toggle();
 DATA.stations[0].ballots_in_box=null;renderStationResults();
 initialSummary=els.stationlist.children[0].children[0];

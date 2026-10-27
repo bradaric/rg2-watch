@@ -232,6 +232,12 @@ V4 signatures never flag); the reasons are listed, with a link to the form. List
 CSV download of the per-municipality table (cells starting with = + - @ are escaped); in municipal
 scope it is long format, one row per municipality and list with that municipality's totals.
 
+Operator and public station-result cards optionally enrich the RIK venue name with settlement and
+address data from a bundled snapshot of [ИТ Блокада's polling-place map](https://bm.itblokada.org/).
+The snapshot records its source revision and retrieval date, and matching uses municipality plus
+station number. It is display-only, is attributed in expanded station cards, and never affects station
+identity, inclusion or totals. Exported pages make no runtime request to the external site.
+
 Scope: list totals only make sense where one ballot is used everywhere. RIK's election type 2
 (parliamentary) is `national`: list votes overall and per municipality, `"<parent>" = ["Name 1", ...]`.
 Type 3 (local) is `municipal`: every municipality has its own ballot, so the modal list-row set, names

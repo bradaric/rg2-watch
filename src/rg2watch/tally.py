@@ -13,6 +13,7 @@ from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from .rules import (RG7_FIELDS, _dash_zero, _list_zero, _ok, change_text, decision_label,
                      decision_sort_key, evaluate_report, repeats, rg2_value, rg7_field, rg7_mismatch)
 from .status import _rik_link
+from .station_locations import station_location, station_location_source
 from .store import Store, _doc
 
 log = logging.getLogger("rg2watch.tally")
@@ -636,6 +637,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     station_results = [] if not include_station_results else [
         {"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
          "name": f["d"]["station_name"],
+          **(station_location(f["muni"], f["d"]["station_no"]) or {}),
          "annulled": f["annulment"],
           "undetermined": f["undetermined_result"],
          "corrected": station_view(f["ex"], f["rows"], f["why"],
@@ -646,6 +648,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         for f in forms]
     return {"model": model, "parent": parent, "title": e.title if e else parent, "scope": scope,
             "scope_note": scope_note, **top, "munis": munis, "overall": total, "notes": notes,
+            "station_location_source": station_location_source(),
             "station_results": station_results,
             "corrected": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                            "rg7": f["ex"]["rg7"]} for f in forms if f["ex"]["rg7"]],

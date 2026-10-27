@@ -79,6 +79,18 @@ def test_tally_exposes_per_station_results_for_operator_drilldown():
     }]
 
 
+def test_station_results_include_optional_settlement_and_address_enrichment():
+    s = store()
+    form(s, 7, clean_report(), muni="Градска општина Гроцка")
+
+    result = tally(s, include_station_results=True)
+
+    station = result["station_results"][0]
+    assert station["settlement"] == "ВИНЧА"
+    assert station["address"] == "ВИНЧА, ЈОВАНА ЈОВАНОВИЋА ЗМАЈА 1"
+    assert result["station_location_source"]["source"] == "https://bm.itblokada.org/"
+
+
 def test_active_rg9_annuls_station_and_removes_it_from_every_tally_view(tmp_path):
     s = store()
     rg2 = form(s, 12, clean_report())
@@ -1308,7 +1320,8 @@ heroMuni = "Ћуприја"; heroPicked = true;
 renderHero();
 assert.equal(els.hmuni.options.find(o => o.value === "Ћуприја").textContent, "Ћуприја");
 assert(els.herotitle.textContent.startsWith("Ћуприја"));
-T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
+T.station_location_source = {source: "https://bm.itblokada.org/", revision: "test", retrieved: "2026-10-27"};
+T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ", settlement: "СЕЊЕ", address: "СЕЊЕ, ЦЕНТАР 1",
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [400, 380]},
   filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [390, 390]}}];
 D.rows = [{id: 9, u: "u9", rv: {v: "escalate", n: "Проверити потписе"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
@@ -1317,7 +1330,13 @@ renderHero();
 assert.equal(els.stationresults.hidden, false);
 assert.equal(els.stationcount.textContent, "1 записник");
 let stationCard = els.stationlist.children[0];
-assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 — ОШ"));
+assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 · СЕЊЕ — ОШ"));
+stationCard.open = true; stationCard.ontoggle();
+const stationLocation = stationCard.children[1].children.find(x => x.className === "stationlocation");
+assert(stationLocation.textContent.includes("СЕЊЕ, ЦЕНТАР 1"));
+assert.equal(stationLocation.children.at(-1).textContent, "ИТ Блокада");
+assert.equal(stationLocation.children.at(-1).href, "https://bm.itblokada.org/");
+stationCard.open = false; stationCard.ontoggle();
 const stationWinner = stationCard.children[0].children.find(x => x.className === "stationwinner");
 assert.equal(stationWinner.children[0].textContent, "1");
 assert.equal(stationWinner.children.length, 1, "compact winner column must show only the list number");

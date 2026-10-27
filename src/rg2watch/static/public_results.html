@@ -92,6 +92,7 @@ function stationMargin(outcome){
 }
 function renderStationBody(body,station){
   const names=stationNames(station),denominator=stationListDenominator(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!denominator?null:value/denominator})).filter(row=>row.value!=null).sort((a,b)=>b.value-a.value||a.no-b.no),max=Math.max(1,...rows.map(row=>row.value));
+  if(station.address){const location=make("p","Адреса: "+station.address+" · Извор локације: ","station-location"),source=DATA.station_location_source&&DATA.station_location_source.source;if(source){const attribution=make("a","ИТ Блокада");attribution.href=source;attribution.target="_blank";attribution.rel="noopener";location.append(attribution)}body.append(location)}
   if(!rows.length){body.append(make("p","Подаци по листама нису доступни.","note"));return}
   for(const item of rows){const row=make("div",null,"station-detail"),label=make("div",item.no+". "+item.name),track=make("div",null,"track"),fill=make("div",null,"fill"),value=make("div",num(item.value)+(item.share==null?"":" · "+pct(item.share)),"value");fill.style.width=Math.min(100,item.value/max*100)+"%";track.append(fill);row.append(label,track,value);body.append(row)}
 }
@@ -122,7 +123,7 @@ function renderStationResults(){
   for(const record of records.slice(0,shown)){
     const {station,turnout}=record,outcome=outcomeOf(record);
     const details=make("details",null,"station-card"+(station.included?"":" excluded")),summary=make("summary",null,"station-summary"),body=make("div",null,"station-body"),key=station.m+"\u0000"+station.no;
-    const name=(allScope?station.m+" · ":"")+"БМ "+station.no+(station.name?" — "+station.name:""),winner=make("span",null,"station-winner");winner.append(make("span",outcome.no==null?outcome.name==="Нерешено"?"=":"–":String(outcome.no)));winner.title=outcome.name;
+    const name=(allScope?station.m+" · ":"")+"БМ "+station.no+(station.settlement?" · "+station.settlement:"")+(station.name?" — "+station.name:""),winner=make("span",null,"station-winner");winner.append(make("span",outcome.no==null?outcome.name==="Нерешено"?"=":"–":String(outcome.no)));winner.title=outcome.name;
     summary.append(make("span",name,"station-name"),make("span",turnout==null?"–":pct(turnout),"station-number"),make("span",num(station.valid),"station-number"),winner,stationMiniBars(outcome),stationMargin(outcome),make("span",station.annulled?"Поништено":station.undetermined?"Резултати се не могу утврдити":station.included?"Урачунато":"Није урачунато","station-status "+(station.included?"in":"out")));
     let drawn=false;const draw=()=>{if(!drawn){drawn=true;renderStationBody(body,station)}};details.addEventListener("toggle",()=>{if(details.open){openStations.add(key);visibleOpenStations.add(key);draw()}else{openStations.delete(key);visibleOpenStations.delete(key);resumeRefresh()}});if(openStations.has(key)){details.open=true;visibleOpenStations.add(key);draw()}details.append(summary,body);cards.push(details)
   }

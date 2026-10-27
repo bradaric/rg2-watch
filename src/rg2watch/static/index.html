@@ -1873,6 +1873,12 @@ function renderStationChart(body, station, owner, viewName) {
     return {name, no: i + 1, value, share};
   }).sort((a, b) => diff ? Math.abs(b.value || 0) - Math.abs(a.value || 0) || a.no - b.no
     : (b.value || 0) - (a.value || 0) || a.no - b.no);
+  if (station.address) {
+    const location = mk("p", "Адреса: " + station.address + " · Извор локације: ", "stationlocation"),
+      source = rikHref(T.station_location_source && T.station_location_source.source);
+    if (source) location.append(link("ИТ Блокада", source));
+    body.append(location);
+  }
   const status = diff ? "Са исправкама: " + stationStatus(corrected) + " · Оригинално: " + stationStatus(filed)
     : stationStatus(chosen);
   if (diff) body.append(mk("p", status, "stationnote"));
@@ -2002,7 +2008,8 @@ function renderStationResults() {
       statusEl.append(reviewEl);
     }
     statusEl.append(stationActionMenu(station, source));
-    summary.append(mk("span", (allScope ? municipalityName + " · " : "") + "БМ " + station.no + (station.name ? " — " + station.name : ""), "stationname"),
+    summary.append(mk("span", (allScope ? municipalityName + " · " : "") + "БМ " + station.no +
+      (station.settlement ? " · " + station.settlement : "") + (station.name ? " — " + station.name : ""), "stationname"),
       mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric"),
       mk("span", valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid), "stationmetric"), winner,
       stationMiniBars(outcome, barCount, viewName === "diff"), stationMargin(outcome, viewName === "diff"), statusEl);
