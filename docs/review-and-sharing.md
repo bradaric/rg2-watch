@@ -206,7 +206,12 @@ votes and share of ballots in the box (`valid + invalid`) per list, per municipa
 with coverage (forms counted
 of stations known). Applied RG-7 and operator-entered corrections replace those readings in the
 corrected view; the as-filed view preserves the original RG-2 readings. RIK's official results are
-never fetched. A latest `escalate` verdict places that exact active RG-2 on hold: it remains visible as
+never fetched. A form contributes to aggregates only when registered, voted, valid and invalid are
+readable, its expected list rows are complete, and those list votes sum to valid. Until corrected, an
+incomplete or unreconciled form contributes no registered, turnout, ballots, valid, invalid, outside
+or list totals. The aggregate ballots/share denominator is `valid + invalid`; a missing standalone
+ballots-in-box reading does not by itself prevent an otherwise complete form from contributing. A
+latest `escalate` verdict places that exact active RG-2 on hold: it remains visible as
 processed and escalated (and flagged when its findings warrant), but contributes no numbers to
 corrected, as-filed, clean or default
 totals. Changing its verdict to `ok` or `unsure` releases the hold; an escalation on an older replaced

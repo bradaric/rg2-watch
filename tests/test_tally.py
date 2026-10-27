@@ -529,7 +529,7 @@ def test_all_mode_denominators_are_paired():
     assert a["lists_ballots_in_box"] == 800
 
 
-def test_list_share_denominator_is_unavailable_if_a_contributing_form_lacks_ballots_in_box():
+def test_list_share_denominator_uses_valid_plus_invalid_when_ballots_in_box_is_unavailable():
     s = store()
     form(s, 1, report(ballots_in_box=nf(None, legible=False)))
 
@@ -537,12 +537,29 @@ def test_list_share_denominator_is_unavailable_if_a_contributing_form_lacks_ball
 
     assert totals["lists"] == [400, 380]
     assert totals["lists_valid"] == 780
-    assert totals["lists_ballots_in_box"] is None
+    assert totals["lists_ballots_in_box"] == 800
+    assert totals["ballots_in_box"] == 800
     result = tally(s)
     for view in ("corrected", "filed"):
         text = format_tally(result, view=view)
         assert "share of ballots in the box for reconciled vote forms" in text
-        assert "400 (-)" in text
+        assert "400 (50.0%)" in text
+
+
+def test_form_missing_invalid_contributes_no_aggregate_numbers():
+    s = store()
+    form(s, 1, report(invalid=nf(None, legible=False)))
+
+    result = tally(s)
+    totals = result["overall"]["all"]
+
+    assert totals["vote_forms"] == 0
+    assert totals["lists"] == [0, 0]
+    assert totals["lists_ballots_in_box"] == 0
+    assert all(totals[key] == 0 for key in
+               ("registered", "voted", "ballots_in_box", "invalid", "valid", "outside_voted"))
+    assert result["reconciliation"][0]["result"]["corrected"] == {
+        "included": False, "reason": "invalid unavailable for percentage denominator"}
 
 
 def test_cli_list_shares_use_ballots_in_box_in_national_and_municipal_scopes():
@@ -557,17 +574,17 @@ def test_cli_list_shares_use_ballots_in_box_in_national_and_municipal_scopes():
             assert "380 (47.5%)" in text
 
 
-def test_vote_totals_only_include_reconciled_forms_but_turnout_stays_independent():
+def test_incomplete_forms_contribute_no_totals_including_turnout():
     s = store()
     form(s, 1, clean_report())
     form(s, 2, report(valid=nf(770)))
     t = tally(s)
     a = t["overall"]["all"]
-    assert a["voted"] == 1600
+    assert a["registered"] == 1000 and a["voted"] == 800
     assert a["valid"] == a["lists_valid"] == sum(a["lists"]) == 780
     assert a["invalid"] == 20
     assert a["vote_forms"] == 1
-    assert a["withheld_valid"] == 770
+    assert a["withheld_valid"] == 0
     assert t["overall"]["counted"] == 2
     rec = {x["no"]: x["result"] for x in t["reconciliation"]}
     assert rec["1"]["corrected"] == {"included": True, "reason": None}
@@ -577,8 +594,8 @@ def test_vote_totals_only_include_reconciled_forms_but_turnout_stays_independent
     assert any(reason.startswith("arithmetic") and "A3" in reason for reason in why(t)["2"])
     text = format_tally(t)
     assert "1 of 2 selected forms contributed reconciled vote totals" in text
-    assert "770 readable valid votes withheld" in text
-    assert "Unreconciled turnout gap: +800" in text
+    assert "770 readable valid votes withheld" not in text
+    assert "Unreconciled turnout gap: +800" not in text
 
 
 def test_vote_eligibility_edge_cases_and_non_vote_flags():
@@ -592,10 +609,9 @@ def test_vote_eligibility_edge_cases_and_non_vote_flags():
     non_vote_flag = extract({**clean_report(), "confidence": "low"}, doc(BASE + "/nf.pdf"), Config())
 
     assert "withheld_valid" not in _contrib(missing_valid, rows)
-    assert _contrib(unreadable_list, rows)["withheld_valid"] == 780
-    assert _contrib(wrong_rows, rows)["withheld_valid"] == 780
-    assert _contrib(unreadable_invalid, rows)["vote_forms"] == 1
-    assert "invalid" not in _contrib(unreadable_invalid, rows)
+    assert _contrib(unreadable_list, rows) == {}
+    assert _contrib(wrong_rows, rows) == {}
+    assert _contrib(unreadable_invalid, rows) == {}
     assert _contrib(non_vote_flag, rows)["vote_forms"] == 1
 
 
@@ -808,7 +824,9 @@ def test_municipal_unknown_municipality_gets_no_list_totals():
     u = next(m for m in t["munis"] if m["m"] == "(unknown)")
     assert u["nlists"] == 0 and u["names"] == [] and "different ballots" in u["names_note"]
     assert u["fallback_name_indices"] == [] and u["generated_unknown_muni"] is True
-    assert u["counted"] == 1 and u["all"]["valid"] == 0 and u["all"]["withheld_valid"] == 780
+    assert u["counted"] == 1
+    assert all(u["all"][key] == 0 for key in
+               ("registered", "voted", "ballots_in_box", "invalid", "valid", "withheld_valid"))
     assert "lists" not in u["all"] and "lists" not in u["cl"]
     assert "(unknown): warning: municipality unknown" in format_tally(t)
     nat = next(m for m in tally(s)["munis"] if m["m"] == "(unknown)")
@@ -1241,8 +1259,8 @@ renderHero();
 assert.equal(els.hmuni.options.find(o => o.value === "Ћуприја").textContent, "Ћуприја");
 assert(els.herotitle.textContent.startsWith("Ћуприја"));
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
-  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, valid: 780, lists: [400, 380]},
-  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, valid: 780, lists: [390, 390]}}];
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [390, 390]}}];
 D.rows = [{id: 9, u: "u9", rv: {v: "escalate", n: "Проверити потписе"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
 els.stationbars.value = "2";
 renderHero();
@@ -1268,6 +1286,11 @@ T.station_results[0].corrected.ballots_in_box = null;
 renderHero();
 let unavailableCard = els.stationlist.children[0];
 let unavailableShares = unavailableCard.children[0].children.find(x => x.className.startsWith("stationshare"));
+assert.equal(unavailableShares.children[0].children[2].textContent, "50.0%");
+T.station_results[0].corrected.invalid = null;
+renderHero();
+unavailableCard = els.stationlist.children[0];
+unavailableShares = unavailableCard.children[0].children.find(x => x.className.startsWith("stationshare"));
 assert.equal(unavailableShares.children[0].children[2].textContent, "—");
 let unavailableMargin = unavailableCard.children[0].children.find(x => x.className === "stationmargin visual");
 assert.equal(unavailableMargin.children[1].children[0].textContent, "—");
@@ -1279,6 +1302,7 @@ unavailableMargin = unavailableCard.children[0].children.find(x => x.className =
 assert.equal(unavailableMargin.children[1].children[0].textContent, "—");
 assert.equal(unavailableMargin.children[1].children[1].textContent, "Нерешено");
 T.station_results[0].corrected.ballots_in_box = 800;
+T.station_results[0].corrected.invalid = 20;
 T.station_results[0].corrected.lists = [400, 380];
 renderHero();
 stationCard = els.stationlist.children[0];
@@ -1354,7 +1378,7 @@ assert.equal(stationReviewEl().textContent, "прихваћен");
 assert.equal(stationReviewEl().dataset.note, "Проверено");
 function sortableStation(id, no, voted, lists) {
   const result = {clean: true, included: false, reason: "test reason", registered: 1000,
-    voted, ballots_in_box: lists[0] + lists[1], valid: lists[0] + lists[1], lists};
+    voted, ballots_in_box: lists[0] + lists[1], invalid: 0, valid: lists[0] + lists[1], lists};
   return {id, m: "Ћуприја", no: String(no), name: "БМ " + no, corrected: result, filed: result};
 }
 T.station_results = [
@@ -1438,8 +1462,8 @@ heroMuni = ""; els.stationsort.value = "winner"; renderHero();
 assert.equal(els.sortwinner.hidden, true);
 assert.equal(els.stationsort.value, "station");
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
-  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, valid: 780, lists: [400, 380]},
-  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, valid: 780, lists: [390, 390]}}];
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [390, 390]}}];
 setStationFilter("all");
 els.stationsort.value = "station";
 REV = null; els.tview.value = "corrected";

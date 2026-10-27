@@ -67,13 +67,14 @@ function warningText(note){const exact={"unknown election type - set tally_scope
 function make(tag,text,className){const el=document.createElement(tag);if(text!=null)el.textContent=text;if(className)el.className=className;return el}
 const MUNICIPALITY_BY_NAME=new Map(DATA.municipalities.map(row=>[row.m,row]));
 function stationNames(station){const configured=namesFor(MUNICIPALITY_BY_NAME.get(station.m));return station.lists.map((_,i)=>configured[i]||"Листа "+(i+1))}
+function stationListDenominator(station){return station.valid==null||station.invalid==null?null:station.valid+station.invalid}
 function stationOutcome(station){
-  const names=stationNames(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!station.ballots_in_box?null:value/station.ballots_in_box})).filter(row=>row.value!=null);
+  const names=stationNames(station),denominator=stationListDenominator(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!denominator?null:value/denominator})).filter(row=>row.value!=null);
   rows.sort((a,b)=>b.value-a.value||a.no-b.no);
   if(!rows.length)return {name:"—",no:null,share:null,margin:null,marginShare:null,leaders:[]};
   const second=rows[1],tied=second&&rows[0].value===second.value;
-  if(tied)return {name:"Нерешено",no:null,share:rows[0].share,margin:0,marginShare:station.ballots_in_box?0:null,leaders:rows};
-  const margin=rows[0].value-(second?second.value:0),marginShare=!station.ballots_in_box?null:margin/station.ballots_in_box;
+  if(tied)return {name:"Нерешено",no:null,share:rows[0].share,margin:0,marginShare:denominator?0:null,leaders:rows};
+  const margin=rows[0].value-(second?second.value:0),marginShare=!denominator?null:margin/denominator;
   return {...rows[0],margin,marginShare,leaders:rows};
 }
 function stationTurnout(station){return station.registered?station.voted/station.registered:null}
@@ -90,7 +91,7 @@ function stationMargin(outcome){
   cell.append(track,values);return cell;
 }
 function renderStationBody(body,station){
-  const names=stationNames(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!station.ballots_in_box?null:value/station.ballots_in_box})).filter(row=>row.value!=null).sort((a,b)=>b.value-a.value||a.no-b.no),max=Math.max(1,...rows.map(row=>row.value));
+  const names=stationNames(station),denominator=stationListDenominator(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!denominator?null:value/denominator})).filter(row=>row.value!=null).sort((a,b)=>b.value-a.value||a.no-b.no),max=Math.max(1,...rows.map(row=>row.value));
   if(!rows.length){body.append(make("p","Подаци по листама нису доступни.","note"));return}
   for(const item of rows){const row=make("div",null,"station-detail"),label=make("div",item.no+". "+item.name),track=make("div",null,"track"),fill=make("div",null,"fill"),value=make("div",num(item.value)+(item.share==null?"":" · "+pct(item.share)),"value");fill.style.width=Math.min(100,item.value/max*100)+"%";track.append(fill);row.append(label,track,value);body.append(row)}
 }

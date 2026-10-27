@@ -1712,15 +1712,21 @@ function stationStatus(view) {
 function stationTurnout(view) {
   return view && view.registered > 0 && view.voted != null ? view.voted / view.registered : null;
 }
+function stationListDenominator(view) {
+  return view && view.valid != null && view.invalid != null ? view.valid + view.invalid : null;
+}
 function stationOutcome(station, owner, viewName) {
   const corrected = station.corrected, filed = station.filed || corrected, names = heroListNames(owner);
-  const chosen = viewName === "filed" ? filed : corrected, diff = viewName === "diff";
+  const chosen = viewName === "filed" ? filed : corrected, diff = viewName === "diff",
+    correctedDenominator = stationListDenominator(corrected), filedDenominator = stationListDenominator(filed),
+    chosenDenominator = stationListDenominator(chosen);
   const rows = names.map((name, i) => {
     const c = corrected.lists[i], f = filed.lists[i];
     const value = diff ? c == null || f == null ? null : c - f : chosen.lists[i];
-    const share = diff ? c == null || f == null || !corrected.ballots_in_box || !filed.ballots_in_box ? null
-      : c / corrected.ballots_in_box - f / filed.ballots_in_box
-      : value == null || !chosen.ballots_in_box ? null : value / chosen.ballots_in_box;
+    const share = diff ? c == null || f == null ? null
+      : ratio(c, correctedDenominator) == null || ratio(f, filedDenominator) == null ? null
+        : c / correctedDenominator - f / filedDenominator
+      : value == null ? null : ratio(value, chosenDenominator);
     return {name, no: i + 1, value, share};
   }).filter(row => row.value != null);
   if (!rows.length) return {name: "—", no: null, share: null, margin: null, marginShare: null, value: null, leaders: []};
@@ -1731,10 +1737,10 @@ function stationOutcome(station, owner, viewName) {
   rows.sort((a, b) => b.value - a.value || a.no - b.no);
   const top = rows[0], second = rows[1], tied = second && second.value === top.value;
   if (tied) return {name: "Нерешено", no: null, share: top.share, margin: 0,
-    marginShare: chosen.ballots_in_box ? 0 : null,
+    marginShare: chosenDenominator ? 0 : null,
     value: top.value, leaders: rows};
   const margin = top.value - (second ? second.value : 0);
-  return {...top, margin, marginShare: chosen.ballots_in_box ? margin / chosen.ballots_in_box : null, leaders: rows};
+  return {...top, margin, marginShare: ratio(margin, chosenDenominator), leaders: rows};
 }
 function stationMiniBars(outcome, count, diff) {
   const cell = mk("span", null, "stationshare" + (count === 1 ? " single" : "")), shown = outcome.leaders.slice(0, count);
@@ -1842,14 +1848,17 @@ function setAllStations(open) {
 }
 function renderStationChart(body, station, owner, viewName) {
   const corrected = station.corrected, filed = station.filed || corrected, diff = viewName === "diff";
-  const chosen = viewName === "filed" ? filed : corrected, names = heroListNames(owner);
+  const chosen = viewName === "filed" ? filed : corrected, names = heroListNames(owner),
+    correctedDenominator = stationListDenominator(corrected), filedDenominator = stationListDenominator(filed),
+    chosenDenominator = stationListDenominator(chosen);
   const listRows = names.map((name, i) => {
     const c = corrected.lists[i], f = filed.lists[i];
     const value = diff ? c == null || f == null ? null : c - f : chosen.lists[i];
     const share = diff
-      ? c == null || f == null || !corrected.ballots_in_box || !filed.ballots_in_box ? null
-        : c / corrected.ballots_in_box - f / filed.ballots_in_box
-      : value == null || !chosen.ballots_in_box ? null : value / chosen.ballots_in_box;
+      ? c == null || f == null ? null
+        : ratio(c, correctedDenominator) == null || ratio(f, filedDenominator) == null ? null
+          : c / correctedDenominator - f / filedDenominator
+      : value == null ? null : ratio(value, chosenDenominator);
     return {name, no: i + 1, value, share};
   }).sort((a, b) => diff ? Math.abs(b.value || 0) - Math.abs(a.value || 0) || a.no - b.no
     : (b.value || 0) - (a.value || 0) || a.no - b.no);

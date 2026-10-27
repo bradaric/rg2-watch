@@ -239,27 +239,22 @@ def _acc(nlists: int) -> dict:
 
 
 def _contrib(ex: dict, rows: list[int]) -> dict:
-    """What one form adds to a totals block, by term. Every term is only counted when all its numbers
-    are known, so ratios share a denominator: registered and voted ("rv") come from forms with both,
-    list votes, valid, and ballots in the box ("lists") from forms with every list row (of the
-    expected set) and valid. A missing ballots-in-box value makes that cohort's share denominator
-    unavailable rather than silently narrowing the cohort."""
+    """What one form adds to a totals block. Core result terms are atomic: an incomplete or
+    unreconciled form contributes no aggregate numbers. The list-share denominator is valid plus
+    invalid, so a missing standalone ballots-in-box reading does not suppress an otherwise complete
+    result."""
     n = ex["n"]
-    c = {k: n[k] for k in ("ballots_in_box", "outside_voted") if n[k] is not None}
-    if n["voted"] is not None and n["registered"] is not None:
-        c["rv"] = (n["registered"], n["voted"])
     vals = [ex["l"].get(r) for r in rows]
     eligible = (bool(rows) and sorted(ex["l"]) == rows and None not in vals
-                and n["valid"] is not None and sum(vals) == n["valid"])
-    if eligible:
-        c["valid"] = n["valid"]
-        c["lists"] = (vals, n["valid"], n["ballots_in_box"])
-        c["vote_forms"] = 1
-        if n["invalid"] is not None:
-            c["invalid"] = n["invalid"]
-    elif n["valid"] is not None:
-        c["withheld_valid"] = n["valid"]
-    return c
+                and all(n[k] is not None for k in ("registered", "voted", "invalid", "valid"))
+                and sum(vals) == n["valid"])
+    if not eligible:
+        return {}
+    denominator = n["valid"] + n["invalid"]
+    return {"rv": (n["registered"], n["voted"]), "ballots_in_box": denominator,
+            "invalid": n["invalid"], "valid": n["valid"], "lists": (vals, n["valid"], denominator),
+            "vote_forms": 1, **({"outside_voted": n["outside_voted"]}
+                                if n["outside_voted"] is not None else {})}
 
 
 def _result_inclusion(ex: dict, rows: list[int]) -> dict:
@@ -281,6 +276,12 @@ def _result_inclusion(ex: dict, rows: list[int]) -> dict:
     total = sum(ex["l"][r] for r in rows)
     if total != valid:
         return {"included": False, "reason": f"list votes sum {total} != valid {valid}"}
+    for key in ("registered", "voted"):
+        if ex["n"][key] is None:
+            detail = next((b for b in ex["bad"] if b.startswith(key + " ")), key + " unavailable")
+            return {"included": False, "reason": detail}
+    if ex["n"]["invalid"] is None:
+        return {"included": False, "reason": "invalid unavailable for percentage denominator"}
     return {"included": True, "reason": None}
 
 

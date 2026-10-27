@@ -83,6 +83,7 @@ def _public_station(station: dict) -> dict:
         "registered": corrected["registered"],
         "voted": corrected["voted"],
         "ballots_in_box": corrected["ballots_in_box"],
+        "invalid": corrected["invalid"],
         "valid": corrected["valid"],
         "lists": corrected["lists"],
     }

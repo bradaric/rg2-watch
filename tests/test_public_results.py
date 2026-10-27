@@ -41,11 +41,11 @@ def test_public_payload_has_only_sanitized_corrected_results_and_review_counts()
     assert len(data["stations"]) == 2
     assert set(data["stations"][0]) == {
         "m", "no", "name", "included", "annulled", "registered", "voted", "ballots_in_box",
-        "valid", "lists",
+        "invalid", "valid", "lists",
     }
     assert data["stations"][0] == {
         "m": "Alpha", "no": "1", "name": "ОШ", "included": True, "annulled": False,
-        "registered": 1000, "voted": 800, "ballots_in_box": 800, "valid": 780,
+        "registered": 1000, "voted": 800, "ballots_in_box": 800, "invalid": 20, "valid": 780,
         "lists": [400, 380],
     }
 
@@ -277,6 +277,9 @@ assert.equal(initialCard.children[1].children[0].children[2].textContent,"400 ·
 initialCard.open=false;initialCard.listeners.toggle();
 DATA.stations[0].ballots_in_box=null;renderStationResults();
 initialSummary=els.stationlist.children[0].children[0];
+assert.equal(initialSummary.children[4].children[0].children[2].textContent,"50,0%");
+DATA.stations[0].invalid=null;renderStationResults();
+initialSummary=els.stationlist.children[0].children[0];
 assert.equal(initialSummary.children[4].children[0].children[2].textContent,"–");
 assert.equal(initialSummary.children[5].children[1].children[0].textContent,"–");
 assert.equal(initialSummary.children[5].children[1].children[1].textContent,"+20");
@@ -285,13 +288,14 @@ initialSummary=els.stationlist.children[0].children[0];
 assert.equal(initialSummary.children[5].children[1].children[0].textContent,"–");
 assert.equal(initialSummary.children[5].children[1].children[1].textContent,"Нерешено");
 DATA.stations[0].ballots_in_box=800;
+DATA.stations[0].invalid=20;
 const initialTimer=latestTimer();document.listeners.pointerdown();
 assert(initialTimer.cleared);assert.equal(latestTimer().delay,180000);
 DATA.stations[0].lists=[390,390];renderStationResults();
 assert.equal(els.stationlist.children[0].children[0].children[3].children[0].textContent,"=");
 
 DATA.stations=Array.from({length:102},(_,i)=>({m:i%2?"Beta":"Alpha",no:String(i+1),name:"Школа "+(i+1),
-  included:i!==101,registered:1000,voted:500+i,ballots_in_box:500+i,valid:490+i,lists:[300+i,190]}));
+  included:i!==101,registered:1000,voted:500+i,ballots_in_box:500+i,invalid:10,valid:490+i,lists:[300+i,190]}));
 let stationOutcomeCalls=0;const realStationOutcome=stationOutcome;
 stationOutcome=(...args)=>{stationOutcomeCalls++;return realStationOutcome(...args)};
 setStationFilter("in");
