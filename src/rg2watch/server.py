@@ -28,6 +28,7 @@ PDF = re.compile(r"/pdfs/([0-9a-f]{64})\.pdf")
 REVIEW_MAX_BYTES = 4096
 CASE_MAX_BYTES = 8192
 CORRECTION_MAX_BYTES = 65536
+CLASSIFICATION_MAX_BYTES = 4096
 REVIEW_HEADERS = ("Host", "Origin", "Content-Length", "Content-Type", "X-RG2W", "Sec-Fetch-Site")
 LENGTH = re.compile(r"[0-9]{1,6}")
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
@@ -176,6 +177,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlsplit(self.path)
+        if parsed.path == "/classification" and not parsed.query:
+            return self._classification_post()
         if parsed.path == "/correction" and not parsed.query:
             return self._correction_post()
         if parsed.path in ("/case/prepare", "/case/publish") and not parsed.query:
@@ -214,6 +217,41 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "unknown document URL"})
         log.info("review: %s %s", req["verdict"], req["url"])
         self._json(200, {"review": rec})
+
+    def _classification_post(self) -> None:
+        self.close_connection = True
+        if any(len(self.headers.get_all(h) or ()) > 1 for h in REVIEW_HEADERS):
+            return self._json(400, {"error": "duplicate header"})
+        if self.server.classification_api is None or not self._same_origin():
+            return self._json(403, {"error": "forbidden"})
+        if self.headers.get("X-RG2W") != "1":
+            return self._json(403, {"error": "missing X-RG2W"})
+        if (self.headers.get("Content-Type") or "").strip().lower() != "application/json":
+            return self._json(400, {"error": "Content-Type must be exactly application/json"})
+        length = self.headers.get("Content-Length")
+        if length is None or not LENGTH.fullmatch(length) or int(length) > CLASSIFICATION_MAX_BYTES:
+            return self._json(400, {"error": "invalid body length"})
+        raw = self.rfile.read(int(length))
+        if len(raw) != int(length):
+            return self._json(400, {"error": "body shorter than Content-Length"})
+        try:
+            req = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return self._json(400, {"error": "body is not JSON"})
+        if not (isinstance(req, dict) and set(req) == {"url", "action"}
+                and isinstance(req["url"], str)
+                and req["action"] in ("confirm_rg2", "revoke")):
+            return self._json(400, {"error": "expected {url, action: confirm_rg2|revoke}"})
+        try:
+            result = self.server.classification_api(req["url"], req["action"])
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)[:300]})
+        except Exception:
+            log.exception("classification override could not be stored")
+            return self._json(500, {"error": "classification override could not be stored"})
+        if result is None:
+            return self._json(400, {"error": "unknown document URL"})
+        self._json(200, dict(result))
 
     def _correction_post(self) -> None:
         self.close_connection = True
@@ -401,11 +439,12 @@ class _Handler(BaseHTTPRequestHandler):
 def start_server(out_dir: Path, cache_dir: Path, port: int,
                    get_reviews: Callable[[], dict] | None = None,
                    put_review: Callable[[str, str, str | None], dict | None] | None = None,
-                   case_api=None, correction_api=None
+                   case_api=None, correction_api=None, classification_api=None
                  ) -> ThreadingHTTPServer | None:
     """Serve `out_dir` (+ cached PDFs) in a daemon thread; None when the port is unavailable.
     `get_reviews` serves GET /reviews.json, `put_review(url, verdict, note)` backs POST /review,
-    and `correction_api` backs the audited correction endpoint; absent APIs are refused."""
+    and the optional APIs back audited correction and classification endpoints; absent APIs are
+    refused."""
     try:
         server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     except OSError as exc:
@@ -416,6 +455,7 @@ def start_server(out_dir: Path, cache_dir: Path, port: int,
     server.get_reviews, server.put_review = get_reviews, put_review
     server.case_api = case_api
     server.correction_api = correction_api
+    server.classification_api = classification_api
     threading.Thread(target=server.serve_forever, name="web", daemon=True).start()
     log.info("browse page at http://127.0.0.1:%d", server.server_port)
     return server

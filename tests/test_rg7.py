@@ -239,6 +239,86 @@ def test_tally_ignores_unanalysed_and_other_station_decisions():
     assert [c["no"] for c in t["corrected"]] == ["1"] and d is not None
 
 
+def test_repeat_rg7_is_bound_to_the_repeat_round_that_precedes_it():
+    s = bstore()
+    repeat_i = bdoc("/e/repeat-I.pdf", no="1", dt=10, up="2026-10-20T10:00:00Z")
+    add(s, repeat_i)
+    put(s, repeat_i, clean_report())
+    old_decision = d7("1", dt=23, url="/e/repeat-I-rg7.pdf", up="2026-10-20T12:00:00Z")
+    add(s, old_decision)
+    put(s, old_decision, rg7([("3", 1000, 900)]), version=RG7_PROMPT_VERSION)
+    repeat_ii = bdoc("/e/repeat-II.pdf", no="1", dt=15, up="2026-10-21T10:00:00Z")
+    add(s, repeat_ii)
+    put(s, repeat_ii, clean_report())
+
+    before = tally(s)
+    assert before["overall"]["all"]["registered"] == 1000
+    assert before["corrected"] == []
+
+    current_decision = d7("1", dt=24, url="/e/repeat-II-rg7.pdf", up="2026-10-21T12:00:00Z")
+    add(s, current_decision)
+    put(s, current_decision, rg7([("3", 1000, 950)]), version=RG7_PROMPT_VERSION)
+
+    after = tally(s)
+    assert after["overall"]["all"]["registered"] == 950
+    assert len(after["corrected"]) == 1
+
+
+def test_ambiguous_repeat_rg7_is_unapplied_and_reported():
+    s = bstore()
+    repeat_ii = bdoc("/e/repeat-II.pdf", no="1", dt=15, up="2026-10-21T10:00:00Z")
+    add(s, repeat_ii)
+    put(s, repeat_ii, clean_report())
+    decision = d7("1", dt=23, url="/e/ambiguous-rg7.pdf", up="2026-10-21T10:00:00Z")
+    add(s, decision)
+    put(s, decision, rg7([("3", 1000, 900)]), version=RG7_PROMPT_VERSION)
+
+    result = tally(s)
+
+    assert result["overall"]["all"]["registered"] == 1000
+    assert result["corrected"] == []
+    assert result["decision_warnings"][0]["label"] == "RG-7-1-R round ambiguous"
+    assert result["decision_warnings"][0]["rik"].endswith("ambiguous-rg7.pdf")
+
+
+def test_page_attaches_repeat_rg7_only_to_its_bound_round(tmp_path):
+    s = bstore()
+    repeat_i = bdoc("/e/repeat-I.pdf", no="1", dt=10, up="2026-10-20T10:00:00Z")
+    add(s, repeat_i)
+    put(s, repeat_i, clean_report())
+    decision = d7("1", dt=23, url="/e/repeat-I-rg7.pdf", up="2026-10-20T12:00:00Z")
+    add(s, decision)
+    put(s, decision, rg7([("3", 1000, 900)]), version=RG7_PROMPT_VERSION)
+    repeat_ii = bdoc("/e/repeat-II.pdf", no="1", dt=15, up="2026-10-21T10:00:00Z")
+    add(s, repeat_ii)
+    put(s, repeat_ii, clean_report())
+
+    rows = build_data(s, tmp_path, parent=BP, cfg=Config(model=M))["rows"]
+    by_type = {row["doc_type"]: row for row in rows}
+
+    assert [x["u"] for x in by_type[10]["r7"]] == [decision.url]
+    assert by_type[15]["r7"] == []
+
+
+def test_page_treats_decision_equal_to_later_round_start_as_ambiguous(tmp_path):
+    s = bstore()
+    repeat_i = bdoc("/e/repeat-I.pdf", no="1", dt=10, up="2026-10-20T10:00:00Z")
+    add(s, repeat_i)
+    put(s, repeat_i, clean_report())
+    repeat_ii = bdoc("/e/repeat-II.pdf", no="1", dt=15, up="2026-10-21T10:00:00Z")
+    add(s, repeat_ii)
+    put(s, repeat_ii, clean_report())
+    decision = d7("1", dt=23, url="/e/equal-rg7.pdf", up="2026-10-21T10:00:00Z")
+    add(s, decision)
+    put(s, decision, rg7([("3", 1000, 900)]), version=RG7_PROMPT_VERSION)
+
+    rows = build_data(s, tmp_path, parent=BP, cfg=Config(model=M))["rows"]
+    by_type = {row["doc_type"]: row for row in rows}
+
+    assert by_type[10]["r7"] == [] and by_type[15]["r7"] == []
+    assert by_type[15]["rec"]["decision_warnings"][0]["label"] == "RG-7-1-R round ambiguous"
+
+
 def test_tally_cache_follows_new_decisions():
     s = bstore()
     station(s, clean_report(), no="1")

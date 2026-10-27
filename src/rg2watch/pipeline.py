@@ -25,7 +25,7 @@ from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, RG7_TYPES, Store, _doc
 
 log = logging.getLogger("rg2watch.pipeline")
 
-PROMPT_VERSION = "v9"
+PROMPT_VERSION = "v10"
 RG7_PROMPT_VERSION = "r2"
 # RG-7 types 19-22 correct a first-round RG-2 (type 6), 23-26 a repeat-vote one
 RG2_OF_RG7 = {**dict.fromkeys((19, 20, 21, 22), (6,)), **dict.fromkeys((23, 24, 25, 26), (10, 15, 16))}

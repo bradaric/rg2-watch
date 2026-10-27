@@ -1,5 +1,7 @@
 import threading
 
+import pytest
+
 from rg2watch.models import Doc, Election, Event, Finding, Scope, doc_key
 from rg2watch.store import Store
 
@@ -45,6 +47,25 @@ def test_removed_marks_inactive():
     s.apply_events(P, sid, [Event("added", d)])
     s.apply_events(P, sid, [Event("removed", d)])
     assert s.known_docs(P, Scope()) == {}
+
+
+def test_classification_override_is_append_only_and_exact_url_scoped():
+    s = store()
+    d = doc()
+    s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", d)])
+
+    confirmed = s.add_classification_override(d.url, "confirm_rg2")
+    assert confirmed["action"] == "confirm_rg2"
+    assert s.latest_classification_overrides(P) == {d.url: "confirm_rg2"}
+
+    revoked = s.add_classification_override(d.url, "revoke")
+    assert revoked["id"] > confirmed["id"]
+    assert s.latest_classification_overrides(P) == {d.url: "revoke"}
+    assert s.add_classification_override("https://x/missing.pdf", "confirm_rg2") is None
+    other = doc("https://x/rg9.pdf", dt=9)
+    s.apply_events(P, s.start_sweep(P, "rare"), [Event("added", other)])
+    with pytest.raises(ValueError, match="RIK-listed RG-2"):
+        s.add_classification_override(other.url, "confirm_rg2")
 
 
 def test_known_docs_scoped_by_municipality_and_type():

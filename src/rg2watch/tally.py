@@ -4,14 +4,16 @@ import copy
 import json
 import logging
 from collections import Counter
+from datetime import datetime, timezone
 
 from .config import Config
-from .models import Doc
+from .models import DOC_TYPES, Doc
 from .names import to_cyrillic
 from .operator_corrections import OperatorCorrections, apply_operator_snapshot
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from .rules import (RG7_FIELDS, _dash_zero, _list_zero, _ok, change_text, decision_label,
-                     decision_sort_key, evaluate_report, repeats, rg2_value, rg7_field, rg7_mismatch)
+                      decision_sort_key, evaluate_report, repeats, rg2_value, rg7_field, rg7_mismatch)
+from .rounds import bind_repeat_round
 from .status import _rik_link
 from .station_locations import station_location, station_location_source
 from .store import Store, _doc
@@ -20,7 +22,8 @@ log = logging.getLogger("rg2watch.tally")
 COUNTED = ("registered", "voted", "ballots_in_box", "invalid", "valid", "outside_voted")
 ARITHMETIC = ("A1", "A2", "A3", "A4", "A5")
 RG7_FIRST_ROUND = (19, 20, 21, 22)  # decisions correcting a first-round RG-2
-FIRST_ROUND = 6  # repeat-vote forms (10, 15, 16) are another round: never mixed into the totals
+RG2_ROUND_RANK = {6: 0, 10: 1, 15: 2, 16: 3}
+RG2_ROUND_NAME = {6: "original", 10: "repeat_i", 15: "repeat_ii", 16: "repeat_iii"}
 
 
 TALLY_WARNING_TEMPLATES = {
@@ -358,38 +361,117 @@ _warned: set[tuple] = set()
 def build_tally(store: Store, cfg: Config, parent: str, model: str,
                 municipalities: set[str] | None = None, cache: dict | None = None,
                 docs=None, arows=None, include_station_results: bool = False,
-                expected_rows_cache: dict | None = None) -> dict:
+                expected_rows_cache: dict | None = None,
+                report_json: dict[int, str] | None = None) -> dict:
     """Totals per municipality and overall, over all counted forms and over clean ones only.
     `model` is the stored model name; `cache` keeps extracts by analysis id between builds;
     `docs`/`arows` let the caller share its reads (browse_rows / browse_analyses)."""
     cache = {} if cache is None else cache
     docs = store.browse_rows(parent)[0] if docs is None else docs
-    # Only doc type 6 (the first-round RG-2): the repeat-vote RG-2 types (10, 15, 16) are another
-    # round and would double count stations. Assumes RIK files first-round forms under type 6.
-    docs = [d for d in docs if d["doc_type"] == FIRST_ROUND and d["parent"] == parent]
+    all_docs = [d for d in docs if d["parent"] == parent]
+    docs = [d for d in all_docs if d["doc_type"] in RG2_ROUND_RANK]
     ids = {d["id"] for d in docs}
     arows = [a for a in (store.browse_analyses(parent, PROMPT_VERSION) if arows is None else arows)
              if a["document_id"] in ids]
     by_doc: dict[int, dict[str, object]] = {}
     for a in arows:
         by_doc.setdefault(a["document_id"], {})[a["model"]] = a
+    classification_ids = [models[model]["id"] for models in by_doc.values() if model in models]
+    classification_reports = (store.analysis_reports(classification_ids)
+                              if report_json is None else report_json)
+    classification_overrides = store.latest_classification_overrides(parent)
+
+    def content_kind(d) -> str | None:
+        if classification_overrides.get(d["url"]) == "confirm_rg2":
+            return "rg2"
+        a = by_doc.get(d["id"], {}).get(model)
+        if a is None or a["prompt_version"] != PROMPT_VERSION:
+            return None
+        try:
+            classification = json.loads(classification_reports[a["id"]]).get(
+                "document_classification", {})
+            kind = classification.get("kind")
+            return kind if kind in ("rg2", "rg7", "other", "uncertain") else "uncertain"
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return "uncertain"
+
     groups: dict[object, list] = {}
     for d in docs:  # a NULL station_key cannot be grouped: the document stands alone
         groups.setdefault(d["station_key"] if d["station_key"] is not None else ("id", d["id"]), []).append(d)
     mains = []
     for ds in groups.values():
         active = [d for d in ds if d["active"]]
-        if active:  # removed forms are not counted
-            mains.append(max(active, key=lambda d: (d["uploaded_at"] or "", d["id"])))
+        legitimate = [d for d in active
+                      if content_kind(d) == "rg2" or
+                      (d["doc_type"] == 6 and content_kind(d) is None)]
+        if legitimate:  # removed and quarantined forms are not counted
+            mains.append(max(legitimate, key=lambda d: (RG2_ROUND_RANK[d["doc_type"]],
+                                                        d["uploaded_at"] or "", d["id"])))
     held_ids = {r["document_id"] for r in store.latest_reviews(parent)
                 if r["active"] and not r["superseded"] and r["verdict"] == "escalate"}
-    annulled = {d["station_key"]: d for d in store.active_rg9(parent)
-                if d["station_key"] is not None}
-    undetermined = {d["station_key"]: d for d in store.active_rg8(parent)
-                    if d["station_key"] is not None}
+    def uploaded(d) -> datetime | None:
+        try:
+            value = datetime.fromisoformat((d["uploaded_at"] or "").replace("Z", "+00:00"))
+            return value.replace(tzinfo=value.tzinfo or timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    round_starts: dict[str, dict[int, datetime]] = {}
+    for d in docs:
+        if d["station_key"] is None or d["doc_type"] == 6 or content_kind(d) != "rg2":
+            continue
+        if at := uploaded(d):
+            starts = round_starts.setdefault(d["station_key"], {})
+            starts[d["doc_type"]] = min(starts.get(d["doc_type"], at), at)
+
+    decision_docs = store.active_decisions(parent, (8, 9, 27, 28))
+
+    def bound_repeat_type(decision) -> int | None:
+        at = uploaded(decision)
+        starts = round_starts.get(decision["station_key"], {})
+        return bind_repeat_round(at, starts)
+
+    def decision_for(station_key: str, selected_type: int, decision_type: int):
+        candidates = [d for d in decision_docs if d["station_key"] == station_key
+                      and d["doc_type"] == decision_type]
+        if selected_type == 6:
+            return max(candidates, key=lambda d: (d["uploaded_at"] or "", d["id"]), default=None)
+        bound = [decision for decision in candidates
+                 if bound_repeat_type(decision) == selected_type]
+        return max(bound, key=lambda d: (d["uploaded_at"] or "", d["id"]), default=None)
+
+    annulled = {d["station_key"]: decision_for(d["station_key"], d["doc_type"],
+                                                9 if d["doc_type"] == 6 else 28)
+                for d in mains if d["station_key"] is not None}
+    annulled = {k: v for k, v in annulled.items() if v is not None}
+    undetermined = {d["station_key"]: decision_for(d["station_key"], d["doc_type"],
+                                                    8 if d["doc_type"] == 6 else 27)
+                    for d in mains if d["station_key"] is not None}
+    undetermined = {k: v for k, v in undetermined.items() if v is not None}
     corr: dict[str, list[dict]] = {}  # station_key -> RG-7 decisions in decision order
-    for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION):
-        if row["doc_type"] in RG7_FIRST_ROUND and row["station_key"] is not None:
+    selected_types = {d["station_key"]: d["doc_type"] for d in mains if d["station_key"] is not None}
+    ambiguous_repeat_decisions = [d for d in decision_docs
+                                  if d["doc_type"] in (27, 28)
+                                  and selected_types.get(d["station_key"]) in (10, 15, 16)
+                                  and bound_repeat_type(d) is None]
+    superseded_repeat_decisions = [d for d in decision_docs
+                                   if d["doc_type"] in (27, 28)
+                                   and selected_types.get(d["station_key"]) in (10, 15, 16)
+                                   and bound_repeat_type(d) is not None
+                                   and bound_repeat_type(d) != selected_types[d["station_key"]]]
+    for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION, analysed_only=False):
+        station_key = row["station_key"]
+        selected_type = selected_types.get(station_key)
+        if (row["doc_type"] in (23, 24, 25, 26) and selected_type in (10, 15, 16)
+                and bound_repeat_type(row) is None):
+            ambiguous_repeat_decisions.append(row)
+        if (row["doc_type"] in (23, 24, 25, 26) and selected_type in (10, 15, 16)
+                and bound_repeat_type(row) is not None and bound_repeat_type(row) != selected_type):
+            superseded_repeat_decisions.append(row)
+        applies = (row["doc_type"] in RG7_FIRST_ROUND and selected_type == 6) or (
+            row["doc_type"] in (23, 24, 25, 26) and selected_type in (10, 15, 16)
+            and bound_repeat_type(row) == selected_type)
+        if applies and station_key is not None and rep is not None:
             corr.setdefault(row["station_key"], []).append(
                 ({"d": decision_label(row["uploaded_at"], rep), "rep": rep, "u": row["url"]},
                  decision_sort_key(row["uploaded_at"], row["id"], rep)))
@@ -425,7 +507,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     docobj = {d["id"]: _doc(d) for d in mains}
     need = [a["id"] for d in mains for m, a in by_doc.get(d["id"], {}).items()
             if key_of(a) not in cache and (m == model or a["prompt_version"] == PROMPT_VERSION)]
-    reports = store.analysis_reports(need)
+    reports = ({**classification_reports, **store.analysis_reports(need)}
+               if report_json is None else report_json)
 
     def ex_of(a) -> dict | None:
         k = key_of(a)
@@ -463,6 +546,21 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                        "operator": operator_states.get(d["id"])})
     scope, scope_note = scope_of(store, cfg, parent)
     e = store.get_election(parent)
+    selected_by_station = {d["station_key"]: d for d in mains if d["station_key"] is not None}
+    decision_warnings = [{"id": selected_by_station[d["station_key"]]["id"],
+                          "m": selected_by_station[d["station_key"]]["municipality"] or UNKNOWN_MUNI,
+                          "no": selected_by_station[d["station_key"]]["station_no"],
+                          "label": f"{DOC_TYPES[d['doc_type']]} round ambiguous",
+                          "rik": _rik_link(d["url"], e.base_url if e else None)}
+                         for d in ambiguous_repeat_decisions]
+    round_labels = {10: "repeat vote I", 15: "repeat vote II", 16: "repeat vote III"}
+    decision_notices = [{"id": selected_by_station[d["station_key"]]["id"],
+                         "m": selected_by_station[d["station_key"]]["municipality"] or UNKNOWN_MUNI,
+                         "no": selected_by_station[d["station_key"]]["station_no"],
+                         "label": (f"{DOC_TYPES[d['doc_type']]} belongs to superseded "
+                                   f"{round_labels[bound_repeat_type(d)]}"),
+                         "rik": _rik_link(d["url"], e.base_url if e else None)}
+                        for d in superseded_repeat_decisions]
     national = scope == "national"
     by_muni: dict[str, list] = {}
     for f in forms:
@@ -636,7 +734,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
 
     station_results = [] if not include_station_results else [
         {"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
-         "name": f["d"]["station_name"],
+         "name": f["d"]["station_name"], "source_round": RG2_ROUND_NAME[f["d"]["doc_type"]],
           **(station_location(f["muni"], f["d"]["station_no"]) or {}),
          "annulled": f["annulment"],
           "undetermined": f["undetermined_result"],
@@ -648,6 +746,9 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         for f in forms]
     return {"model": model, "parent": parent, "title": e.title if e else parent, "scope": scope,
             "scope_note": scope_note, **top, "munis": munis, "overall": total, "notes": notes,
+            "selected_ids": [d["id"] for d in mains],
+            "decision_warnings": decision_warnings,
+            "decision_notices": decision_notices,
             "station_location_source": station_location_source(),
             "station_results": station_results,
             "corrected": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],

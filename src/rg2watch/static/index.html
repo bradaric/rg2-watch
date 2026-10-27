@@ -1211,9 +1211,36 @@ function rg7Badges(r) {
   }
   return td;
 }
+function classificationLabel(c) {
+  return {quarantined_rg7: "Quarantined: likely mislabeled RG-7",
+    quarantined_other: "Quarantined: not an RG-2", pending: "Pending document classification",
+    confirmed_rg2: c.override ? "Operator confirmed as RG-2" : "Content confirmed as RG-2"}[c.status] || "Pending document classification";
+}
+function classificationBox(v, editable) {
+  const c = v.classification;
+  if (!c || (c.status === "confirmed_rg2" && !c.override)) return document.createDocumentFragment();
+  const box = mk("div", null, "sub"), label = mk("strong", classificationLabel(c));
+  box.append(label, c.evidence ? ": " + c.evidence : "");
+  if (!editable) return box;
+  const action = c.override ? "revoke" : "confirm_rg2";
+  const button = mk("button", c.override ? "Revoke RG-2 confirmation" : "Confirm as RG-2");
+  button.type = "button";
+  button.onclick = () => {
+    if (!confirm(action === "confirm_rg2" ? "Confirm this exact document as RG-2? This may change unofficial totals." : "Revoke this exact document's RG-2 confirmation?")) return;
+    button.disabled = true;
+    fetch("classification", {method: "POST", cache: "no-store",
+      headers: {"Content-Type": "application/json", "X-RG2W": "1"},
+      body: JSON.stringify({url: v.u, action: action})})
+      .then(async r => { const data = await r.json(); if (!r.ok) throw new Error(data.error || "HTTP " + r.status); dataBuilt = null; loadData(); },
+            e => { throw e; })
+      .catch(e => { button.disabled = false; alert("Classification was not saved: " + e.message); });
+  };
+  box.append(" ", button);
+  return box;
+}
 function child(r) {
   const box = mk("div");
-  box.append(reviewBox(r), correctionBox(r, r.state !== "removed"));
+  box.append(reviewBox(r), classificationBox(r, r.state !== "removed"), correctionBox(r, r.state !== "removed"));
   for (const x of r.r7) {
     const d = mk("div", null, "sub");
     d.append(mk("strong", rg7Text(x)), " ", linksOf(x), x.f.length ? badges(x.f) : "");
@@ -1233,6 +1260,7 @@ function child(r) {
     const d = mk("div", null, "sub mut"), x = rvOf(v);
     d.append("older version: uploaded " + when(v.up) + ", first seen " + when(v.seen) + ", analysis " + v.ast + " ", linksOf(v));
     if (x) d.append(" ", verdictEl(x), x.n ? " " + x.n : "");
+    d.append(classificationBox(v, false));
     if (v.oc) d.append(correctionBox(v, false));
     d.append(caseBox(v));
     d.append(badges(v.f));
@@ -1398,11 +1426,20 @@ function applyData(data) {
 
 // ---- results (unofficial tally) -----------------------------------------------------------
 const nf = new Intl.NumberFormat("en-GB");
+const SOURCE_ROUND_LABEL = {original: "original RG-2", repeat_i: "repeat vote I",
+  repeat_ii: "repeat vote II", repeat_iii: "repeat vote III"};
 const num = v => v == null ? "-" : nf.format(v);
 const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
 function documentStatusEl(r) {
   const box = mk("span");
   box.append(mk("span", r.state), mk("br"), mk("span", "analysis " + r.ast));
+  const tallyLabel = {selected: "Counted round", superseded: "Superseded by repeat vote",
+    quarantined: "Excluded from round selection", pending: "Pending round selection"}[r.tally_state];
+  if (tallyLabel) box.append(mk("br"), mk("span", tallyLabel));
+  if (r.classification && r.classification.status !== "confirmed_rg2")
+    box.append(mk("br"), mk("span", classificationLabel(r.classification), "warn"));
+  else if (r.classification && r.classification.override)
+    box.append(mk("br"), mk("span", classificationLabel(r.classification), "good"));
   if (r.rec.annulled) {
     box.append(mk("br"), mk("span", "Поништено — RG-9", "bad"));
     const href = rikHref(r.rec.annulled.rik);
@@ -1412,6 +1449,16 @@ function documentStatusEl(r) {
     box.append(mk("br"), mk("span", "Резултати се не могу утврдити — RG-8", "bad"));
     const href = rikHref(r.rec.undetermined.rik);
     if (href) box.append(" ", link("RG-8", href));
+  }
+  for (const warning of r.rec.decision_warnings || []) {
+    box.append(mk("br"), mk("span", warning.label, "warn"));
+    const href = rikHref(warning.rik);
+    if (href) box.append(" ", link("RIK", href));
+  }
+  for (const notice of r.rec.decision_notices || []) {
+    box.append(mk("br"), mk("span", notice.label, "mut"));
+    const href = rikHref(notice.rik);
+    if (href) box.append(" ", link("RIK", href));
   }
   return box;
 }
@@ -2065,7 +2112,8 @@ function renderStationResults() {
     }
     statusEl.append(stationActionMenu(station, source));
     const name = mk("span", (allScope ? municipalityName + " · " : "") + "БМ " + station.no +
-      (station.settlement ? " · " + station.settlement : "") + (station.name ? " — " + station.name : ""), "stationname"),
+      (station.settlement ? " · " + station.settlement : "") + (station.name ? " — " + station.name : "") +
+      (SOURCE_ROUND_LABEL[station.source_round] ? " · " + SOURCE_ROUND_LABEL[station.source_round] : ""), "stationname"),
       mapLink = stationMapLink(station);
     if (mapLink) { name.className += " hasmap"; name.append(mapLink); }
     summary.append(name,

@@ -67,6 +67,10 @@ YESNO_KEYS = ("interruption", "control_sheet_found", "control_sheet_signed",
 ANSWERS = ("DA", "NE", "both", "none", "unclear")
 
 SCHEMA: dict = _obj({
+    "document_classification": _obj({
+        "kind": {"type": "string", "enum": ["rg2", "rg7", "other", "uncertain"]},
+        "evidence": {"type": "string"},
+    }),
     "header": _obj({
         "form_code": _NULLABLE_STR,
         "station_no": _NULLABLE_STR,
@@ -123,7 +127,9 @@ ARITHMETIC_SCHEMA: dict = _obj({
     })},
 })
 
-PROMPT = """You are examining a scanned Serbian polling-station minutes form (Записник о раду бирачког одбора, form RG-2). The images are the form's pages in order; a page may be split into two overlapping parts (named pNa, pNb). Layouts differ between municipalities (A3 or A4, 1 to 13 pages, sometimes rotated). The form has sections I ПРЕ ОТВАРАЊА, II ТОК ГЛАСАЊА, III РЕЗУЛТАТИ ГЛАСАЊА (10.1-10.5), IV ДРУГЕ ЧИЊЕНИЦЕ (11-15) and V БИРАЧКИ ОДБОР (committee names and signatures, completion date/time). Report which sections you found.
+PROMPT = """You are examining a scanned Serbian polling-station document listed by RIK as minutes (Записник о раду бирачког одбора, form RG-2). First classify the actual scanned content: rg2 for polling-station minutes with the RG-2 sections and results table; rg7 for a commission decision correcting minutes; other for a clearly different document; uncertain when the scan does not establish the kind. Give concise visible evidence and never force a non-RG-2 document into the RG-2 fields.
+
+The images are the form's pages in order; a page may be split into two overlapping parts (named pNa, pNb). Layouts differ between municipalities (A3 or A4, 1 to 13 pages, sometimes rotated). An RG-2 has sections I ПРЕ ОТВАРАЊА, II ТОК ГЛАСАЊА, III РЕЗУЛТАТИ ГЛАСАЊА (10.1-10.5), IV ДРУГЕ ЧИЊЕНИЦЕ (11-15) and V БИРАЧКИ ОДБОР (committee names and signatures, completion date/time). Report which sections you found.
 
 Your job is a forensic check of the PHYSICAL STATE of the handwritten entries, for a human reviewer who will look at flagged forms. Report what you see; do not judge intent.
 

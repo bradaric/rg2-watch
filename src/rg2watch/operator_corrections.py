@@ -4,8 +4,10 @@ import hashlib
 import json
 import logging
 from collections import Counter
+from datetime import datetime, timezone
 
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
+from .rounds import bind_repeat_round
 from .rules import _list_zero, decision_sort_key
 from .store import CorrectionRevisionConflict
 
@@ -95,8 +97,8 @@ class OperatorCorrections:
         key = (source["parent"], None if scope == "national" else source["municipality"])
         if self.expected_rows_cache is not None and key in self.expected_rows_cache:
             return list(self.expected_rows_cache[key])
-        docs = [d for d in self.store.browse_rows(source["parent"])[0]
-                if d["doc_type"] == 6 and d["active"]]
+        selected = self.store.selected_rg2_urls(source["parent"], self.model, PROMPT_VERSION)
+        docs = [d for d in self.store.browse_rows(source["parent"])[0] if d["url"] in selected]
         if scope != "national":
             docs = [d for d in docs if d["municipality"] == source["municipality"]]
         ids = {d["id"] for d in docs}
@@ -116,15 +118,54 @@ class OperatorCorrections:
 
     def _source(self, url: str) -> tuple[object, dict, str, list[int]]:
         row = self.store.operator_correction_source(url, self.model, PROMPT_VERSION)
-        if row is None or row["doc_type"] != 6:
-            raise ValueError("an analysed first-round RG-2 document is required")
+        if row is None or row["doc_type"] not in (6, 10, 15, 16):
+            raise ValueError("an analysed RG-2 document is required")
         report = json.loads(row["result_json"])
         rg7 = self.store.rg7_reports(row["parent"], self.model, RG7_PROMPT_VERSION,
                                      analysed_only=False, station_key=row["station_key"])
         decisions = []
         source_rg7 = []
+
+        def uploaded(value):
+            try:
+                out = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+                return out.replace(tzinfo=out.tzinfo or timezone.utc)
+            except (TypeError, ValueError):
+                return None
+
+        round_starts = {}
+        if row["doc_type"] != 6:
+            round_docs = [d for d in self.store.browse_rows(row["parent"])[0]
+                          if d["station_key"] == row["station_key"] and d["doc_type"] in (10, 15, 16)]
+            round_analyses = [a for a in self.store.browse_analyses(row["parent"], PROMPT_VERSION)
+                              if a["model"] == self.model and a["prompt_version"] == PROMPT_VERSION]
+            round_by_doc = {a["document_id"]: a for a in round_analyses}
+            round_reports = self.store.analysis_reports([a["id"] for a in round_analyses])
+            overrides = self.store.latest_classification_overrides(row["parent"])
+            for d in round_docs:
+                a = round_by_doc.get(d["id"])
+                confirmed = overrides.get(d["url"]) == "confirm_rg2"
+                if not confirmed:
+                    try:
+                        confirmed = (a is not None and
+                                     json.loads(round_reports[a["id"]])["document_classification"]["kind"] == "rg2")
+                    except (KeyError, TypeError, ValueError):
+                        confirmed = False
+                if not confirmed:
+                    continue
+                if at := uploaded(d["uploaded_at"]):
+                    round_starts[d["doc_type"]] = min(round_starts.get(d["doc_type"], at), at)
+
+        def applies(d) -> bool:
+            if row["doc_type"] == 6:
+                return d["doc_type"] in (19, 20, 21, 22)
+            if d["doc_type"] not in (23, 24, 25, 26):
+                return False
+            at = uploaded(d["uploaded_at"])
+            return bind_repeat_round(at, round_starts) == row["doc_type"]
+
         for d, rep in rg7:
-            if d["doc_type"] not in (19, 20, 21, 22):
+            if not applies(d):
                 continue
             source_rg7.append([d["id"], d["url"], rep])
             if rep is not None:
@@ -166,11 +207,14 @@ class OperatorCorrections:
             status, active = "active", json.loads(latest["snapshot_json"])
         elif latest is not None:
             status = "suspended"
+        selected = self.store.selected_rg2_url(row["parent"], row["station_key"], self.model,
+                                               PROMPT_VERSION) == url
         return {"url": url, "status": status, "source_token": token,
                 "source_revision": raw,
                 "snapshot": source_snapshot, "expected_rows": expected,
                 "active_snapshot": active, "reason": latest["reason"] if latest else None,
-                "at": latest["created_at"] if latest else None, "active": bool(row["active"]),
+                "at": latest["created_at"] if latest else None,
+                "active": bool(row["active"]) and selected,
                 "revision": latest["id"] if latest else None,
                 "history": self._history(history_rows, raw, source_snapshot)}
 

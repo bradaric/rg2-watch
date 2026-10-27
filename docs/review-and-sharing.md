@@ -201,13 +201,19 @@ package; and confirm a completed case still displays after recording `ok`.
 ## Unofficial tally
 
 `rg2watch tally [--parent P] [--municipality NAME,...] [--model M] [--clean]` and the "Results
-(unofficial)" tab of the browse page total what the watch model (`model`, or `--model`) read from the
-first-round RG-2 forms: registered, voted, ballots in box, invalid, valid, outside voted, turnout, and
+(unofficial)" tab of the browse page total what the watch model (`model`, or `--model`) read from one
+selected RG-2 per station: the latest applicable repeat-vote round (III, II, I, then the original),
+or the original when no legitimate repeat exists. A selected repeat replaces the station's earlier
+vote completely; it is not merged with it. The tally includes registered, voted, ballots in box,
+invalid, valid, outside voted, turnout, and
 votes and share of ballots in the box (`valid + invalid`) per list, per municipality and overall,
 with coverage (forms counted
 of stations known). Applied RG-7 and operator-entered corrections replace those readings in the
 corrected view; the as-filed view preserves the original RG-2 readings. RIK's official results are
-never fetched. A form contributes to aggregates only when registered, voted, valid and invalid are
+never fetched. An unanalysed or excluded selected legitimate repeat never falls back to an obsolete
+earlier result. A scan classified as RG-7, another document, or uncertain is quarantined instead of
+displacing a legitimate RG-2; an audited exact-URL operator confirmation can admit it as RG-2.
+A form contributes to aggregates only when registered, voted, valid and invalid are
 readable, its expected list rows are complete, and those list votes sum to valid. Until corrected, an
 incomplete or unreconciled form contributes no registered, turnout, ballots, valid, invalid, outside
 or list totals. The aggregate ballots/share denominator is `valid + invalid`; a missing standalone
@@ -377,7 +383,8 @@ be tested with one manual wrapper run before cron is re-enabled.
 
 ## Operator-entered numeric verification and corrections
 
-An analysed, active first-round RG-2 can have audited operator-entered values when a model reading
+The analysed RG-2 currently selected for a station, including a repeat-vote RG-2, can have audited
+operator-entered values when a model reading
 needs confirmation or correction and no RG-7 is required. Expand the form and choose **Verify /
 correct values**. An unchanged snapshot is shown in history as **values verified**; changed numbers
 are shown as **numbers corrected**. The dedicated dialog is outside the results table, so automatic
@@ -412,6 +419,10 @@ RG-2. With analysis on they are analysed like RG-2 forms (same limiter, workers,
 retries) with their own prompt and schema (`RG7_PROMPT_VERSION` r1; no names: list votes by row
 number only). Decisions already stored by an older run and never analysed are queued automatically
 at the next `watch --analyze` / `--until-done` (also `scripts/rehearse.sh <id>` on an existing DB).
+First-round decisions apply only to the original RG-2. Because RIK's repeat-decision types do not
+identify repeat I/II/III, each repeat decision is bound to the latest legitimate repeat round whose
+first upload strictly precedes the decision upload. Older active decisions cannot leak into a later
+repeat; a missing, malformed or equal timestamp is ambiguous and is not applied automatically.
 Rules: R1 HIGH (a result item 10.1-10.4 or list votes changed) or MEDIUM (only other items), R2
 MEDIUM (the decision's old number differs from our RG-2 reading; checked when the RG-7 is analysed
 and again when the station's RG-2 is analysed later), R3 LOW (no changes read). The tally applies

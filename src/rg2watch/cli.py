@@ -333,9 +333,16 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
         correction_api = OperatorCorrections(store, cfg, stored_model(cfg.model), on_change=refresh)
     else:
         correction_api = None
+
+    def classification_api(url: str, action: str):
+        row = store.add_classification_override(url, action)
+        if row is not None and cfg is not None:
+            refresh()
+        return row
+
     for p in range(port, min(port + PORT_TRIES, 65536)):
         server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
-                              correction_api)
+                               correction_api, classification_api)
         if server is not None:
             if p != port:
                 log.warning("port %d busy, using %d", port, p)

@@ -22,6 +22,7 @@ def yn(answer="NE"):
 
 def clean_report():
     return {
+        "document_classification": {"kind": "rg2", "evidence": "RG-2 sections and results table"},
         "header": {"form_code": "RG-2", "station_no": "0012", "date": "19.10.2026",
                    "sections_present": ["I", "II", "III", "IV", "V"],
                    "pages_match_same_form": True, "rotated_or_upside_down": False},
@@ -113,6 +114,12 @@ def mutated(fn):
 
 def test_clean_report_matches_schema():
     _check(clean_report(), REPORT_SHAPE)
+
+
+def test_rg2_schema_classifies_the_scanned_document_content():
+    classification = SCHEMA["properties"]["document_classification"]
+    assert classification["properties"]["kind"]["enum"] == ["rg2", "rg7", "other", "uncertain"]
+    assert classification["properties"]["evidence"] == {"type": "string"}
 
 
 def test_clean_report_no_findings():
