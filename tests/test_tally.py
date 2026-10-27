@@ -807,7 +807,8 @@ const assert = require("assert");
 const els = {};
 function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "", style: {}, children: [],
   classList: {remove() {}, add() {}, toggle() {}}, append(...x) { this.children.push(...x); },
-  replaceChildren(...x) { this.children = x; }, get options() { return this.children; }}; }
+  replaceChildren(...x) { this.children = x; }, setAttribute(name, value) { this[name] = value; },
+  get options() { return this.children; }}; }
 const $ = el;
 function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}, dataset: {}, append(...nodes) { this.children = this.children || []; this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }}; }
 function epoch() { return "20:00"; }
@@ -1161,12 +1162,12 @@ assert.equal(stationMarginEl.children[1].children[1].textContent, "+20");
 let stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
 let stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
 assert(stationActions, "station status must have a compact actions menu");
-assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "show"]);
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "прикажи"]);
 assert.equal(stationActions.menu.hidden, true);
 let prevented = 0, stopped = 0;
 stationActions.button.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
 assert.equal(stationActions.menu.hidden, false);
-const stationShow = stationActions.menu.children.find(x => x.textContent === "show");
+const stationShow = stationActions.menu.children.find(x => x.textContent === "прикажи");
 assert.equal(stationShow.tag, "a");
 assert.equal(stationShow.href, "#form=9");
 assert.equal(stationShow.target, "_blank");
@@ -1178,26 +1179,96 @@ function stationReviewEl() {
 }
 els.tview.value = "filed";
 renderHero();
+const stationStatusMain = els.stationlist.children[0].children[0].children.find(x => x.className.startsWith("stationstatus"))
+  .children.find(x => x.className.startsWith("stationstatusmain"));
+assert(stationStatusMain.className.includes("hasreason"));
+assert.equal(stationStatusMain.dataset.reason, "list votes mismatch");
+assert.equal(stationStatusMain.tabIndex, 0);
 assert.equal(stationReviewEl().textContent, "ескалиран");
 assert.equal(stationReviewEl().dataset.note, "Проверити потписе");
 assert.equal(stationReviewEl().tabIndex, 0);
 assert(stationReviewEl().className.includes("hasnote"));
+assert.equal(els["stationfilter-all"].textContent, "Сва бирачка места 1");
+assert.equal(els["stationfilter-out"].textContent, "Није урачунато 1");
+assert.equal(els["stationfilter-escalate"].textContent, "Ескалирано 1");
+setStationFilter("escalate");
+assert.equal(els.stationlist.children.length, 1);
+REV = {u9: {v: "escalate", n: "Нова напомена"}}; renderHero();
+assert.equal(stationReviewEl().dataset.note, "Нова напомена", "a changed note must repaint without a verdict change");
 REV = {u9: {v: "unsure", n: "Поново упоредити"}}; renderHero();
+assert.equal(els.stationlist.children.length, 1, "empty filtered results render one empty-state message");
+assert.equal(els.stationlist.children[0].textContent, "Нема записника за изабрани филтер.");
+setStationFilter("unsure");
 assert.equal(stationReviewEl().textContent, "несигуран");
 assert.equal(stationReviewEl().dataset.note, "Поново упоредити");
 REV = {}; renderHero();
+setStationFilter("undecided");
 assert.equal(stationReviewEl().textContent, "без одлуке");
 assert(!stationReviewEl().className.includes("hasnote"));
 REV = {u9: {v: "ok", n: "Проверено"}}; renderHero();
+setStationFilter("all");
 assert.equal(stationReviewEl().textContent, "прихваћен");
 assert.equal(stationReviewEl().dataset.note, "Проверено");
+function sortableStation(id, no, voted, lists) {
+  const result = {clean: true, included: false, reason: "test reason", registered: 1000,
+    voted, valid: lists[0] + lists[1], lists};
+  return {id, m: "Ћуприја", no: String(no), name: "БМ " + no, corrected: result, filed: result};
+}
+T.station_results = [
+  sortableStation(10, 2, 500, [51, 49]),
+  sortableStation(11, 10, 900, [90, 10]),
+  sortableStation(12, 5, 700, [60, 40]),
+  sortableStation(13, 1, 800, [55, 45]),
+];
+D.rows = [
+  {id: 10, u: "u10", rv: {v: "unsure"}},
+  {id: 11, u: "u11", rv: {v: "ok"}},
+  {id: 12, u: "u12", rv: null},
+  {id: 13, u: "u13", rv: {v: "escalate"}},
+];
+REV = null;
+const stationIds = () => els.stationlist.children.filter(x => x.stationId).map(x => Number(x.stationId));
+els.stationsort.value = "margin-close"; renderHero();
+assert.deepEqual(stationIds(), [10, 13, 12, 11]);
+els.stationsort.value = "margin-wide"; renderHero();
+assert.deepEqual(stationIds(), [11, 12, 13, 10]);
+els.stationsort.value = "turnout-high"; renderHero();
+assert.deepEqual(stationIds(), [11, 13, 12, 10]);
+els.stationsort.value = "turnout-low"; renderHero();
+assert.deepEqual(stationIds(), [10, 12, 13, 11]);
+els.stationsort.value = "review"; renderHero();
+assert.deepEqual(stationIds(), [13, 10, 12, 11], "review sorting puts actionable states first");
+assert.equal(els["stationfilter-all"].textContent, "Сва бирачка места 4");
+assert.equal(els["stationfilter-out"].textContent, "Није урачунато 4");
+assert.equal(els["stationfilter-unsure"].textContent, "Несигурно 1");
+assert.equal(els["stationfilter-undecided"].textContent, "Без одлуке 1");
+const rememberedOpen = els.stationlist.children.find(x => x.stationId === "10");
+rememberedOpen.open = true; rememberedOpen.ontoggle();
+setStationFilter("escalate");
+assert.deepEqual(stationIds(), [13]);
+setStationFilter("all");
+assert.equal(els.stationlist.children.find(x => x.stationId === "10").open, true,
+  "filtering a station out and back in must preserve its expansion state");
+setStationFilter("escalate");
+els.tview.value = "diff";
+els.stationsort.value = "margin-wide";
+renderHero();
+assert.equal(els.stationfilters.hidden, true);
+assert.equal(els.sortturnouthigh.textContent, "Највећа промена излазности");
+assert.equal(els.sortturnoutlow.textContent, "Најмања промена излазности");
+assert.deepEqual(stationIds(), [13, 10, 12, 11], "difference mode ignores review filters and incompatible sorts");
+T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+setStationFilter("all");
+els.stationsort.value = "station";
 REV = null; els.tview.value = "corrected";
 D.rows = [{id: 9}];
 renderHero();
 stationCard = els.stationlist.children[0];
 stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
 stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
-assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["show"],
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["прикажи"],
   "unavailable PDF and RIK actions must be omitted after a live refresh");
 els.tview.value = "diff";
 renderHero();

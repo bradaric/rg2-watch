@@ -274,8 +274,9 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 #stationhead::-webkit-details-marker{display:none}#stationhead::before{content:"▸";color:var(--accent);font-weight:800}
 #stationresults[open]>#stationhead::before{content:"▾"}
 #stationhead h3{font-size:1rem;color:var(--fg);margin:0}#stationcount{color:var(--mut);margin-left:auto}
-#stationtools{display:flex;justify-content:flex-end;align-items:center;gap:var(--s2);padding:var(--s1) 0 var(--s2)}
+#stationtools{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:var(--s2);padding:var(--s1) 0 var(--s2)}
 #stationtools label{display:flex;align-items:center;gap:var(--s1);color:var(--mut)}
+#stationfilters{display:flex;flex-wrap:wrap;gap:4px;margin-right:auto}.stationfilter{padding:4px 7px;border:1px solid var(--line2);border-radius:999px;background:var(--surface);color:var(--mut);font-size:11px;cursor:pointer}.stationfilter:hover,.stationfilter:focus{color:var(--fg);border-color:var(--mut)}.stationfilter[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
 .stationcols,.station summary{display:grid;grid-template-columns:auto minmax(12rem,1.3fr) 5.5rem 5.5rem 3.5rem minmax(9rem,.8fr) 10rem 11rem;gap:var(--s3);align-items:center}
 .stationcols{padding:var(--s1) var(--s2);color:var(--mut);font-size:10.5px;font-weight:750;text-transform:uppercase;letter-spacing:.055em;border-bottom:2px solid var(--line2)}
 .stationcols span:nth-child(3),.stationcols span:nth-child(4),.stationcols span:nth-child(6),.stationcols span:nth-child(7),.stationcols span:nth-child(8){text-align:right}
@@ -289,6 +290,7 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .stationshare.single .minibar{height:12px;font-size:11px;line-height:12px}.stationshare.single .minitrack{height:6px}.stationshare.single .minipct{font-weight:700}
 .stationmargin.visual{display:grid;grid-template-columns:minmax(2.5rem,1fr) auto;gap:var(--s2);align-items:center}.stationmargintrack{height:5px;background:var(--track);border-radius:3px;overflow:hidden}.stationmarginfill{display:block;height:100%;background:var(--bar);border-radius:3px}.stationmarginvalues{display:grid;line-height:1.05}.stationmarginpp{font-weight:800}.stationmarginvotes{margin-top:3px;color:var(--mut);font-size:.8em}
 .stationstatus{display:grid;grid-template-columns:auto auto auto;align-items:center;justify-content:end;color:var(--mut);white-space:nowrap}.stationstatus.in::before,.stationstatus.out::before{grid-column:1;grid-row:1/3;margin-right:5px}.stationstatus.in::before{content:"●";color:var(--good)}.stationstatus.out::before{content:"●";color:var(--hi)}.stationstatusmain{grid-column:2;grid-row:1;text-align:right}.stationreview{font-size:.8em;grid-column:2;grid-row:2;text-align:right;color:var(--mut)}.stationreview.escalate{color:var(--hi)}.stationreview.unsure{color:var(--md)}.stationreview.ok{color:var(--good)}.stationreview.hasnote{position:relative;cursor:help;text-decoration:underline dotted;text-underline-offset:2px}.stationreview.hasnote::after{content:attr(data-note);position:absolute;z-index:30;right:0;bottom:calc(100% + 6px);display:none;width:max-content;max-width:min(24rem,70vw);padding:7px 9px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008;color:var(--fg);font-size:12px;font-weight:400;line-height:1.35;text-align:left;white-space:normal}.stationreview.hasnote:hover::after,.stationreview.hasnote:focus::after{display:block}
+.stationstatusmain.hasreason{position:relative;cursor:help;text-decoration:underline dotted;text-underline-offset:2px}.stationstatusmain.hasreason::after{content:attr(data-reason);position:absolute;z-index:30;right:0;bottom:calc(100% + 6px);display:none;width:max-content;max-width:min(24rem,70vw);padding:7px 9px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008;color:var(--fg);font-size:12px;font-weight:400;line-height:1.35;text-align:left;white-space:normal}.stationstatusmain.hasreason:hover::after,.stationstatusmain.hasreason:focus::after{display:block}
 .stationactions{position:relative;display:inline-flex;grid-column:3;grid-row:1/3;margin-left:var(--s1)}.stationmenubtn{display:inline-grid;place-items:center;width:1.8rem;height:1.65rem;padding:0;border:1px solid var(--line2);border-radius:5px;background:var(--surface);color:var(--fg);cursor:pointer}.stationmenubtn::before{content:"";width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid currentColor}.stationmenu{position:absolute;z-index:20;right:0;top:calc(100% + 3px);display:grid;min-width:8rem;padding:4px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008}.stationmenu[hidden]{display:none}.stationmenuitem{display:block;border:0;border-radius:4px;background:none;color:var(--fg);font:inherit;text-align:left;text-decoration:none;padding:6px 8px;cursor:pointer}.stationmenuitem:hover,.stationmenuitem:focus{background:var(--surface);color:var(--accent)}
 .stationbody{padding:0 var(--s3) var(--s3) 2rem}.stationnote{color:var(--mut);margin:var(--s2) 0}
 .stationbar{display:grid;grid-template-columns:minmax(12rem,30%) minmax(8rem,1fr) 11rem;gap:var(--s3);align-items:center;padding:5px 0}
@@ -436,7 +438,7 @@ stroke-width:2.5;
 <div id="herocharthead"><div class="hero-eyebrow">Пресек резултата</div></div>
 <div id="herochart"></div>
 <details id="stationresults" hidden><summary id="stationhead"><h3>Резултати по бирачким местима</h3><span id="stationcount"></span></summary>
-<div id="stationtools"><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2" selected>2 листе</option><option value="3">3 листе</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
+<div id="stationtools"><div id="stationfilters" role="group" aria-label="Филтер бирачких места"><button type="button" id="stationfilter-all" class="stationfilter" data-station-filter="all" aria-pressed="true">Сва бирачка места</button><button type="button" id="stationfilter-out" class="stationfilter" data-station-filter="out" aria-pressed="false">Није урачунато</button><button type="button" id="stationfilter-escalate" class="stationfilter" data-station-filter="escalate" aria-pressed="false">Ескалирано</button><button type="button" id="stationfilter-unsure" class="stationfilter" data-station-filter="unsure" aria-pressed="false">Несигурно</button><button type="button" id="stationfilter-undecided" class="stationfilter" data-station-filter="undecided" aria-pressed="false">Без одлуке</button></div><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option><option id="sortmarginclose" value="margin-close">Најтешња трка</option><option id="sortmarginwide" value="margin-wide">Највећа маргина</option><option id="sortturnouthigh" value="turnout-high">Највећа излазност</option><option id="sortturnoutlow" value="turnout-low">Најмања излазност</option><option id="sortreview" value="review">Статус провере</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2" selected>2 листе</option><option value="3">3 листе</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
 <div class="stationcols" aria-hidden="true"><span></span><span>Бирачко место</span><span>Излазност</span><span>Важећи</span><span id="stationwinnerlabel">Победник</span><span id="stationsharelabel">Удео</span><span id="stationmarginlabel">Маргина</span><span>Статус</span></div>
 <div id="stationlist"></div></details>
 <div id="herofoot"></div>
@@ -1758,6 +1760,15 @@ function stationReview(id) {
   const labels = {ok: "прихваћен", escalate: "ескалиран", unsure: "несигуран"};
   return {verdict, label: labels[verdict] || "без одлуке", note: review.n || ""};
 }
+const STATION_FILTERS = {
+  all: "Сва бирачка места", out: "Није урачунато", escalate: "Ескалирано", unsure: "Несигурно", undecided: "Без одлуке"
+};
+let stationFilter = "all";
+function setStationFilter(value) {
+  stationFilter = value in STATION_FILTERS ? value : "all";
+  stationKey = "";
+  if (T) renderStationResults();
+}
 function stationActionMenu(station) {
   const actions = mk("span", null, "stationactions"), button = mk("button", null, "stationmenubtn"),
     menu = mk("span", null, "stationmenu"), source = stationSource(station.id);
@@ -1766,7 +1777,7 @@ function stationActionMenu(station) {
   const pdf = localHref(source.pdf), rik = rikHref(source.rik);
   if (pdf) { const item = link("PDF", pdf); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
   if (rik) { const item = link("RIK", rik); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
-  const show = link("show", "#form=" + encodeURIComponent(station.id));
+  const show = link("прикажи", "#form=" + encodeURIComponent(station.id));
   show.className = "stationmenuitem"; show.role = "menuitem";
   show.onclick = ev => { ev.stopPropagation(); closeStationActions(); };
   menu.append(show);
@@ -1779,6 +1790,7 @@ function stationActionMenu(station) {
   actions.append(button, menu);
   return actions;
 }
+const openStationIds = new Set();
 function stationCards() { return [...$("stationlist").children].filter(card => card.stationId != null); }
 function updateStationToggle() {
   const cards = stationCards(), allOpen = cards.length && cards.every(card => card.open);
@@ -1787,6 +1799,7 @@ function updateStationToggle() {
 function setAllStations(open) {
   for (const card of stationCards()) {
     card.open = open;
+    if (open) openStationIds.add(String(card.stationId)); else openStationIds.delete(String(card.stationId));
     if (open && card.ontoggle) card.ontoggle();
   }
   updateStationToggle();
@@ -1828,33 +1841,69 @@ function renderStationResults() {
     return viewName === "diff" ? station.corrected.clean && filed.clean
       : (viewName === "filed" ? filed : station.corrected).clean;
   });
-  const sort = $("stationsort").value || "station", barCount = Number($("stationbars").value) || 1;
+  const requestedSort = $("stationsort").value || "station", barCount = Number($("stationbars").value) || 1,
+    diff = viewName === "diff", incompatibleSort = ["margin-close", "margin-wide", "review"].includes(requestedSort),
+    sort = diff && incompatibleSort ? "station" : requestedSort;
+  $("stationfilters").hidden = diff;
+  for (const id of ["sortmarginclose", "sortmarginwide", "sortreview"]) $(id).hidden = diff;
   $("stationwinnerlabel").textContent = viewName === "diff" ? "Највећа промена" : "Победник";
   $("stationsharelabel").textContent = viewName === "diff" ? "Гласови" : "Удео";
   $("stationmarginlabel").textContent = viewName === "diff" ? "Удео" : "Маргина";
   $("sortwinner").textContent = viewName === "diff" ? "Листа са највећом променом" : "Победник";
   $("sortshare").textContent = viewName === "diff" ? "Величина промене" : "Удео победника";
-  let records = stations.map(station => ({station, outcome: stationOutcome(station, listOwner, viewName)}));
-  const byStation = (a, b) => String(a.station.no).localeCompare(String(b.station.no), undefined, {numeric: true});
-  records.sort(sort === "winner"
-    ? (a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(a.outcome.name, b.outcome.name) || byStation(a, b)
-    : sort === "share" ? (a, b) => Math.abs(b.outcome.share || 0) - Math.abs(a.outcome.share || 0) || byStation(a, b)
-    : byStation);
-  const sourceLinks = records.map(({station}) => {
-    const source = stationSource(station.id), review = stationReview(station.id);
-    return [station.id, source.pdf || "", source.rik || "", review.verdict];
+  $("sortturnouthigh").textContent = viewName === "diff" ? "Највећа промена излазности" : "Највећа излазност";
+  $("sortturnoutlow").textContent = viewName === "diff" ? "Најмања промена излазности" : "Најмања излазност";
+  let records = stations.map(station => {
+    const corrected = station.corrected, filed = station.filed || corrected,
+      chosen = viewName === "filed" ? filed : corrected, review = stationReview(station.id),
+      correctedTurnout = stationTurnout(corrected), filedTurnout = stationTurnout(filed),
+      turnout = diff ? correctedTurnout == null || filedTurnout == null ? null : correctedTurnout - filedTurnout
+        : stationTurnout(chosen);
+    return {station, chosen, review, turnout, outcome: stationOutcome(station, listOwner, viewName)};
   });
-  const key = JSON.stringify([heroMuni, mode, viewName, T.scope, sort, barCount, heroListNames(listOwner), records, sourceLinks]);
+  const allRecords = records;
+  const filterMatch = (record, filter) => filter === "all" ? true : record.chosen.included ? false
+    : filter === "out" ? true : filter === "undecided" ? !record.review.verdict : record.review.verdict === filter;
+  for (const [value, label] of Object.entries(STATION_FILTERS)) {
+    const button = $("stationfilter-" + value), count = allRecords.filter(record => filterMatch(record, value)).length;
+    button.textContent = label + " " + num(count);
+    button.setAttribute("aria-pressed", String(stationFilter === value));
+  }
+  if (!diff && stationFilter !== "all") records = records.filter(record => filterMatch(record, stationFilter));
+  const byStation = (a, b) => String(a.station.no).localeCompare(String(b.station.no), undefined, {numeric: true});
+  const byNumber = (getter, descending = false) => (a, b) => {
+    const av = getter(a), bv = getter(b);
+    if (av == null) return bv == null ? byStation(a, b) : 1;
+    if (bv == null) return -1;
+    return (descending ? bv - av : av - bv) || byStation(a, b);
+  };
+  const reviewRank = record => record.chosen.included ? 4
+    : ({escalate: 0, unsure: 1, "": 2, ok: 3}[record.review.verdict] ?? 3);
+  const comparators = {
+    winner: (a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(a.outcome.name, b.outcome.name) || byStation(a, b),
+    share: byNumber(record => Math.abs(record.outcome.share || 0), true),
+    "margin-close": byNumber(record => record.outcome.marginShare),
+    "margin-wide": byNumber(record => record.outcome.marginShare, true),
+    "turnout-high": byNumber(record => record.turnout == null ? null : Math.abs(record.turnout), true),
+    "turnout-low": byNumber(record => record.turnout == null ? null : Math.abs(record.turnout)),
+    review: (a, b) => reviewRank(a) - reviewRank(b) || byStation(a, b),
+    station: byStation,
+  };
+  records.sort(comparators[sort] || byStation);
+  const sourceLinks = allRecords.map(({station, review}) => {
+    const source = stationSource(station.id);
+    return [station.id, source.pdf || "", source.rik || "", review.verdict, review.note];
+  });
+  const key = JSON.stringify([heroMuni, mode, viewName, T.scope, sort, barCount, stationFilter,
+    heroListNames(listOwner), records, sourceLinks]);
   if (key === stationKey) return;
   stationKey = key;
-  const open = new Set([...list.children].filter(card => card.open).map(card => String(card.stationId)));
   section.hidden = false;
-  $("stationcount").textContent = num(stations.length) + " " +
-    serbianCount(stations.length, "записник", "записника", "записника");
-  const cards = records.map(({station, outcome}) => {
-    const corrected = station.corrected, filed = station.filed || corrected, chosen = viewName === "filed" ? filed : corrected;
-    const turnout = viewName === "diff" ? (stationTurnout(corrected) == null || stationTurnout(filed) == null
-      ? null : stationTurnout(corrected) - stationTurnout(filed)) : stationTurnout(chosen);
+  $("stationcount").textContent = !diff && stationFilter !== "all"
+    ? num(records.length) + " од " + num(stations.length) + " записника"
+    : num(stations.length) + " " + serbianCount(stations.length, "записник", "записника", "записника");
+  const cards = records.map(({station, outcome, chosen, review, turnout}) => {
+    const corrected = station.corrected, filed = station.filed || corrected;
     const valid = viewName === "diff" ? corrected.valid == null || filed.valid == null ? null
       : corrected.valid - filed.valid : chosen.valid;
     const details = mk("details", null, "station"), summary = mk("summary"), body = mk("div", null, "stationbody"),
@@ -1863,10 +1912,15 @@ function renderStationResults() {
     winner.title = outcome.name;
     const status = viewName === "diff" ? "Поређење" : chosen.included ? "Урачунат" : "Није урачунат",
       statusEl = mk("span", null, "stationstatus" + (viewName === "diff" ? "" : chosen.included ? " in" : " out"));
-    if (chosen.reason) statusEl.title = chosen.reason;
-    statusEl.append(mk("span", status, "stationstatusmain"));
+    const statusMain = mk("span", status, "stationstatusmain" + (chosen.reason && !chosen.included ? " hasreason" : ""));
+    if (chosen.reason && !chosen.included) {
+      statusMain.dataset.reason = chosen.reason;
+      statusMain.tabIndex = 0;
+      statusMain.ariaLabel = status + ": " + chosen.reason;
+    }
+    statusEl.append(statusMain);
     if (viewName !== "diff" && !chosen.included) {
-      const review = stationReview(station.id), reviewEl = mk("span", review.label,
+      const reviewEl = mk("span", review.label,
         "stationreview " + (review.verdict || "undecided") + (review.note ? " hasnote" : ""));
       if (review.note) {
         reviewEl.dataset.note = review.note;
@@ -1884,12 +1938,17 @@ function renderStationResults() {
     details.stationId = String(station.id);
     let rendered = false;
     const draw = () => { if (!rendered) { rendered = true; renderStationChart(body, station, listOwner, viewName); } };
-    details.ontoggle = () => { if (details.open) draw(); updateStationToggle(); };
-    if (open.has(details.stationId)) { details.open = true; draw(); }
+    details.ontoggle = () => {
+      if (details.open) { openStationIds.add(details.stationId); draw(); }
+      else openStationIds.delete(details.stationId);
+      updateStationToggle();
+    };
+    if (openStationIds.has(details.stationId)) { details.open = true; draw(); }
     return details;
   });
   list.replaceChildren(...cards);
-  if (!cards.length) list.replaceChildren(mk("p", "Нема записника у изабраном обухвату.", "stationnote"));
+  if (!cards.length) list.replaceChildren(mk("p", !diff && stationFilter !== "all"
+    ? "Нема записника за изабрани филтер." : "Нема записника у изабраном обухвату.", "stationnote"));
   updateStationToggle();
 }
 function renderHero() {
@@ -2008,6 +2067,7 @@ $("hmode").addEventListener("input", () => { $("tmode").value = $("hmode").value
 $("hview").addEventListener("input", () => { $("tview").value = $("hview").value; writeHash(); if (T) renderTally(); });
 $("stationsort").addEventListener("input", () => { if (T) renderStationResults(); });
 $("stationbars").addEventListener("input", () => { if (T) renderStationResults(); });
+for (const value of Object.keys(STATION_FILTERS)) $("stationfilter-" + value).onclick = () => setStationFilter(value);
 $("stationtoggle").onclick = () => setAllStations(!stationCards().every(card => card.open));
 initHero();
 if (new URLSearchParams(location.search).get("hero") === "1") setHero(true);

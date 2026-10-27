@@ -216,6 +216,12 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
     assert '<option value="1">1 листа</option>' in html
     assert '<option value="2" selected>2 листе</option>' in html
     assert '<option value="3">3 листе</option>' in html
+    assert 'id="stationfilters"' in html
+    assert all(f'data-station-filter="{value}"' in html for value in (
+        "all", "out", "escalate", "unsure", "undecided"))
+    assert all(f'value="{value}"' in html for value in (
+        "margin-close", "margin-wide", "turnout-high", "turnout-low", "review"))
+    assert 'id="sortturnouthigh"' in html and 'id="sortturnoutlow"' in html
     assert all(label in html for label in (
         "Бирачко место", "Излазност", "Важећи", "Победник", "Удео", "Маргина", "Статус"))
     assert 'Прошири све' in html and 'Скупи све' in html
@@ -224,6 +230,7 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
     assert '.stationmenubtn::before{content:"";' in html
     assert '.stationreview{font-size:.8em;' in html
     assert '.stationreview.hasnote:hover::after,.stationreview.hasnote:focus::after{display:block}' in html
+    assert '.stationstatusmain.hasreason:hover::after,.stationstatusmain.hasreason:focus::after{display:block}' in html
     assert '.stationmarginfill{display:block;height:100%;background:var(--bar)' in html
 
 
