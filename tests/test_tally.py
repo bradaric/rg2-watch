@@ -683,7 +683,7 @@ def test_operator_results_use_editorial_accents():
     assert ".kicker{" in html and "background:var(--accent-bg)" in html
     assert "#heronums .tile:first-child{box-shadow:inset 0 3px var(--accent)" in html
     assert '<div class="hero-eyebrow">Пресек резултата</div>' in html
-    assert "#resview>h3{" in html and "border-left:3px solid var(--accent)" in html
+    assert ".resultgroup h3{" in html and "border-left:3px solid var(--accent)" in html
     assert "body.hero>*:not(#resview):not(.serbian-flag-bg){display:none!important}" in html
 
 

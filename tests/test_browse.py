@@ -188,6 +188,24 @@ def test_review_and_alert_status_share_one_card():
     assert 'card("Review"' not in html and 'card("Alerts"' not in html
 
 
+def test_results_details_and_audit_are_secondary_collapsed_groups():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<details id="tdetails" class="resultgroup">' in html
+    assert '<summary>Detailed totals <span id="tdetailcount"></span></summary>' in html
+    assert '<details id="taudit" class="resultgroup">' in html
+    assert '<summary>Result audit trail <span id="tauditcount"></span></summary>' in html
+    assert '<details id="tdetails" class="resultgroup" open>' not in html
+    assert '<details id="taudit" class="resultgroup" open>' not in html
+
+    detailed = html[html.index('<details id="tdetails"'):html.index('</details>', html.index('<details id="tdetails"'))]
+    audit = html[html.index('<details id="taudit"'):html.index('</details>', html.index('<details id="taudit"'))]
+    assert all(marker in detailed for marker in ('id="tctl"', 'id="csv"', 'id="toverall"', 'id="tmunis"'))
+    assert all(marker in audit for marker in ('id="texcl"', 'id="tcor"', 'id="tnotes"'))
+    assert '$("tdetailcount").textContent = ' in html
+    assert '$("tauditcount").textContent = ' in html
+
+
 def test_non_default_form_select_filters_use_active_filter_colors():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 

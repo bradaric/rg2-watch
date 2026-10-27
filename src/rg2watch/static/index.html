@@ -204,7 +204,15 @@ button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 /* results */
 #tctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;margin:0 0 var(--s3)}
 #tctl label{color:var(--mut);display:inline-flex;align-items:center;gap:6px}
-#resview>h3{margin:var(--s5) 0 var(--s2);padding-left:var(--s2);border-left:3px solid var(--accent);color:var(--fg)}
+.resultgroup{margin-top:var(--s3);border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:var(--shadow)}
+.resultgroup>summary{cursor:pointer;padding:var(--s3) var(--s4);font-weight:800;list-style:none}
+.resultgroup>summary::-webkit-details-marker{display:none}
+.resultgroup>summary::before{content:"▸";display:inline-block;width:1.25em;color:var(--accent)}
+.resultgroup[open]>summary::before{content:"▾"}
+.resultgroup>summary span{color:var(--mut);font-weight:600;margin-left:var(--s1)}
+.resultgroup>.resultgroupbody{border-top:1px solid var(--line);padding:var(--s4)}
+.resultgroup h3{margin:var(--s5) 0 var(--s2);padding-left:var(--s2);border-left:3px solid var(--accent);color:var(--fg)}
+.resultgroup h3:first-child{margin-top:0}
 #toverall{overflow-x:auto;margin-bottom:var(--s3);padding:var(--s1) var(--s3)}
 #toverall table{border-collapse:collapse;font-variant-numeric:tabular-nums}
 #toverall th,#toverall td{padding:6px 10px;text-align:right;white-space:nowrap}
@@ -415,14 +423,18 @@ stroke-width:2.5;
 </section>
 <p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
 <p id="tscope" class="warnbox" hidden></p>
+<details id="tdetails" class="resultgroup"><summary>Detailed totals <span id="tdetailcount"></span></summary><div class="resultgroupbody">
 <div id="tctl"><label>totals over <select id="tmode"><option value="cl">clean forms only (leave out flagged)</option><option value="all" selected>all counted forms</option></select></label>
 <label>numbers: <select id="tview"><option value="corrected" selected>with RG-7 / operator corrections</option><option value="filed">as filed on RG-2 forms</option><option value="diff">difference (corrected − as filed)</option></select></label>
 <button id="csv">Download CSV</button></div>
 <h3>Overall</h3><div id="toverall"></div>
 <h3>Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
+</div></details>
+<details id="taudit" class="resultgroup"><summary>Result audit trail <span id="tauditcount"></span></summary><div class="resultgroupbody">
 <h3>Flagged forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
 <h3 id="tcorhead" hidden>Corrections counted (RG-7 / operator-entered)</h3><ul id="tcor"></ul>
 <h3 id="tnoteshead" hidden>Notes (not flagged)</h3><ul id="tnotes"></ul>
+</div></details>
 </div>
 <div id="officialview" hidden>
 <div id="officialhead"><div><h2 id="officialtitle">RIK official results</h2><p><span id="officialmeta">Official results have not been loaded yet.</span> <a id="officialsource" target="_blank" rel="noopener noreferrer" hidden>Извор: РИК</a></p></div><span id="officialbadge">Official RIK data · ЗВАНИЧНИ ПОДАЦИ РИК</span></div>
@@ -1447,6 +1459,12 @@ $("tmunis").addEventListener("click", ev => {
   const row = tmTable.row(td.parentElement);
   row.child.isShown() ? row.child.hide() : row.child(listsOf(row.data())).show();
 });
+$("tdetails").addEventListener("toggle", () => {
+  if ($("tdetails").open && tmTable) tmTable.columns.adjust();
+});
+$("taudit").addEventListener("toggle", () => {
+  if ($("taudit").open && teTable) teTable.columns.adjust();
+});
 function renderTally() {
   $("hmode").value = $("tmode").value;
   $("hview").value = $("tview").value;
@@ -1522,7 +1540,11 @@ function renderTally() {
     return li;
   });
   $("tcor").replaceChildren(...rg7Items, ...operatorItems);
-  $("tcorhead").hidden = $("tcor").hidden = !(rg7Items.length + operatorItems.length) || NV() === "filed";
+  const correctionCount = NV() === "filed" ? 0 : rg7Items.length + operatorItems.length;
+  $("tcorhead").hidden = $("tcor").hidden = !correctionCount;
+  $("tdetailcount").textContent = "— " + num(T.overall.counted) + " forms · " + num(T.munis.length) + " municipalities";
+  $("tauditcount").textContent = "— " + num(flagged.length) + " flagged · " + num(correctionCount) +
+    " corrections · " + num(T.notes.length) + " notes";
 }
 
 // ---- hero display -------------------------------------------------------------------------
