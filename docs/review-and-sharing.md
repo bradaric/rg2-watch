@@ -211,6 +211,11 @@ readable, its expected list rows are complete, and those list votes sum to valid
 incomplete or unreconciled form contributes no registered, turnout, ballots, valid, invalid, outside
 or list totals. The aggregate ballots/share denominator is `valid + invalid`; a missing standalone
 ballots-in-box reading does not by itself prevent an otherwise complete form from contributing. A
+matching active first-round RG-8 (results cannot be determined) or RG-9 (voting annulled) decision
+also excludes every number from that station. The operator and public results keep separate RG-8 and
+RG-9 counts and station filters, while the Forms tab uses one decision-status filter; decision links
+remain operator-only. If both decisions are active for one station, RG-9 is the displayed final
+status. Existing stored decisions apply after restart without reanalysis or migration. A
 latest `escalate` verdict places that exact active RG-2 on hold: it remains visible as
 processed and escalated (and flagged when its findings warrant), but contributes no numbers to
 corrected, as-filed, clean or default
@@ -226,6 +231,26 @@ V4 signatures never flag); the reasons are listed, with a link to the form. List
 `[list_names]` in the config, default "List N". The page offers a
 CSV download of the per-municipality table (cells starting with = + - @ are escaped); in municipal
 scope it is long format, one row per municipality and list with that municipality's totals.
+
+Operator and public station-result cards optionally enrich the RIK venue name with settlement data
+from a bundled snapshot of [ИТ Блокада's polling-place map](https://bm.itblokada.org/). The snapshot
+records its source revision and retrieval date, and matching uses municipality plus station number.
+Addresses are not rendered in station cards or included in the public payload; a single attribution
+appears beneath each station list. Location enrichment is display-only and never affects station
+identity, inclusion or totals. Exported pages make no runtime request to the external site.
+
+A separate bundled `static/station_coordinates.json` caches latitude, longitude and location-confidence
+flags from the same source revision for future use. It records the source URL, revision, retrieval date,
+SHA-256 of the downloaded bundle and field order. `station_coordinates(municipality, station_no)` in
+`rg2watch.station_locations` provides an offline lookup; it returns `None` for unknown stations or
+missing coordinates. Confidence ranks are `0` (source marks confident), `1` (unverified) and `2`
+(approximate), not scan-analysis confidence. These are the source coordinates, without display offsets
+used to separate overlapping map pins. Operator station-result rows include a small globe link to
+OpenStreetMap, opening in a new tab only when coordinates are available. Its tooltip credits ИТ Блокада
+and warns about unverified or approximate locations. No map library or background API request is used;
+the coordinates are sent to OpenStreetMap only when the operator follows the link. Public result
+exports do not load or include coordinates or map links. Check election-specific station identities
+before using this snapshot for another election.
 
 Scope: list totals only make sense where one ballot is used everywhere. RIK's election type 2
 (parliamentary) is `national`: list votes overall and per municipality, `"<parent>" = ["Name 1", ...]`.

@@ -13,6 +13,7 @@ from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from .rules import (RG7_FIELDS, _dash_zero, _list_zero, _ok, change_text, decision_label,
                      decision_sort_key, evaluate_report, repeats, rg2_value, rg7_field, rg7_mismatch)
 from .status import _rik_link
+from .station_locations import station_location, station_location_source
 from .store import Store, _doc
 
 log = logging.getLogger("rg2watch.tally")
@@ -384,6 +385,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                 if r["active"] and not r["superseded"] and r["verdict"] == "escalate"}
     annulled = {d["station_key"]: d for d in store.active_rg9(parent)
                 if d["station_key"] is not None}
+    undetermined = {d["station_key"]: d for d in store.active_rg8(parent)
+                    if d["station_key"] is not None}
     corr: dict[str, list[dict]] = {}  # station_key -> RG-7 decisions in decision order
     for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION):
         if row["doc_type"] in RG7_FIRST_ROUND and row["station_key"] is not None:
@@ -454,9 +457,10 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         others = {m: e for m, a in got.items() if m != model and a["prompt_version"] == PROMPT_VERSION
                   and (e := ex_of(a)) is not None}
         forms.append({"d": d, "muni": muni, "ex": mine, "others": others,
-                      "held": d["id"] in held_ids,
-                      "annulled": annulled.get(d["station_key"]),
-                      "operator": operator_states.get(d["id"])})
+                       "held": d["id"] in held_ids,
+                       "annulled": annulled.get(d["station_key"]),
+                       "undetermined": undetermined.get(d["station_key"]),
+                       "operator": operator_states.get(d["id"])})
     scope, scope_note = scope_of(store, cfg, parent)
     e = store.get_election(parent)
     national = scope == "national"
@@ -489,7 +493,10 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     notes = []
     for f in forms:
         f["annulment"] = ({"rik": _rik_link(f["annulled"]["url"], e.base_url if e else None)}
-                           if f["annulled"] is not None else None)
+                            if f["annulled"] is not None else None)
+        f["undetermined_result"] = (
+            {"rik": _rik_link(f["undetermined"]["url"], e.base_url if e else None)}
+            if f["undetermined"] is not None else None)
         f["rows"] = rows_of[f["muni"]]
         dis, note = disagreements(f["ex"], f["others"], model)
         f["why"] = reasons(f["ex"], dis, f["rows"])
@@ -498,6 +505,9 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         if f["annulled"] is not None:
             f["why"].append("annulled by RG-9")
             f["why_f"].append("annulled by RG-9")
+        elif f["undetermined"] is not None:
+            f["why"].append("results cannot be determined by RG-8")
+            f["why_f"].append("results cannot be determined by RG-8")
         contribution = _contrib(f["ex"], f["rows"])
         turnout_gap = (contribution.get("rv", (0, 0))[1] - contribution.get("valid", 0)
                        - contribution.get("invalid", 0))
@@ -505,8 +515,10 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                        or sorted(f["ex"]["l"]) != f["rows"])
         status = "fail" if f["ex"]["arith"] else "unavailable" if unavailable else "ok"
         inclusion = ({"included": False, "reason": "annulled by RG-9"}
-                     if f["annulled"] is not None else
-                     {"included": False, "reason": "held by escalation"} if f["held"] else None)
+                      if f["annulled"] is not None else
+                      {"included": False, "reason": "results cannot be determined by RG-8"}
+                      if f["undetermined"] is not None else
+                      {"included": False, "reason": "held by escalation"} if f["held"] else None)
         f["rec"] = {"status": status, "rules": f["ex"]["arith"],
                      "details": [f["ex"]["arith_details"][r] for r in f["ex"]["arith"]],
                      "gap": turnout_gap,
@@ -522,7 +534,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     # like-for-like difference: each term only over the stations present in it in BOTH views
     opair = {k: _pair_acc(nl) for k in ("all", "cl")}
     counts = {"stations": 0, "counted": 0, "clean": 0, "held": 0, "annulled": 0,
-              "held_annulled": 0,
+              "undetermined": 0, "decision_excluded": 0,
+              "held_annulled": 0, "held_decision_excluded": 0,
               "held_clean": 0, "held_fclean": 0, "unanalysed": 0}
     munis = []
     for name in names:
@@ -533,7 +546,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         acc = {k: _acc(len(mrows)) for k in overall}
         pair = {k: _pair_acc(len(mrows)) for k in opair}
         for f in mine:
-            if f["held"] or f["annulled"] is not None:
+            if f["held"] or f["annulled"] is not None or f["undetermined"] is not None:
                 continue
             filed = as_filed(f["ex"])
             for key, take_c, take_f in (("all", True, True), ("cl", not f["why"], not f["why_f"])):
@@ -568,9 +581,15 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                "corrected": sum(1 for f in mine if f["ex"]["rg7"]),
                "operator_corrected": sum(1 for f in mine if f["ex"]["operator"]),
                "clean": sum(1 for f in mine if not f["why"]),
-               "held": sum(1 for f in mine if f["held"]),
-               "annulled": sum(1 for f in mine if f["annulled"] is not None),
-               "held_annulled": sum(1 for f in mine if f["held"] and f["annulled"] is not None),
+                "held": sum(1 for f in mine if f["held"]),
+                "annulled": sum(1 for f in mine if f["annulled"] is not None),
+                "undetermined": sum(1 for f in mine if f["undetermined"] is not None),
+                "decision_excluded": sum(1 for f in mine
+                                         if f["annulled"] is not None or f["undetermined"] is not None),
+                "held_annulled": sum(1 for f in mine if f["held"] and f["annulled"] is not None),
+                "held_decision_excluded": sum(1 for f in mine if f["held"] and
+                                               (f["annulled"] is not None or
+                                                f["undetermined"] is not None)),
                "held_clean": sum(1 for f in mine if f["held"] and not f["why"]),
                "held_fclean": sum(1 for f in mine if f["held"] and not f["why_f"]),
                "unanalysed": unanalysed.get(name, 0),
@@ -618,7 +637,9 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     station_results = [] if not include_station_results else [
         {"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
          "name": f["d"]["station_name"],
+          **(station_location(f["muni"], f["d"]["station_no"]) or {}),
          "annulled": f["annulment"],
+          "undetermined": f["undetermined_result"],
          "corrected": station_view(f["ex"], f["rows"], f["why"],
                                    f["rec"]["result"]["corrected"]),
          "filed": (station_view(as_filed(f["ex"]), f["rows"], f["why_f"],
@@ -627,6 +648,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         for f in forms]
     return {"model": model, "parent": parent, "title": e.title if e else parent, "scope": scope,
             "scope_note": scope_note, **top, "munis": munis, "overall": total, "notes": notes,
+            "station_location_source": station_location_source(),
             "station_results": station_results,
             "corrected": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                            "rg7": f["ex"]["rg7"]} for f in forms if f["ex"]["rg7"]],
@@ -637,7 +659,10 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             "held": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                       "verdict": "escalate"} for f in forms if f["held"]],
             "annulled": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
-                           **f["annulment"]} for f in forms if f["annulment"] is not None],
+                            **f["annulment"]} for f in forms if f["annulment"] is not None],
+            "undetermined": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
+                                **f["undetermined_result"]} for f in forms
+                               if f["undetermined_result"] is not None],
             "reconciliation": [{"id": f["d"]["id"], "m": f["muni"],
                                 "no": f["d"]["station_no"], **f["rec"]} for f in forms],
             "excluded": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
@@ -712,7 +737,8 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
     out = [f"UNOFFICIAL - numbers read by {t['model']} from the scanned forms, not RIK results",
            f"{t['title']} ({t['parent']}): "
            + ("all counted forms" if all_forms else "clean forms only (leave out flagged)") + "; numbers " + label, ""]
-    head = ["municipality", "stations", "counted", "clean", "flagged", "held", "annulled", "cover",
+    head = ["municipality", "stations", "counted", "clean", "flagged", "held", "undetermined",
+            "annulled", "cover",
             "registered", "voted", "turnout", "in box", "invalid*", "reconciled valid", "outside"]
     if not diff:
         head += ["vote forms", "withheld valid", "gap"]
@@ -720,7 +746,7 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
         head.append("terms corrected-only/filed-only")
     pp = (lambda v: "-" if v is None else f"{v * 100:+.1f}") if diff else _pct
     num = (lambda v: _sgn(v)) if diff else (lambda v: f"{v:,}")
-    body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if (r["corrected"] or r["operator_corrected"]) and view != "filed" else ""), str(r["clean"]), str(r["excluded"]), str(r["held"]), str(r["annulled"]),
+    body = [[r["m"], str(r["stations"]), str(r["counted"]) + ("*" if (r["corrected"] or r["operator_corrected"]) and view != "filed" else ""), str(r["clean"]), str(r["excluded"]), str(r["held"]), str(r["undetermined"]), str(r["annulled"]),
              _pct(r["counted"] / r["stations"] if r["stations"] else None),
              *(num(r[key][k]) for k in ("registered", "voted")), pp(r[key]["turnout"]),
               *(num(r[key][k]) for k in ("ballots_in_box", "invalid", "valid", "outside_voted")),
@@ -750,7 +776,8 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
     pending = t["overall"]["unanalysed"]
     o = rows[-1] if view == "filed" else t["overall"]
     out += ["", f"{o['counted']} form(s) counted, {o['clean']} clean, "
-            f"{o['excluded']} flagged, {o['held']} held by escalation, {o['annulled']} annulled by RG-9, "
+            f"{o['excluded']} flagged, {o['held']} held by escalation, "
+            f"{o['undetermined']} undetermined by RG-8, {o['annulled']} annulled by RG-9, "
             f"{pending} not analysed by {t['model']}"]
     if diff:
         o = t["overall"]["pair"][key]
@@ -782,6 +809,10 @@ def format_tally(t: dict, all_forms: bool = True, view: str = "corrected") -> st
     if t["annulled"]:
         out += ["", "поништена бирачка места (RG-9):"]
         out += [f"  {a['m']} БМ {a['no']}: Поништено" for a in t["annulled"]]
+    if t["undetermined"]:
+        out += ["", "резултати се не могу утврдити (RG-8):"]
+        out += [f"  {a['m']} БМ {a['no']}: Резултати се не могу утврдити"
+                for a in t["undetermined"]]
     if t["notes"]:
         out += ["", "notes (not flagged):"] + [f"  {n['m']} BM {n['no']}: {n['note']}" for n in t["notes"]]
     flagged = t["excluded_filed"] if view == "filed" else t["excluded"]

@@ -217,6 +217,13 @@ class Store:
                 "SELECT * FROM documents WHERE parent=? AND active=1 AND doc_type=9 ORDER BY id",
                 (parent,)).fetchall()
 
+    def active_rg8(self, parent: str) -> list[sqlite3.Row]:
+        """Active first-round decisions that results cannot be determined for one election."""
+        with self._lock:
+            return self._db.execute(
+                "SELECT * FROM documents WHERE parent=? AND active=1 AND doc_type=8 ORDER BY id",
+                (parent,)).fetchall()
+
     def add_operator_correction(self, url: str, action: str, snapshot: dict | None,
                                 reason: str, source_token: str, expected_revision=...) -> sqlite3.Row | None:
         """Append one correction/revocation event for an exact document URL."""

@@ -4,6 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from rg2watch.browse import STATIC
 from rg2watch.config import Config
 from rg2watch.cli import main
 from rg2watch.models import Election
@@ -40,11 +41,12 @@ def test_public_payload_has_only_sanitized_corrected_results_and_review_counts()
     assert data["municipalities"][0]["m"] == "Alpha"
     assert len(data["stations"]) == 2
     assert set(data["stations"][0]) == {
-        "m", "no", "name", "included", "annulled", "registered", "voted", "ballots_in_box",
+        "m", "no", "name", "included", "annulled", "undetermined", "registered", "voted", "ballots_in_box",
         "invalid", "valid", "lists",
     }
     assert data["stations"][0] == {
         "m": "Alpha", "no": "1", "name": "ОШ", "included": True, "annulled": False,
+        "undetermined": False,
         "registered": 1000, "voted": 800, "ballots_in_box": 800, "invalid": 20, "valid": 780,
         "lists": [400, 380],
     }
@@ -70,6 +72,42 @@ def test_public_rg9_station_is_annulled_without_exposing_the_document():
     assert data["stations"][0]["included"] is False
     assert data["stations"][0]["annulled"] is True
     assert "private-rg9" not in json.dumps(data)
+
+
+def test_public_rg8_station_is_undetermined_without_exposing_the_document():
+    s = store()
+    form(s, 1, clean_report())
+    rg8 = doc(BASE + "/private-rg8.pdf", muni="Alpha", no="1", dt=8)
+    add(s, rg8)
+
+    data = build_public_results(s, config(), P)
+
+    assert data["overall"]["totals"]["registered"] == 0
+    assert data["overall"]["undetermined"] == 1
+    assert data["municipalities"][0]["undetermined"] == 1
+    assert data["stations"][0]["included"] is False
+    assert data["stations"][0]["undetermined"] is True
+    assert data["stations"][0]["annulled"] is False
+    assert "private-rg8" not in json.dumps(data)
+
+
+def test_public_station_includes_settlement_but_does_not_expose_address():
+    s = store()
+    form(s, 7, clean_report(), muni="Градска општина Гроцка")
+
+    data = build_public_results(s, config(), P)
+
+    station = data["stations"][0]
+    assert station["settlement"] == "ВИНЧА"
+    assert "address" not in station
+    assert data["station_location_source"]["source"] == "https://bm.itblokada.org/"
+
+
+def test_public_station_results_use_one_settlement_attribution():
+    html = (STATIC / "public_results.html").read_text(encoding="utf-8")
+
+    assert '<p class="note station-attribution">Подаци о насељима: <a href="https://bm.itblokada.org/"' in html
+    assert "station.address" not in html
 
 
 def test_public_payload_sorts_municipalities_by_serbian_cyrillic_alphabet():
@@ -174,6 +212,7 @@ def test_public_page_renders_controls_summary_and_every_list():
     data["overall"]["totals"]["lists_ballots_in_box"] = 110
     html = render_public_results(data)
     script = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+    assert "station.address" not in script
     harness = r'''
 const assert=require("assert"),els={};let refresh,refreshDelay,reloadedHash;
 class El{constructor(){this.textContent="";this.value="";this.children=[];this.style={};this.className="";this.hidden=false;this.listeners={};this.attrs={}}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x}addEventListener(type,fn){this.listeners[type]=fn}setAttribute(k,v){this.attrs[k]=String(v)}}
@@ -249,6 +288,7 @@ def test_public_page_renders_sanitized_station_results_with_global_progressive_f
     assert 'data-station-filter="in"' in html
     assert 'data-station-filter="out"' in html
     assert 'data-station-filter="annulled"' in html
+    assert 'data-station-filter="undetermined"' in html
     assert 'id="station-more"' in html
     assert '.station-more[hidden]{display:none}' in html
 
@@ -272,8 +312,12 @@ let initialSummary=els.stationlist.children[0].children[0];
 assert.equal(initialSummary.children[4].children[0].children[2].textContent,"50,0%");
 assert.equal(initialSummary.children[4].children[1].children[2].textContent,"47,5%");
 assert.equal(initialSummary.children[5].children[1].children[0].textContent,"+2,5 п. п.");
+DATA.stations[0].settlement="АЛФА";renderStationResults();
+initialSummary=els.stationlist.children[0].children[0];
+assert(initialSummary.children[0].textContent.includes("БМ 1 · АЛФА — ОШ"));
 let initialCard=els.stationlist.children[0];initialCard.open=true;initialCard.listeners.toggle();
-assert.equal(initialCard.children[1].children[0].children[2].textContent,"400 · 50,0%");
+assert(!initialCard.children[1].children.some(x=>x.className==="station-location"));
+assert.equal(initialCard.children[1].children.find(x=>x.className==="station-detail").children[2].textContent,"400 · 50,0%");
 initialCard.open=false;initialCard.listeners.toggle();
 DATA.stations[0].ballots_in_box=null;renderStationResults();
 initialSummary=els.stationlist.children[0].children[0];
@@ -321,6 +365,17 @@ assert.equal(els.stationlist.children.length,1);
 setStationFilter("out");
 DATA.overall.annulled=0;
 DATA.stations.at(-1).annulled=false;renderStationResults();
+DATA.stations.at(-1).undetermined=true;renderStationResults();
+assert.equal(els.stationlist.children[0].children[0].children.at(-1).textContent,"Неутврђено");
+assert.equal(els.stationlist.children[0].children[0].children.at(-1).title,"Резултати се не могу утврдити (RG-8)");
+assert.equal(els["station-filter-undetermined"].textContent,"Не могу се утврдити 1");
+DATA.overall.undetermined=1;DATA.overall.decision_excluded=1;render();
+assert(els["forms-sub"].textContent.includes("Резултати се не могу утврдити: 1 бирачко место (RG-8)"));
+setStationFilter("undetermined");
+assert.equal(els.stationlist.children.length,1);
+setStationFilter("out");
+DATA.overall.undetermined=0;DATA.overall.decision_excluded=0;
+DATA.stations.at(-1).undetermined=false;renderStationResults();
 const excluded=els.stationlist.children[0];
 assert(excluded.className.includes("excluded"));
 assert.equal(excluded.children[0].children.at(-1).textContent,"Није урачунато");
