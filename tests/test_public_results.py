@@ -250,7 +250,11 @@ assert.equal(els.stationlist.children[0].children[0].children[3].children[0].tex
 
 DATA.stations=Array.from({length:102},(_,i)=>({m:i%2?"Beta":"Alpha",no:String(i+1),name:"Школа "+(i+1),
   included:i!==101,registered:1000,voted:500+i,valid:490+i,lists:[300+i,190]}));
+let stationOutcomeCalls=0;const realStationOutcome=stationOutcome;
+stationOutcome=(...args)=>{stationOutcomeCalls++;return realStationOutcome(...args)};
 setStationFilter("in");
+assert(stationOutcomeCalls<=100,"station-order rendering computes outcomes only for visible rows");
+stationOutcome=realStationOutcome;
 assert.equal(els.stationlist.children.length,100);
 assert.equal(els.stationcount.textContent,"100 од 101 бирачког места");
 assert.equal(els["station-more"].hidden,false);

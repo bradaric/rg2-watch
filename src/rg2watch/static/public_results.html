@@ -65,7 +65,8 @@ function reviewLine(row){const r=row.review,parts=[num(r.ok)+" прихваће�
 function heldLine(row){const held=row.held||0,inReview=Math.min(held,row.review.escalate||0),extra=held-inReview;let text="Изузето из резултата: "+num(held)+" "+countWord(held,"ескалирани записник","ескалирана записника","ескалираних записника");if(inReview&&extra)text+=" — "+num(inReview)+" из скупа за проверу · "+num(extra)+" додатно";else if(inReview)text+=" — сви из скупа за проверу";else if(extra)text+=" — "+num(extra)+" додатно";return text}
 function warningText(note){const exact={"unknown election type - set tally_scope":"Непозната врста избора — подесите tally_scope","municipality unknown - forms may be from different ballots, no list totals":"Општина није позната — записници могу бити са различитих гласачких листића, без збирова по листама","no expected ballot rows - comparable list totals unavailable":"Нема очекиваних редова на гласачком листићу — упоредиви збирови по листама нису доступни","list_names must be a plain list for a national election":"list_names мора бити обична листа за републичке изборе","list_names must map municipality -> names for a municipal election":"list_names мора да пресликава општину у називе за локалне изборе"};return String(note).split("; ").map(x=>exact[x]||x).join("; ")}
 function make(tag,text,className){const el=document.createElement(tag);if(text!=null)el.textContent=text;if(className)el.className=className;return el}
-function stationNames(station){const owner=DATA.municipalities.find(row=>row.m===station.m),configured=namesFor(owner);return station.lists.map((_,i)=>configured[i]||"Листа "+(i+1))}
+const MUNICIPALITY_BY_NAME=new Map(DATA.municipalities.map(row=>[row.m,row]));
+function stationNames(station){const configured=namesFor(MUNICIPALITY_BY_NAME.get(station.m));return station.lists.map((_,i)=>configured[i]||"Листа "+(i+1))}
 function stationOutcome(station){
   const names=stationNames(station),rows=station.lists.map((value,i)=>({name:names[i],no:i+1,value,share:value==null||!station.valid?null:value/station.valid})).filter(row=>row.value!=null);
   rows.sort((a,b)=>b.value-a.value||a.no-b.no);
@@ -107,16 +108,18 @@ function renderStationResults(){
   const chosen=$("municipality").value,allScope=!chosen,localAll=DATA.scope==="municipal"&&allScope,requested=$("stationsort").value||"station",sort=localAll&&requested==="winner"?"station":requested;
   if(sort!==requested)$("stationsort").value=sort;
   $("sortstationwinner").hidden=localAll;
-  let records=(DATA.stations||[]).filter(station=>!chosen||station.m===chosen).map(station=>({station,outcome:stationOutcome(station),turnout:stationTurnout(station)}));
+  let records=(DATA.stations||[]).filter(station=>!chosen||station.m===chosen).map(station=>({station,outcome:null,turnout:stationTurnout(station)}));
+  const outcomeOf=record=>record.outcome||(record.outcome=stationOutcome(record.station));
   const base=records,match=(record,value)=>value==="all"||value==="in"?value==="all"||record.station.included:!record.station.included;
   for(const [value,label] of Object.entries(STATION_FILTERS)){const button=$("station-filter-"+value),count=base.filter(record=>match(record,value)).length;button.textContent=label+" "+num(count);button.setAttribute("aria-pressed",String(stationFilter===value))}
   records=records.filter(record=>match(record,stationFilter));
   const byStation=(a,b)=>allScope?(a.station.m.localeCompare(b.station.m,"sr-Cyrl")||String(a.station.no).localeCompare(String(b.station.no),"sr-Cyrl",{numeric:true})):String(a.station.no).localeCompare(String(b.station.no),"sr-Cyrl",{numeric:true});
   const byNumber=(getter,descending=false)=>(a,b)=>{const av=getter(a),bv=getter(b);if(av==null)return bv==null?byStation(a,b):1;if(bv==null)return-1;return(descending?bv-av:av-bv)||byStation(a,b)};
-  const comparators={station:byStation,winner:(a,b)=>a.outcome.name.localeCompare(b.outcome.name,"sr-Cyrl")||byStation(a,b),share:byNumber(record=>record.outcome.share,true),"margin-close":byNumber(record=>record.outcome.marginShare),"margin-wide":byNumber(record=>record.outcome.marginShare,true),"turnout-high":byNumber(record=>record.turnout,true),"turnout-low":byNumber(record=>record.turnout)};
+  const comparators={station:byStation,winner:(a,b)=>outcomeOf(a).name.localeCompare(outcomeOf(b).name,"sr-Cyrl")||byStation(a,b),share:byNumber(record=>outcomeOf(record).share,true),"margin-close":byNumber(record=>outcomeOf(record).marginShare),"margin-wide":byNumber(record=>outcomeOf(record).marginShare,true),"turnout-high":byNumber(record=>record.turnout,true),"turnout-low":byNumber(record=>record.turnout)};
   records.sort(comparators[sort]||byStation);
   const total=records.length,shown=allScope?Math.min(total,stationLimit):total,list=$("stationlist"),cards=[];visibleOpenStations.clear();
-  for(const {station,outcome,turnout} of records.slice(0,shown)){
+  for(const record of records.slice(0,shown)){
+    const {station,turnout}=record,outcome=outcomeOf(record);
     const details=make("details",null,"station-card"+(station.included?"":" excluded")),summary=make("summary",null,"station-summary"),body=make("div",null,"station-body"),key=station.m+"\u0000"+station.no;
     const name=(allScope?station.m+" · ":"")+"БМ "+station.no+(station.name?" — "+station.name:""),winner=make("span",null,"station-winner");winner.append(make("span",outcome.no==null?outcome.name==="Нерешено"?"=":"–":String(outcome.no)));winner.title=outcome.name;
     summary.append(make("span",name,"station-name"),make("span",turnout==null?"–":pct(turnout),"station-number"),make("span",num(station.valid),"station-number"),winner,stationMiniBars(outcome),stationMargin(outcome),make("span",station.included?"Урачунато":"Није урачунато","station-status "+(station.included?"in":"out")));
