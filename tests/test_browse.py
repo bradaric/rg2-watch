@@ -206,6 +206,18 @@ def test_results_details_and_audit_are_secondary_collapsed_groups():
     assert '$("tauditcount").textContent = ' in html
 
 
+def test_station_results_are_collapsed_with_compact_controls_and_columns():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<details id="stationresults" hidden>' in html
+    assert '<details id="stationresults" hidden open>' not in html
+    assert 'id="stationsort"' in html and 'id="stationbars"' in html and 'id="stationtoggle"' in html
+    assert all(f'<option value="{n}">' in html for n in (1, 2, 3))
+    assert all(label in html for label in (
+        "Бирачко место", "Излазност", "Важећи", "Победник", "Удео", "Маргина", "Статус"))
+    assert 'Прошири све' in html and 'Скупи све' in html
+
+
 def test_non_default_form_select_filters_use_active_filter_colors():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 

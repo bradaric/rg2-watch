@@ -704,6 +704,16 @@ assert.deepEqual(rows.map(row => row.m),
     assert result.returncode == 0, result.stderr
 
 
+def test_forms_and_results_share_the_url_municipality_context():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "function setHeroMunicipality(" in html
+    assert 'setHeroMunicipality(o.m || "", true);' in html
+    assert '$("hmuni").addEventListener("input", () => setSharedMunicipality($("hmuni").value));' in html
+    assert '$("m").value = value;' in html
+    assert "redraw();" in html
+
+
 def test_municipal_unknown_municipality_gets_no_list_totals():
     s = store()
     two_ballots(s)
@@ -822,6 +832,8 @@ function alertForm() {}
 function localHref() {}
 function rikHref() {}
 function setTab(name) { selectedTab = name; }
+let redrawCalls = 0;
+function redraw() { redrawCalls++; }
 els.tview = {value: "corrected"};
 els.tmode = {value: "all"};
 ''' + helpers + hero + paint + refresh + r'''
@@ -1116,9 +1128,32 @@ T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
 renderHero();
 assert.equal(els.stationresults.hidden, false);
 assert.equal(els.stationcount.textContent, "1 записник");
-const stationCard = els.stationlist.children[0];
+let stationCard = els.stationlist.children[0];
 assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 — ОШ"));
+const stationWinner = stationCard.children[0].children.find(x => x.className === "stationwinner");
+assert.equal(stationWinner.children[0].textContent, "1");
+assert.equal(stationWinner.children[1].textContent, "A");
+let stationShares = stationCard.children[0].children.find(x => x.className === "stationshare");
+assert.equal(stationShares.children.length, 1);
+assert.equal(stationShares.children[0].children[2].textContent, "51.3%");
+assert.equal(stationCard.children[0].children.find(x => x.className === "stationmargin").textContent, "+20 · +2.6 п. п.");
+els.stationbars.value = "2";
+renderHero();
+stationCard = els.stationlist.children[0];
+stationShares = stationCard.children[0].children.find(x => x.className === "stationshare");
+assert.equal(stationShares.children.length, 2);
+assert.equal(stationShares.children[1].children[0].textContent, "2");
+assert.equal(stationShares.children[1].children[2].textContent, "48.7%");
+els.stationbars.value = "1";
+renderHero();
+stationCard = els.stationlist.children[0];
 assert.equal(stationCard.children[1].children, undefined, "station chart is lazy");
+setAllStations(true);
+assert.equal(stationCard.open, true);
+assert.equal(els.stationtoggle.textContent, "Скупи све");
+setAllStations(false);
+assert.equal(stationCard.open, false);
+assert.equal(els.stationtoggle.textContent, "Прошири све");
 stationCard.open = true; stationCard.ontoggle();
 assert(stationCard.children[1].children.length > 1);
 assert(!stationCard.children[1].children.some(x => x.textContent === "Урачунат"),
@@ -1126,6 +1161,10 @@ assert(!stationCard.children[1].children.some(x => x.textContent === "Урачу
 renderHero();
 assert.strictEqual(els.stationlist.children[0], stationCard,
   "unchanged live data must not rebuild and collapse expanded stations");
+setSharedMunicipality("Ћуприја");
+assert.equal(els.m.value, "Ћуприја");
+assert.equal(heroMuni, "Ћуприја");
+assert.equal(redrawCalls, 1);
 
 T.scope = "national"; T.names = ["Републичка А", "Републичка Б"]; T.fallback_name_indices = [];
 alpha.names = []; alpha.fallback_name_indices = [];

@@ -268,12 +268,23 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .hrow .val{text-align:right;font-variant-numeric:tabular-nums;white-space:pre;font-weight:700;letter-spacing:-.01em}
 #stationresults{margin-top:var(--s5);border-top:2px solid var(--accent);padding-top:var(--s3)}
 #stationresults[hidden]{display:none}
-#stationhead{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);margin-bottom:var(--s2)}
-#stationhead h3{font-size:1rem;color:var(--fg);margin:0}#stationcount{color:var(--mut)}
+#stationhead{cursor:pointer;display:flex;align-items:baseline;gap:var(--s3);list-style:none;padding:0 0 var(--s2)}
+#stationhead::-webkit-details-marker{display:none}#stationhead::before{content:"▸";color:var(--accent);font-weight:800}
+#stationresults[open]>#stationhead::before{content:"▾"}
+#stationhead h3{font-size:1rem;color:var(--fg);margin:0}#stationcount{color:var(--mut);margin-left:auto}
+#stationtools{display:flex;justify-content:flex-end;align-items:center;gap:var(--s2);padding:var(--s1) 0 var(--s2)}
+#stationtools label{display:flex;align-items:center;gap:var(--s1);color:var(--mut)}
+.stationcols,.station summary{display:grid;grid-template-columns:auto minmax(14rem,1.4fr) 5.5rem 5.5rem minmax(10rem,1fr) minmax(9rem,.8fr) 10rem 6.5rem;gap:var(--s3);align-items:center}
+.stationcols{padding:var(--s1) var(--s2);color:var(--mut);font-size:10.5px;font-weight:750;text-transform:uppercase;letter-spacing:.055em;border-bottom:2px solid var(--line2)}
+.stationcols span:nth-child(3),.stationcols span:nth-child(4),.stationcols span:nth-child(6),.stationcols span:nth-child(7){text-align:right}
 .station{border-top:1px solid var(--line)}.station:first-child{border-top:0}
-.station summary{cursor:pointer;display:grid;grid-template-columns:auto minmax(12rem,1fr) auto auto minmax(12rem,auto);gap:var(--s3);align-items:baseline;padding:var(--s2);list-style:none}
-.station summary::-webkit-details-marker{display:none}.station summary::before{content:"▸";color:var(--accent);font-weight:800;margin-right:var(--s1)}
-.station[open] summary::before{content:"▾"}.station summary>span:first-child{font-weight:750}.stationstatus{color:var(--mut)}
+.station summary{cursor:pointer;padding:var(--s2);list-style:none}
+.station summary::-webkit-details-marker{display:none}.station summary::before{content:"▸";color:var(--accent);font-weight:800}
+.station[open] summary::before{content:"▾"}.stationname{font-weight:750;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stationmetric,.stationshare,.stationmargin{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.stationwinner{display:flex;align-items:center;gap:var(--s1);min-width:0;font-weight:700}.stationwinner .no{flex:none;min-width:1.8em;padding:1px 5px;border-radius:4px;background:var(--fg);color:var(--panel);text-align:center}.stationwinner .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stationshare{display:grid;gap:2px}.minibar{display:grid;grid-template-columns:1.2em minmax(2.5rem,1fr) 3.2em;gap:3px;align-items:center;height:8px;font-size:9px;line-height:8px}.minino{color:var(--mut);text-align:right}.minitrack{height:4px;background:var(--track);border-radius:2px;overflow:hidden}.minifill{height:100%;background:var(--bar);border-radius:2px}.minipct{text-align:right}
+.stationstatus{color:var(--mut);white-space:nowrap}.stationstatus.in::before{content:"●";color:var(--good);margin-right:5px}.stationstatus.out::before{content:"●";color:var(--hi);margin-right:5px}
 .stationbody{padding:0 var(--s3) var(--s3) 2rem}.stationnote{color:var(--mut);margin:var(--s2) 0}
 .stationbar{display:grid;grid-template-columns:minmax(12rem,30%) minmax(8rem,1fr) 11rem;gap:var(--s3);align-items:center;padding:5px 0}
 .stationbar .track{height:11px;background:var(--track);border-radius:6px;overflow:hidden}.stationbar .fill{height:100%;background:var(--bar);border-radius:6px}
@@ -322,7 +333,8 @@ body.hero #herochart{margin:var(--s2) 0 0}
   .tile:first-child{border-top:0}
   .hrow{grid-template-columns:1fr auto;gap:var(--s1) var(--s3)}
   .hrow .hd{font-size:.9em}
-  .station summary{grid-template-columns:auto 1fr auto}.station summary .stationstatus{grid-column:2/-1}
+  .stationcols{display:none}.station summary{grid-template-columns:auto 1fr auto auto;gap:var(--s1) var(--s2)}
+  .stationname{grid-column:2/-1}.stationwinner{grid-column:2/-1}.stationshare,.stationmargin{text-align:left}.stationstatus{grid-column:2/-1}
   .stationbar{grid-template-columns:1fr auto}.stationbar .track{grid-column:1/-1;grid-row:2}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
@@ -418,7 +430,10 @@ stroke-width:2.5;
 <div id="heronote"></div>
 <div id="herocharthead"><div class="hero-eyebrow">Пресек резултата</div></div>
 <div id="herochart"></div>
-<section id="stationresults" hidden><div id="stationhead"><h3>Резултати по бирачким местима</h3><span id="stationcount"></span></div><div id="stationlist"></div></section>
+<details id="stationresults" hidden><summary id="stationhead"><h3>Резултати по бирачким местима</h3><span id="stationcount"></span></summary>
+<div id="stationtools"><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2">Топ 2</option><option value="3">Топ 3</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
+<div class="stationcols" aria-hidden="true"><span></span><span>Бирачко место</span><span>Излазност</span><span>Важећи</span><span id="stationwinnerlabel">Победник</span><span id="stationsharelabel">Удео</span><span id="stationmarginlabel">Маргина</span><span>Статус</span></div>
+<div id="stationlist"></div></details>
 <div id="herofoot"></div>
 </section>
 <p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
@@ -1322,7 +1337,7 @@ function applyData(data) {
   T = D.tally;
   renderTally();
   $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
-  if (!table) { readHash(); initTable(); if ($("tview").value !== "corrected") renderTally(); return; }
+  if (!table) { readHash(); initTable(); renderTally(); return; }
   const shown = new Set();
   table.rows().every(function () { if (this.child.isShown()) shown.add(this.data().id); });
   table.clear().rows.add(rows).draw(false);
@@ -1550,6 +1565,16 @@ function renderTally() {
 // ---- hero display -------------------------------------------------------------------------
 const RESULT_BAR_COLOR = "var(--bar)";
 let heroMuni = "", heroPicked = false, slots = [], stationKey = "";
+function setHeroMunicipality(value, picked = true) {
+  heroMuni = value || "";
+  heroPicked = picked;
+}
+function setSharedMunicipality(value) {
+  $("m").value = value;
+  setHeroMunicipality($("m").value, true);
+  redraw();
+  if (T) renderHero();
+}
 function put(id, text) {  // set text; flash when it changed
   const el = $(id);
   if (el.textContent === text) return;
@@ -1656,6 +1681,54 @@ function stationStatus(view) {
 function stationTurnout(view) {
   return view && view.registered > 0 && view.voted != null ? view.voted / view.registered : null;
 }
+function stationOutcome(station, owner, viewName) {
+  const corrected = station.corrected, filed = station.filed || corrected, names = heroListNames(owner);
+  const chosen = viewName === "filed" ? filed : corrected, diff = viewName === "diff";
+  const rows = names.map((name, i) => {
+    const c = corrected.lists[i], f = filed.lists[i];
+    const value = diff ? c == null || f == null ? null : c - f : chosen.lists[i];
+    const share = diff ? c == null || f == null || !corrected.valid || !filed.valid ? null
+      : c / corrected.valid - f / filed.valid : value == null || !chosen.valid ? null : value / chosen.valid;
+    return {name, no: i + 1, value, share};
+  }).filter(row => row.value != null);
+  if (!rows.length) return {name: "—", no: null, share: null, margin: null, marginShare: null, value: null, leaders: []};
+  if (diff) {
+    rows.sort((a, b) => Math.abs(b.value) - Math.abs(a.value) || a.no - b.no);
+    return {...rows[0], margin: null, marginShare: null, leaders: rows};
+  }
+  rows.sort((a, b) => b.value - a.value || a.no - b.no);
+  const top = rows[0], second = rows[1], tied = second && second.value === top.value;
+  if (tied) return {name: "Нерешено", no: null, share: top.share, margin: 0, marginShare: 0,
+    value: top.value, leaders: rows};
+  const margin = top.value - (second ? second.value : 0);
+  return {...top, margin, marginShare: chosen.valid ? margin / chosen.valid : null, leaders: rows};
+}
+function stationMiniBars(outcome, count, diff) {
+  const cell = mk("span", null, "stationshare"), shown = outcome.leaders.slice(0, count);
+  const max = Math.max(1e-9, ...shown.map(row => Math.abs(row.share || 0)));
+  for (const item of shown) {
+    const mini = mk("span", null, "minibar"), no = mk("span", String(item.no), "minino"),
+      track = mk("span", null, "minitrack"), fill = mk("span", null, "minifill"),
+      value = mk("span", item.share == null ? "—" : diff ? dpp(item.share) : pc(item.share), "minipct");
+    mini.title = item.name;
+    fill.style.width = item.share == null ? "0" : Math.min(100, Math.abs(item.share) / (diff ? max : 1) * 100) + "%";
+    track.append(fill); mini.append(no, track, value); cell.append(mini);
+  }
+  if (!shown.length) cell.textContent = "—";
+  return cell;
+}
+function stationCards() { return [...$("stationlist").children].filter(card => card.stationId != null); }
+function updateStationToggle() {
+  const cards = stationCards(), allOpen = cards.length && cards.every(card => card.open);
+  $("stationtoggle").textContent = allOpen ? "Скупи све" : "Прошири све";
+}
+function setAllStations(open) {
+  for (const card of stationCards()) {
+    card.open = open;
+    if (open && card.ontoggle) card.ontoggle();
+  }
+  updateStationToggle();
+}
 function renderStationChart(body, station, owner, viewName) {
   const corrected = station.corrected, filed = station.filed || corrected, diff = viewName === "diff";
   const chosen = viewName === "filed" ? filed : corrected, names = heroListNames(owner);
@@ -1694,35 +1767,56 @@ function renderStationResults() {
     return viewName === "diff" ? station.corrected.clean && filed.clean
       : (viewName === "filed" ? filed : station.corrected).clean;
   });
-  stations.sort((a, b) => String(a.no).localeCompare(String(b.no), undefined, {numeric: true}));
-  const key = JSON.stringify([heroMuni, mode, viewName, T.scope, heroListNames(listOwner), stations]);
+  const sort = $("stationsort").value || "station", barCount = Number($("stationbars").value) || 1;
+  $("stationwinnerlabel").textContent = viewName === "diff" ? "Највећа промена" : "Победник";
+  $("stationsharelabel").textContent = viewName === "diff" ? "Гласови" : "Удео";
+  $("stationmarginlabel").textContent = viewName === "diff" ? "Удео" : "Маргина";
+  $("sortwinner").textContent = viewName === "diff" ? "Листа са највећом променом" : "Победник";
+  $("sortshare").textContent = viewName === "diff" ? "Величина промене" : "Удео победника";
+  let records = stations.map(station => ({station, outcome: stationOutcome(station, listOwner, viewName)}));
+  const byStation = (a, b) => String(a.station.no).localeCompare(String(b.station.no), undefined, {numeric: true});
+  records.sort(sort === "winner"
+    ? (a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(a.outcome.name, b.outcome.name) || byStation(a, b)
+    : sort === "share" ? (a, b) => Math.abs(b.outcome.share || 0) - Math.abs(a.outcome.share || 0) || byStation(a, b)
+    : byStation);
+  const key = JSON.stringify([heroMuni, mode, viewName, T.scope, sort, barCount, heroListNames(listOwner), records]);
   if (key === stationKey) return;
   stationKey = key;
   const open = new Set([...list.children].filter(card => card.open).map(card => String(card.stationId)));
   section.hidden = false;
   $("stationcount").textContent = num(stations.length) + " " +
     serbianCount(stations.length, "записник", "записника", "записника");
-  const cards = stations.map(station => {
+  const cards = records.map(({station, outcome}) => {
     const corrected = station.corrected, filed = station.filed || corrected, chosen = viewName === "filed" ? filed : corrected;
     const turnout = viewName === "diff" ? (stationTurnout(corrected) == null || stationTurnout(filed) == null
       ? null : stationTurnout(corrected) - stationTurnout(filed)) : stationTurnout(chosen);
     const valid = viewName === "diff" ? corrected.valid == null || filed.valid == null ? null
       : corrected.valid - filed.valid : chosen.valid;
-    const details = mk("details", null, "station"), summary = mk("summary"), body = mk("div", null, "stationbody");
-    summary.append(mk("span", "БМ " + station.no + (station.name ? " — " + station.name : "")),
-      mk("span", "Излазност " + (turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout))),
-      mk("span", "Важећи " + (valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid))),
-      mk("span", viewName === "diff" ? "Поређење приказа" : stationStatus(chosen), "stationstatus"));
+    const details = mk("details", null, "station"), summary = mk("summary"), body = mk("div", null, "stationbody"),
+      winner = mk("span", null, "stationwinner");
+    if (outcome.no != null) winner.append(mk("span", String(outcome.no), "no"));
+    winner.append(mk("span", outcome.name, "name"));
+    const status = viewName === "diff" ? "Поређење" : chosen.included ? "Урачунат" : "Није урачунат",
+      statusEl = mk("span", status, "stationstatus" + (viewName === "diff" ? "" : chosen.included ? " in" : " out"));
+    if (chosen.reason) statusEl.title = chosen.reason;
+    summary.append(mk("span", "БМ " + station.no + (station.name ? " — " + station.name : ""), "stationname"),
+      mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric"),
+      mk("span", valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid), "stationmetric"), winner,
+      stationMiniBars(outcome, barCount, viewName === "diff"),
+      mk("span", viewName === "diff" ? outcome.share == null ? "—" : dpp(outcome.share) + " п. п."
+        : outcome.margin == null ? "—" : outcome.margin === 0 ? "Нерешено · 0.0 п. п."
+        : "+" + num(outcome.margin) + " · " + dpp(outcome.marginShare) + " п. п.", "stationmargin"), statusEl);
     details.append(summary, body);
     details.stationId = String(station.id);
     let rendered = false;
     const draw = () => { if (!rendered) { rendered = true; renderStationChart(body, station, listOwner, viewName); } };
-    details.ontoggle = () => { if (details.open) draw(); };
+    details.ontoggle = () => { if (details.open) draw(); updateStationToggle(); };
     if (open.has(details.stationId)) { details.open = true; draw(); }
     return details;
   });
   list.replaceChildren(...cards);
   if (!cards.length) list.replaceChildren(mk("p", "Нема записника у изабраном обухвату.", "stationnote"));
+  updateStationToggle();
 }
 function renderHero() {
   heroMunis();
@@ -1832,9 +1926,12 @@ function setHero(on) {
 }
 $("herobtn").onclick = () => setHero(!document.body.classList.contains("hero"));
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") setHero(false); });
-$("hmuni").addEventListener("input", () => { heroMuni = $("hmuni").value; heroPicked = true; if (T) renderHero(); });
+$("hmuni").addEventListener("input", () => setSharedMunicipality($("hmuni").value));
 $("hmode").addEventListener("input", () => { $("tmode").value = $("hmode").value; if (T) renderTally(); });
 $("hview").addEventListener("input", () => { $("tview").value = $("hview").value; writeHash(); if (T) renderTally(); });
+$("stationsort").addEventListener("input", () => { if (T) renderStationResults(); });
+$("stationbars").addEventListener("input", () => { if (T) renderStationResults(); });
+$("stationtoggle").onclick = () => setAllStations(!stationCards().every(card => card.open));
 initHero();
 if (new URLSearchParams(location.search).get("hero") === "1") setHero(true);
 
@@ -1929,6 +2026,7 @@ function readHash() {
   const o = {rules: (p.get("rules") || "").split(",")};
   for (const k of FILTERS) o[k] = $(k).type === "checkbox" ? (k === "auto" ? p.get(k) !== "0" : p.get(k) === "1") : p.get(k);
   setCtl(o);
+  setHeroMunicipality(o.m || "", true);
   const nv = p.get("nv");
   $("tview").value = ["corrected", "filed", "diff"].includes(nv) ? nv : "corrected";
 }
@@ -1943,7 +2041,15 @@ function writeHash() {
   if (NV() !== "corrected") p.set("nv", NV());
   try { history.replaceState(null, "", "#" + p); } catch (e) {}
 }
-function redraw() { writeHash(); if (table) table.draw(); if (S) renderStatus(); }
+function redraw() {
+  const municipality = $("m").value;
+  const municipalityChanged = municipality !== heroMuni || !heroPicked;
+  if (municipalityChanged) setHeroMunicipality(municipality, true);
+  writeHash();
+  if (table) table.draw();
+  if (S) renderStatus();
+  if (municipalityChanged && T) renderHero();
+}
 let timer = 0;
 $("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(redraw, 200); });
 for (const id of FILTERS) if (id !== "q") $(id).addEventListener("input", redraw);
