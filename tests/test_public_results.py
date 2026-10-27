@@ -110,6 +110,17 @@ def test_public_station_results_use_one_settlement_attribution():
     assert "station.address" not in html
 
 
+def test_public_mobile_station_rows_use_labeled_metrics_without_compact_bars_or_disclaimer():
+    html = (STATIC / "public_results.html").read_text(encoding="utf-8")
+
+    assert ".station-summary{grid-template-columns:auto repeat(3,minmax(0,1fr))" in html
+    assert '.station-turnout::before{content:"ИЗЛАЗНОСТ"}' in html
+    assert '.station-valid::before{content:"ВАЖЕЋИ"}' in html
+    assert '.station-winner::before{content:"ПОБЕДНИК"}' in html
+    assert ".station-shares,.station-margin{display:none}" in html
+    assert "Приказани су незванични, машински прочитани подаци" not in html
+
+
 def test_public_payload_sorts_municipalities_by_serbian_cyrillic_alphabet():
     s = store()
     for no, municipality in enumerate(

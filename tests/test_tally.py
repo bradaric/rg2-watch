@@ -863,6 +863,16 @@ def test_operator_station_results_use_one_attribution_instead_of_per_station_add
     assert '"Адреса: " + station.address' not in html
 
 
+def test_operator_mobile_station_rows_use_labeled_metrics_without_compact_bars():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert ".station summary{grid-template-columns:auto repeat(3,minmax(0,1fr))" in html
+    assert '.stationturnout::before{content:"ИЗЛАЗНОСТ"}' in html
+    assert '.stationvalid::before{content:"ВАЖЕЋИ"}' in html
+    assert '.stationwinner::before{content:"ПОБЕДНИК"}' in html
+    assert ".stationshare,.stationmargin{display:none}" in html
+
+
 def test_operator_results_sort_municipality_picker_by_serbian_alphabet():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl")' in html

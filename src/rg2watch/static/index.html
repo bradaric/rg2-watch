@@ -343,8 +343,8 @@ body.hero #herochart{margin:var(--s2) 0 0}
   .tile:first-child{border-top:0}
   .hrow{grid-template-columns:1fr auto;gap:var(--s1) var(--s3)}
   .hrow .hd{font-size:.9em}
-  .stationcols{display:none}.station summary{grid-template-columns:auto 1fr auto auto;gap:var(--s1) var(--s2)}
-  .stationname{grid-column:2/-1}.stationwinner{grid-column:2/-1}.stationshare,.stationmargin{text-align:left}.stationstatus{grid-column:2/-1;justify-content:start}
+  .stationcols{display:none}.station summary{grid-template-columns:auto repeat(3,minmax(0,1fr));gap:var(--s2) var(--s3)}
+  .station summary::before{grid-column:1;grid-row:1/4;align-self:start}.stationname{grid-column:2/-1;grid-row:1}.stationmetric{text-align:left}.stationturnout{grid-column:2;grid-row:2}.stationvalid{grid-column:3;grid-row:2}.stationwinner{display:block;grid-column:4;grid-row:2;justify-self:start}.stationturnout::before{content:"ИЗЛАЗНОСТ"}.stationvalid::before{content:"ВАЖЕЋИ"}.stationwinner::before{content:"ПОБЕДНИК"}.stationturnout::before,.stationvalid::before,.stationwinner::before{display:block;margin-bottom:2px;color:var(--mut);font-size:9px;font-weight:750;letter-spacing:.04em}.stationshare,.stationmargin{display:none}.stationstatus{grid-column:2/-1;grid-row:3;justify-content:start}
   .stationbar{grid-template-columns:1fr auto}.stationbar .track{grid-column:1/-1;grid-row:2}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
@@ -2027,8 +2027,8 @@ function renderStationResults() {
       mapLink = stationMapLink(station);
     if (mapLink) { name.className += " hasmap"; name.append(mapLink); }
     summary.append(name,
-      mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric"),
-      mk("span", valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid), "stationmetric"), winner,
+      mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric stationturnout"),
+      mk("span", valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid), "stationmetric stationvalid"), winner,
       stationMiniBars(outcome, barCount, viewName === "diff"), stationMargin(outcome, viewName === "diff"), statusEl);
     details.append(summary, body);
     details.stationId = String(station.id);
