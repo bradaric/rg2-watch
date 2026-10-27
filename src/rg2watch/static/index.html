@@ -51,7 +51,7 @@ h3{font-size:11.5px;font-weight:700;margin:0 0 var(--s2);text-transform:uppercas
 .card td:nth-child(3){font-weight:650;white-space:nowrap}
 .card td:nth-child(4){white-space:nowrap}
 .card td.lk{white-space:nowrap;text-align:right}
-.card td.lk a,.card td.lk .chip,.lk a,.lk .chip{font-size:11px;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:9px;background:none;color:inherit;text-decoration:none;cursor:pointer;font-weight:400;line-height:1.5;min-height:0;box-shadow:none}
+.lk a,.lk .chip{display:inline-block;white-space:nowrap;font-size:11px;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:9px;background:none;color:inherit;text-decoration:none;cursor:pointer;font-weight:400;line-height:1.5;min-height:0;box-shadow:none}
 .bad{color:var(--hi);font-weight:700}.warn{color:var(--md);font-weight:700}.good{color:var(--good);font-weight:600}
 /* severity badges: fill style differs (solid dark / solid light / outline) and the word is always shown */
 .b{display:inline-block;min-width:5.6em;padding:1px 6px;border:1.5px solid transparent;border-radius:4px;font-size:10.5px;line-height:15px;font-weight:800;letter-spacing:.06em;text-align:center;margin-right:var(--s2);vertical-align:1px;white-space:nowrap}
@@ -326,6 +326,7 @@ body.hero #herochart{margin:var(--s2) 0 0}
   .card.wide tr{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px var(--s2);padding:6px 0;border-top:1px solid var(--line)}
   .card.wide td{border:0;padding:0}
   .card.wide td:nth-child(5){flex-basis:100%}
+  .card.wide td.lk{flex:0 0 100%;text-align:left}
   .card.wide td:empty{display:none}
   .presetbar,.filtergroup{padding:var(--s2);align-items:stretch}
   .filtertitle{flex-basis:100%}
@@ -385,7 +386,7 @@ stroke-width:2.5;
 <div id="presetbar" class="presetbar" role="group" aria-labelledby="presettitle">
 <span id="presettitle" class="filtertitle">Common workflows</span>
 <button type="button" data-preset="review-filed">Review excluded as filed</button>
-<button type="button" data-preset="review-v3">Review V3</button>
+<button type="button" data-preset="review-v13">Review V13</button>
 <button id="clearfilters" type="button">Clear all filters</button>
 </div>
 <div id="filtergroups">
@@ -658,7 +659,7 @@ let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = 
 const FILTERS = ["q", "m", "e", "dt", "mod", "sev", "rv", "nc", "ri", "an", "ast", "fl", "rp", "rm", "c7", "loc", "dis", "auto"];
 const FILTER_PRESETS = {
   "review-filed": {rv: "todo", ri: "filed", ast: "done", an: "not"},
-  "review-v3": {rv: "todo", ast: "done", rules: ["V3"]},
+  "review-v13": {rv: "todo", ast: "done", rules: ["V13"]},
 };
 function presetControls(name, scope) { return {...scope, ...FILTER_PRESETS[name]}; }
 

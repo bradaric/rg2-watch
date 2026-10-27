@@ -150,7 +150,7 @@ def test_common_review_filter_presets_preserve_scope_and_auto_refresh_setting():
 
     assert '<div id="presetbar" class="presetbar"' in html
     assert '<button type="button" data-preset="review-filed">Review excluded as filed</button>' in html
-    assert '<button type="button" data-preset="review-v3">Review V3</button>' in html
+    assert '<button type="button" data-preset="review-v13">Review V13</button>' in html
     assert '<button id="clearfilters" type="button">Clear all filters</button>' in html
     start = html.index("const FILTER_PRESETS =")
     code = html[start:html.index("// rule codes", start)]
@@ -159,8 +159,8 @@ const assert = require("assert");
 {code}
 assert.deepEqual(presetControls("review-filed", {{e: "779676", m: "Alpha", auto: false}}),
   {{e: "779676", m: "Alpha", auto: false, rv: "todo", ri: "filed", ast: "done", an: "not"}});
-assert.deepEqual(presetControls("review-v3", {{e: "779676", m: "Alpha", auto: false}}),
-  {{e: "779676", m: "Alpha", auto: false, rv: "todo", ast: "done", rules: ["V3"]}});
+assert.deepEqual(presetControls("review-v13", {{e: "779676", m: "Alpha", auto: false}}),
+  {{e: "779676", m: "Alpha", auto: false, rv: "todo", ast: "done", rules: ["V13"]}});
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -182,6 +182,13 @@ def test_form_filters_are_visually_grouped_by_workflow():
     assert ".presetbar{" in html and ".filtergroup{" in html
     assert "border-left:4px solid var(--accent)" in html
     assert "@media (max-width:700px)" in html and ".filtertitle{flex-basis:100%}" in html
+
+
+def test_alert_action_links_stay_intact_on_their_own_mobile_row():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert ".lk a,.lk .chip{display:inline-block;white-space:nowrap" in html
+    assert ".card.wide td.lk{flex:0 0 100%;text-align:left}" in html
 
 
 def test_operator_page_uses_adaptive_navy_serbian_theme():
