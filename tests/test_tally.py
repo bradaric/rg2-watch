@@ -687,6 +687,23 @@ def test_operator_results_use_editorial_accents():
     assert "body.hero>*:not(#resview):not(.serbian-flag-bg){display:none!important}" in html
 
 
+def test_operator_results_sort_municipality_picker_by_serbian_alphabet():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl")' in html
+    assert 'rows = sortHeroMunis(T ? T.munis : [])' in html
+    helper = html[html.index("const SERBIAN_MUNICIPALITY_COLLATOR"):html.index("function heroListNames")]
+    script = helper + r'''
+const assert = require("assert");
+const rows = ["Љиг", "Ћуприја", "Ада", "Шид", "Лапово", "Тител", "Чока", "Џеп"].map(m => ({m}));
+assert.deepEqual(sortHeroMunis(rows).map(row => row.m),
+  ["Ада", "Лапово", "Љиг", "Тител", "Ћуприја", "Чока", "Џеп", "Шид"]);
+assert.deepEqual(rows.map(row => row.m),
+  ["Љиг", "Ћуприја", "Ада", "Шид", "Лапово", "Тител", "Чока", "Џеп"], "must not mutate tally order");
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_municipal_unknown_municipality_gets_no_list_totals():
     s = store()
     two_ballots(s)
@@ -1091,7 +1108,7 @@ assert(csv.includes("Unavailable - no comparable ballot"), "unknown ballot must 
 assert(csv.includes("Unavailable - no universal ballot"), "municipal overall list fields must be explicit");
 heroMuni = "Ћуприја"; heroPicked = true;
 renderHero();
-assert.equal(els.hmuni.options[1].textContent, "Ћуприја");
+assert.equal(els.hmuni.options.find(o => o.value === "Ћуприја").textContent, "Ћуприја");
 assert(els.herotitle.textContent.startsWith("Ћуприја"));
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
@@ -1124,12 +1141,12 @@ unknown.names = ["List 1", "Стварна листа"]; unknown.fallback_name_i
 for (const k of ["all", "cl", "fall", "fcl"]) { unknown[k].lists = [60, 40]; unknown[k].lists_valid = 100; unknown[k].vote_forms = 1; }
 heroMuni = "(unknown)"; heroPicked = true;
 renderHero();
-assert.equal(els.hmuni.options[2].textContent, "Непозната општина");
+assert.equal(els.hmuni.options.find(o => o.value === "(unknown)").textContent, "Непозната општина");
 assert(els.herotitle.textContent.startsWith("Непозната општина"));
 assert.equal(slots[0].nm.textContent, "Листа 1");
 unknown.generated_unknown_muni = false; delete unknown.fallback_name_indices;
 renderHero();
-assert.equal(els.hmuni.options[2].textContent, "(unknown)");
+assert.equal(els.hmuni.options.find(o => o.value === "(unknown)").textContent, "(unknown)");
 assert(els.herotitle.textContent.startsWith("(unknown)"));
 assert.equal(slots[0].nm.textContent, "List 1");
 heroMuni = ""; heroPicked = true;

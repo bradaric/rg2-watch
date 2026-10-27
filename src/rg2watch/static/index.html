@@ -1581,7 +1581,11 @@ function heroWarning(note) {
       ", записници имају " + m[2] + " " + serbianCount(lists, "листу", "листе", "листа") + " — проверите конфигурацију";
   }).join("; ");
 }
+const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl");
 function heroMuniName(row) { return row && row.generated_unknown_muni ? "Непозната општина" : row.m; }
+function sortHeroMunis(rows) {
+  return [...rows].sort((a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(heroMuniName(a), heroMuniName(b)));
+}
 function heroListNames(owner) {
   const names = owner && owner.names || [], fallback = new Set(owner && owner.fallback_name_indices || []);
   return names.map((name, i) => fallback.has(i) ? "Листа " + (i + 1) : name);
@@ -1635,7 +1639,7 @@ function initHero() {
   $("herochart").replaceChildren();
 }
 function heroMunis() {
-  const sel = $("hmuni"), rows = T ? T.munis : [], names = rows.map(m => m.m);
+  const sel = $("hmuni"), rows = sortHeroMunis(T ? T.munis : []), names = rows.map(m => m.m);
   const wanted = rows.map(r => r.m + "\t" + heroMuniName(r)).join("\n");
   if ([...sel.options].slice(1).map(o => o.value + "\t" + o.textContent).join("\n") !== wanted || !sel.options.length)
     sel.replaceChildren(new Option("Све општине", ""), ...rows.map(r => new Option(heroMuniName(r), r.m)));
