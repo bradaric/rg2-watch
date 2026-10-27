@@ -836,7 +836,7 @@ function reviewCounts() {}
 function alertForm() {}
 function localHref(value) { return value ? "local:" + value : null; }
 function rikHref(value) { return value ? value : null; }
-function link(text, href) { const a = mk("a", text); a.href = href; return a; }
+function link(text, href) { const a = mk("a", text); a.href = href; a.target = "_blank"; return a; }
 function setTab(name) { selectedTab = name; }
 let shownForm = null;
 function showForm(id, label) { shownForm = [id, label]; }
@@ -1137,7 +1137,7 @@ assert(els.herotitle.textContent.startsWith("Ћуприја"));
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
   filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
-D.rows = [{id: 9, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
+D.rows = [{id: 9, u: "u9", rv: {v: "escalate"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
 els.stationbars.value = "2";
 renderHero();
 assert.equal(els.stationresults.hidden, false);
@@ -1164,9 +1164,25 @@ let prevented = 0, stopped = 0;
 stationActions.button.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
 assert.equal(stationActions.menu.hidden, false);
 const stationShow = stationActions.menu.children.find(x => x.textContent === "show");
-stationShow.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
-assert.deepEqual(shownForm, [9, "Ћуприја BM 12"]);
-assert.equal(prevented, 2); assert.equal(stopped, 2);
+assert.equal(stationShow.tag, "a");
+assert.equal(stationShow.href, "#form=9");
+assert.equal(stationShow.target, "_blank");
+assert.equal(shownForm, null, "opening a deep link must leave the current Results tab untouched");
+assert.equal(prevented, 1); assert.equal(stopped, 1);
+function stationReviewText() {
+  const card = els.stationlist.children[0], status = card.children[0].children.find(x => x.className.startsWith("stationstatus"));
+  return (status.children || []).find(x => x.className.startsWith("stationreview")).textContent;
+}
+els.tview.value = "filed";
+renderHero();
+assert.equal(stationReviewText(), "ескалиран");
+REV = {u9: {v: "unsure"}}; renderHero();
+assert.equal(stationReviewText(), "несигуран");
+REV = {}; renderHero();
+assert.equal(stationReviewText(), "без одлуке");
+REV = {u9: {v: "ok"}}; renderHero();
+assert.equal(stationReviewText(), "прихваћен");
+REV = null; els.tview.value = "corrected";
 D.rows = [{id: 9}];
 renderHero();
 stationCard = els.stationlist.children[0];
@@ -1178,7 +1194,7 @@ els.tview.value = "diff";
 renderHero();
 stationCard = els.stationlist.children[0];
 stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
-assert.equal(stationStatusEl.textContent, "Поређење");
+assert.equal(stationStatusEl.children.find(x => x.className === "stationstatusmain").textContent, "Поређење");
 assert((stationStatusEl.children || []).some(x => x.className === "stationactions"));
 els.tview.value = "corrected";
 els.stationbars.value = "1";

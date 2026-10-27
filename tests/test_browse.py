@@ -219,6 +219,10 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
     assert all(label in html for label in (
         "Бирачко место", "Излазност", "Важећи", "Победник", "Удео", "Маргина", "Статус"))
     assert 'Прошири све' in html and 'Скупи све' in html
+    assert '.stationstatus{display:grid;grid-template-columns:auto auto auto;align-items:center;justify-content:end;' in html
+    assert '.stationmenubtn{display:inline-grid;place-items:center;' in html
+    assert '.stationmenubtn::before{content:"";' in html
+    assert '.stationreview{font-size:.8em;' in html
 
 
 def test_non_default_form_select_filters_use_active_filter_colors():
@@ -255,6 +259,14 @@ def test_operator_page_preserves_active_tab_in_url_hash():
     assert 'if (activeTab() !== "forms") p.set("tab", activeTab());' in html
     assert 'setTab(p.get("tab"), false);' in html
     assert 'function setTab(name, updateHash = true)' in html
+
+
+def test_operator_page_supports_shareable_form_deep_links():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'const formId = p.get("form")' in html
+    assert 'showForm(form.id, form.muni + " BM " + form.no, false);' in html
+    assert 'if (onlyId != null && activeTab() === "forms") p.set("form", String(onlyId));' in html
 
 
 def test_json_is_ascii_even_with_lone_surrogate():
