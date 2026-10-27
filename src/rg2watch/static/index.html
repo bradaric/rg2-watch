@@ -9,13 +9,13 @@
   --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--r:6px;
   --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --bg:#eaf0f6;--panel:#fff;--surface:#f3f7fb;--surface2:#dce6ef;--fg:#10243b;--mut:#526980;
-  --line:#d3dee8;--line2:#aebfd0;--accent:#b51e34;--accent-bg:#fae8eb;--link:#155ca2;
+  --line:#d3dee8;--line2:#aebfd0;--accent:#b51e34;--accent-bg:#fae8eb;--bar:#b51e34;--link:#155ca2;
   --hi:#a9142a;--hi-fg:#fff;--md:#8a5300;--md-bg:#f7b84b;--md-fg:#2b1a00;--lo:#3b668f;--good:#18794e;
   --warn:#a35f00;--warn-bg:#fff5e0;--warn-line:#f0c46c;--banner:#b51e34;--track:#d5e1ec;
   --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08)}
 @media (prefers-color-scheme:dark){:root{
   --bg:#061321;--panel:#0d2136;--surface:#122b45;--surface2:#193650;--fg:#f4f7fb;--mut:#a4b5c7;
-  --line:#1c3853;--line2:#36536f;--accent:#ff6174;--accent-bg:#3a1722;--link:#75b7f0;
+  --line:#1c3853;--line2:#36536f;--accent:#ff6174;--accent-bg:#3a1722;--bar:#e84a5f;--link:#75b7f0;
   --hi:#ff6174;--hi-fg:#fff;--md:#f5b54a;--md-bg:#f5b54a;--md-fg:#231700;--lo:#a9c7e3;--good:#58d09a;
   --warn:#f0a73a;--warn-bg:#2a2112;--warn-line:#6b4d17;--banner:#c6363c;--track:#17334e;
   --shadow:0 1px 2px rgba(0,0,0,.4)}}
@@ -256,8 +256,20 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .hrow .no[hidden]{display:none}
 .hrow .track{grid-area:tr}.hrow .val{grid-area:val}
 .hrow .track{background:var(--track);border-radius:3px;height:1.05em;overflow:hidden}
-.hrow .fill{height:100%;width:0;min-width:3px;border-radius:0 3px 3px 0;transition:width .8s ease,background-color .3s}
+.hrow .fill{height:100%;width:0;min-width:3px;border-radius:0 3px 3px 0;background:var(--bar);transition:width .8s ease}
 .hrow .val{text-align:right;font-variant-numeric:tabular-nums;white-space:pre;font-weight:700;letter-spacing:-.01em}
+#stationresults{margin-top:var(--s5);border-top:2px solid var(--accent);padding-top:var(--s3)}
+#stationresults[hidden]{display:none}
+#stationhead{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);margin-bottom:var(--s2)}
+#stationhead h3{font-size:1rem;color:var(--fg);margin:0}#stationcount{color:var(--mut)}
+.station{border-top:1px solid var(--line)}.station:first-child{border-top:0}
+.station summary{cursor:pointer;display:grid;grid-template-columns:auto minmax(12rem,1fr) auto auto minmax(12rem,auto);gap:var(--s3);align-items:baseline;padding:var(--s2);list-style:none}
+.station summary::-webkit-details-marker{display:none}.station summary::before{content:"▸";color:var(--accent);font-weight:800;margin-right:var(--s1)}
+.station[open] summary::before{content:"▾"}.station summary>span:first-child{font-weight:750}.stationstatus{color:var(--mut)}
+.stationbody{padding:0 var(--s3) var(--s3) 2rem}.stationnote{color:var(--mut);margin:var(--s2) 0}
+.stationbar{display:grid;grid-template-columns:minmax(12rem,30%) minmax(8rem,1fr) 11rem;gap:var(--s3);align-items:center;padding:5px 0}
+.stationbar .track{height:11px;background:var(--track);border-radius:6px;overflow:hidden}.stationbar .fill{height:100%;background:var(--bar);border-radius:6px}
+.stationbar .value{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:700}
 #heronote{font-size:clamp(1rem,1.5vw,1.7rem);font-weight:700;color:var(--md);margin:var(--s2) 0}
 #heronote:empty{display:none}
 #heronames{margin-top:var(--s3);font-size:clamp(.9rem,1.2vw,1.45rem)}
@@ -302,6 +314,8 @@ body.hero #herochart{margin:var(--s2) 0 0}
   .tile:first-child{border-top:0}
   .hrow{grid-template-columns:1fr auto;gap:var(--s1) var(--s3)}
   .hrow .hd{font-size:.9em}
+  .station summary{grid-template-columns:auto 1fr auto}.station summary .stationstatus{grid-column:2/-1}
+  .stationbar{grid-template-columns:1fr auto}.stationbar .track{grid-column:1/-1;grid-row:2}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 </style></head><body>
@@ -396,6 +410,7 @@ stroke-width:2.5;
 <div id="heronote"></div>
 <div id="herocharthead"><div class="hero-eyebrow">Пресек резултата</div></div>
 <div id="herochart"></div>
+<section id="stationresults" hidden><div id="stationhead"><h3>Резултати по бирачким местима</h3><span id="stationcount"></span></div><div id="stationlist"></div></section>
 <div id="herofoot"></div>
 </section>
 <p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
@@ -1511,7 +1526,7 @@ function renderTally() {
 }
 
 // ---- hero display -------------------------------------------------------------------------
-const OKABE = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"];
+const RESULT_BAR_COLOR = "var(--bar)";
 let heroMuni = "", heroPicked = false, slots = [];
 function put(id, text) {  // set text; flash when it changed
   const el = $(id);
@@ -1609,13 +1624,79 @@ function heroMunis() {
   }
   sel.value = heroMuni;
 }
+function stationStatus(view) {
+  return view.included ? "Урачунат" : "Није урачунат" + (view.reason ? " — " + view.reason : "");
+}
+function stationTurnout(view) {
+  return view && view.registered > 0 && view.voted != null ? view.voted / view.registered : null;
+}
+function renderStationChart(body, station, owner, viewName) {
+  const corrected = station.corrected, filed = station.filed || corrected, diff = viewName === "diff";
+  const chosen = viewName === "filed" ? filed : corrected, names = heroListNames(owner);
+  const listRows = names.map((name, i) => {
+    const c = corrected.lists[i], f = filed.lists[i];
+    const value = diff ? c == null || f == null ? null : c - f : chosen.lists[i];
+    const share = diff
+      ? c == null || f == null || !corrected.valid || !filed.valid ? null : c / corrected.valid - f / filed.valid
+      : value == null || !chosen.valid ? null : value / chosen.valid;
+    return {name, no: i + 1, value, share};
+  }).sort((a, b) => diff ? Math.abs(b.value || 0) - Math.abs(a.value || 0) || a.no - b.no
+    : (b.value || 0) - (a.value || 0) || a.no - b.no);
+  const status = diff ? "Са исправкама: " + stationStatus(corrected) + " · Оригинално: " + stationStatus(filed)
+    : stationStatus(chosen);
+  body.append(mk("p", status, "stationnote"));
+  if (!listRows.length) { body.append(mk("p", "Подаци по листама нису доступни.", "stationnote")); return; }
+  const max = Math.max(1, ...listRows.map(row => Math.abs(row.value || 0)));
+  for (const item of listRows) {
+    const row = mk("div", null, "stationbar"), label = mk("div", item.no + ". " + item.name),
+      track = mk("div", null, "track"), fill = mk("div", null, "fill"), value = mk("div", null, "value");
+    fill.style.width = item.value == null ? "0" : (diff ? Math.abs(item.value) / max * 100
+      : Math.min(100, (item.share || 0) * 100)) + "%";
+    value.textContent = item.value == null ? "—" : diff ? dnum(item.value) + "  " + dpp(item.share) + " п. п."
+      : num(item.value) + "  " + pc(item.share);
+    track.append(fill); row.append(label, track, value); body.append(row);
+  }
+}
+function renderStationResults() {
+  const section = $("stationresults"), list = $("stationlist");
+  if (!T || !heroMuni) { section.hidden = true; list.replaceChildren(); return; }
+  const owner = T.munis.find(row => row.m === heroMuni), mode = $("tmode").value, viewName = NV();
+  let stations = (T.station_results || []).filter(station => station.m === heroMuni);
+  if (mode === "cl") stations = stations.filter(station => {
+    const filed = station.filed || station.corrected;
+    return viewName === "diff" ? station.corrected.clean && filed.clean
+      : (viewName === "filed" ? filed : station.corrected).clean;
+  });
+  stations.sort((a, b) => String(a.no).localeCompare(String(b.no), undefined, {numeric: true}));
+  section.hidden = false;
+  $("stationcount").textContent = num(stations.length) + " " +
+    serbianCount(stations.length, "записник", "записника", "записника");
+  const cards = stations.map(station => {
+    const corrected = station.corrected, filed = station.filed || corrected, chosen = viewName === "filed" ? filed : corrected;
+    const turnout = viewName === "diff" ? (stationTurnout(corrected) == null || stationTurnout(filed) == null
+      ? null : stationTurnout(corrected) - stationTurnout(filed)) : stationTurnout(chosen);
+    const valid = viewName === "diff" ? corrected.valid == null || filed.valid == null ? null
+      : corrected.valid - filed.valid : chosen.valid;
+    const details = mk("details", null, "station"), summary = mk("summary"), body = mk("div", null, "stationbody");
+    summary.append(mk("span", "БМ " + station.no + (station.name ? " — " + station.name : "")),
+      mk("span", "Излазност " + (turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout))),
+      mk("span", "Важећи " + (valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid))),
+      mk("span", viewName === "diff" ? "Поређење приказа" : stationStatus(chosen), "stationstatus"));
+    details.append(summary, body);
+    let rendered = false;
+    details.ontoggle = () => { if (details.open && !rendered) { rendered = true; renderStationChart(body, station, owner, viewName); } };
+    return details;
+  });
+  list.replaceChildren(...cards);
+  if (!cards.length) list.replaceChildren(mk("p", "Нема записника у изабраном обухвату.", "stationnote"));
+}
 function renderHero() {
   heroMunis();
   const foot = $("herofoot");
   const label = T ? "НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а. Стање у " +
     epoch(Date.parse(D.built) / 1000).slice(-5) + "." : "НЕЗВАНИЧНО — резултати још нису доступни.";
   foot.replaceChildren(label);
-  if (!T) { $("heronames").hidden = true; $("herotitle").textContent = ""; $("heronote").textContent = "Још нема анализираних записника."; for (const s of slots) s.row.hidden = true; return; }
+  if (!T) { $("heronames").hidden = true; $("herotitle").textContent = ""; $("heronote").textContent = "Још нема анализираних записника."; for (const s of slots) s.row.hidden = true; renderStationResults(); return; }
   const raw = (heroMuni && T.munis.find(m => m.m === heroMuni)) || T.overall, r = vrow(raw), t = r[$("tmode").value], none = !r.counted;
   const dg = NV() === "diff", mode = $("tmode").value;
   const cover = r.stations ? r.counted / r.stations : null;
@@ -1706,8 +1787,9 @@ function renderHero() {
     s.nm.textContent = e.n; s.row.title = e.n;
     s.val.textContent = dg ? dnum(e.v) + "  " + dpp(share) + " п. п." : num(e.v) + "  " + pc(share);
     s.fill.style.width = (dg ? Math.abs(e.v) / maxAbs * 100 : Math.min(100, share * 100)) + "%";
-    s.fill.style.backgroundColor = e.i < 0 ? "#777" : OKABE[e.i % (OKABE.length - 1)];
+    s.fill.style.backgroundColor = RESULT_BAR_COLOR;
   });
+  renderStationResults();
 }
 function setHero(on) {
   document.body.classList.toggle("hero", on);

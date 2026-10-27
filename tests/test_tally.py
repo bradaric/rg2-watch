@@ -62,6 +62,22 @@ def test_clean_form_counts_and_totals_and_turnout():
     assert o["cl"] == o["all"] and t["excluded"] == [] and t["nlists"] == 2
 
 
+def test_tally_exposes_per_station_results_for_operator_drilldown():
+    s = store()
+    form(s, 12, clean_report())
+
+    result = tally(s, include_station_results=True)
+
+    assert result["station_results"] == [{
+        "id": result["station_results"][0]["id"], "m": "Alpha", "no": "12", "name": "ОШ",
+        "corrected": {"clean": True, "included": True, "reason": None,
+                      "registered": 1000, "voted": 800, "ballots_in_box": 800,
+                      "invalid": 20, "valid": 780, "outside_voted": 5,
+                      "lists": [400, 380]},
+        "filed": None,
+    }]
+
+
 def test_current_escalated_form_is_held_from_every_tally_view():
     s = store()
     form(s, 12, clean_report())
@@ -364,7 +380,8 @@ def test_hero_markup_labelled_and_safe():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert ('id="hero"' in html and "НЕЗВАНИЧНО" in html and
             "Рани резултати — обрађено је мало бирачких места; проценти се могу знатно променити." in html)
-    assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
+    assert "--bar:#b51e34" in html and "--bar:#e84a5f" in html
+    assert "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
     assert "Esc" in html and 'get("hero") === "1"' in html and 'ev.key === "Escape"' in html
     assert 'id="hs-forms-primary"' in html and 'id="hs-forms-context"' in html
     assert '<span id="hv-forms">-</span><span class="of" id="hv-formstot"></span>' in html
@@ -745,8 +762,11 @@ def test_cli_diff_heading_describes_term_specific_comparable_cohorts():
 def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_lists():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "TOP_LISTS" not in html and 'Остале (" + rest.length' not in html
+    assert "OKABE" not in html
+    assert 'const RESULT_BAR_COLOR = "var(--bar)"' in html
+    assert 'id="stationresults"' in html and "function renderStationResults(" in html
     helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
-    hero = html[html.index("const OKABE") : html.index('$("herobtn").onclick')]
+    hero = html[html.index("const RESULT_BAR_COLOR") : html.index('$("herobtn").onclick')]
     assert "function paintHero" in html
     paint = html[html.index("function paintHero"):html.index("// ---- table")]
     refresh = html[html.index("function rowOf"):html.index("function escalatedCsv")]
@@ -1073,6 +1093,17 @@ heroMuni = "Ћуприја"; heroPicked = true;
 renderHero();
 assert.equal(els.hmuni.options[1].textContent, "Ћуприја");
 assert(els.herotitle.textContent.startsWith("Ћуприја"));
+T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+renderHero();
+assert.equal(els.stationresults.hidden, false);
+assert.equal(els.stationcount.textContent, "1 записник");
+const stationCard = els.stationlist.children[0];
+assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 — ОШ"));
+assert.equal(stationCard.children[1].children, undefined, "station chart is lazy");
+stationCard.open = true; stationCard.ontoggle();
+assert(stationCard.children[1].children.length > 1);
 
 unknown.generated_unknown_muni = true;
 unknown.names = ["List 1", "Стварна листа"]; unknown.fallback_name_indices = [0]; unknown.nlists = 2;

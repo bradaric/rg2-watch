@@ -193,7 +193,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     try:
         tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
                             cache=None if cache is None else cache.setdefault("tally", {}),
-                            docs=docs, arows=arows)
+                            docs=docs, arows=arows, include_station_results=True)
     except Exception:
         log.exception("tally could not be built")
         tally = None
