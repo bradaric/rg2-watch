@@ -6,11 +6,11 @@ import subprocess
 import pytest
 
 from rg2watch.analyze import AnalysisResult
-from rg2watch.browse import STATIC, build_data
+from rg2watch.browse import STATIC, build_data, build_page
 from rg2watch.config import Config
 from rg2watch.operator_corrections import (CorrectionConflict, OperatorCorrections,
                                            apply_operator_snapshot, validate_snapshot)
-from rg2watch.pipeline import PROMPT_VERSION
+from rg2watch.pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from rg2watch.server import start_server
 from rg2watch.store import Store
 from rg2watch.tally import build_tally, format_tally
@@ -48,6 +48,101 @@ def analysed_store(report=None):
     s.save_analysis(URL, AnalysisResult(report or clean_report(), 0, 0, 0.0, MODEL, "stop"),
                     PROMPT_VERSION, parent=P)
     return s
+
+
+def test_selected_repeat_form_supports_operator_numeric_correction():
+    s = store()
+    repeat = doc(URL, dt=15)
+    add(s, repeat)
+    s.save_analysis(URL, AnalysisResult(clean_report(), 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+    service = OperatorCorrections(s, Config(model=MODEL, tally_scope={P: "national"}), MODEL)
+
+    state = service.state(URL)
+    assert state["expected_rows"] == [1, 2]
+    corrected = snapshot(registered=900)
+    service.save(URL, corrected, "checked against mislabeled RG-7", state["source_token"])
+
+    result = build_tally(s, Config(model=MODEL, tally_scope={P: "national"}), P, MODEL)
+    assert result["overall"]["all"]["registered"] == 900
+
+
+def test_operator_correction_rejects_rg2_superseded_by_repeat_round():
+    s = analysed_store()
+    repeat = doc(BASE + "/extfile/repeat.pdf", dt=15, up="2026-10-20T20:15")
+    add(s, repeat)
+    s.save_analysis(repeat.url, AnalysisResult(clean_report(), 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    service = OperatorCorrections(s, Config(model=MODEL), MODEL)
+    state = service.state(URL)
+    assert state["active"] is False
+    with pytest.raises(ValueError, match="superseded or removed"):
+        service.save(URL, snapshot(), "stale round", state["source_token"])
+
+
+def test_quarantined_form_does_not_change_operator_expected_rows():
+    s = analysed_store()
+    cfg = Config(model=MODEL, tally_scope={P: "national"})
+    baseline = OperatorCorrections(s, cfg, MODEL).state(URL)
+    quarantined = doc(BASE + "/extfile/not-rg2.pdf", dt=15, up="2026-10-20T20:15")
+    add(s, quarantined)
+    report = clean_report()
+    report["document_classification"] = {"kind": "rg7", "evidence": "correction decision"}
+    report["numbers"]["list_votes"].append({"row": 3, "field": {
+        "value": 0, "original_value": None, "legible": True, "mark": "clean", "note": ""}})
+    s.save_analysis(quarantined.url, AnalysisResult(report, 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    service = OperatorCorrections(s, cfg, MODEL)
+
+    state = service.state(URL)
+    assert state["expected_rows"] == [1, 2]
+    assert state["source_revision"] == baseline["source_revision"]
+
+
+def test_superseded_round_does_not_change_operator_expected_rows():
+    original = clean_report()
+    original["numbers"]["list_votes"] = [
+        {"row": 1, "field": original["numbers"]["list_votes"][0]["field"]},
+        {"row": 2, "field": original["numbers"]["list_votes"][1]["field"]},
+        {"row": 3, "field": {"value": 0, "original_value": None, "legible": True,
+                              "mark": "clean", "note": ""}},
+    ]
+    s = analysed_store(original)
+    repeat = doc(BASE + "/extfile/repeat-selected.pdf", dt=15, up="2026-10-20T20:15")
+    add(s, repeat)
+    s.save_analysis(repeat.url, AnalysisResult(clean_report(), 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    service = OperatorCorrections(s, Config(model=MODEL, tally_scope={P: "national"}), MODEL)
+
+    assert service.state(repeat.url)["expected_rows"] == [1, 2]
+
+
+def test_equal_timestamp_decision_stays_ambiguous_after_later_round_removed():
+    s = store()
+    repeat_i = doc(URL, dt=10, up="2026-10-20T10:00:00Z")
+    add(s, repeat_i)
+    s.save_analysis(URL, AnalysisResult(clean_report(), 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+    repeat_ii = doc(BASE + "/extfile/repeat-II.pdf", dt=15, up="2026-10-21T10:00:00Z")
+    add(s, repeat_ii)
+    s.save_analysis(repeat_ii.url, AnalysisResult(clean_report(), 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+    add(s, repeat_ii, "removed")
+    decision = doc(BASE + "/extfile/equal-rg7.pdf", dt=23, up="2026-10-21T10:00:00Z")
+    add(s, decision)
+    decision_report = {"decision_date": None, "station_no": "1", "reason": "correction",
+                       "confidence": "high",
+                       "changes": [{"item": "registered", "printed": "3", "old": 1000, "new": 900}],
+                       "table": []}
+    s.save_analysis(decision.url, AnalysisResult(decision_report, 0, 0, 0.0, MODEL, "stop"),
+                    RG7_PROMPT_VERSION, parent=P)
+
+    service = OperatorCorrections(s, Config(model=MODEL, tally_scope={P: "national"}), MODEL)
+
+    assert service.state(URL)["snapshot"]["registered"] == 1000
 
 
 def test_validate_full_snapshot_and_apply_it_without_mutating_model_report():
@@ -383,6 +478,10 @@ def test_browse_row_has_compact_operator_correction_status(tmp_path):
     assert isinstance(row["oc"]["revision"], int)
     assert row["rec"]["status"] == "ok"
 
+    build_page(s, tmp_path / "index.html", tmp_path, cfg=Config(model=MODEL))
+    meta = json.loads((tmp_path / "data-meta.json").read_text(encoding="utf-8"))
+    assert meta["corrections"] == {URL: row["oc"]["revision"]}
+
 
 def test_browse_build_loads_expected_ballot_rows_once_for_national_corrections(tmp_path,
                                                                                monkeypatch):
@@ -409,7 +508,7 @@ def test_browse_build_loads_expected_ballot_rows_once_for_national_corrections(t
     build_data(s, tmp_path, parent=P,
                cfg=Config(model=MODEL, tally_scope={P: "national"}))
 
-    assert calls == {"rows": 2, "analyses": 2, "reports": 3}
+    assert calls == {"rows": 2, "analyses": 2, "reports": 2}
 
 
 def test_old_prompt_correction_is_quietly_skipped_until_current_analysis(tmp_path, caplog):
@@ -512,6 +611,14 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "waitForCorrectionData(ocUrl, state);" in success
     assert "dataBuilt = null;" not in success
     assert "function waitForCorrectionData(" in html
+    wait = html[html.index("function waitForCorrectionData("):html.index("function submitCorrection(")]
+    assert wait.index('fetch("data-meta.json') < wait.index('fetch("data.json')
+    assert "correctionMetaReady(meta, url, state)" in wait
+    assert "applyCorrectionData(data, url)" in wait
+    assert "applyData(data)" not in wait
+    apply = html[html.index("function applyCorrectionData("):html.index("function waitForCorrectionData(")]
+    assert "row.data(fresh).draw(false)" in apply
+    assert "table.clear()" not in apply
     assert "v.oc.revision === state.revision" in html
     assert '$("ocdlg").close();' in success
     assert '$("ocdlg").close();' not in failure

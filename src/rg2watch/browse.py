@@ -13,6 +13,7 @@ from .models import DOC_TYPES, Doc
 from .operator_corrections import OperatorCorrections
 from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
 from .rules import RULE_INFO, change_text, decision_label, decision_sort_key, evaluate_report
+from .rounds import bind_repeat_round
 from .status import _rik_link, build_status, to_belgrade
 from .station_locations import station_coordinates, station_location
 from .store import Store, _doc
@@ -34,7 +35,7 @@ def _ast(d) -> str:
 
 
 def _opinions(store: Store, docs: dict[int, Doc], arows: list, cfg: Config,
-              cache: dict) -> dict[int, list[dict]]:
+              cache: dict, report_json: dict[int, str] | None = None) -> dict[int, list[dict]]:
     """document id -> [{m, at, f}]: findings of the newest stored analysis of each model (current
     prompt version preferred), from the current rules (pure, no API). `cache` keeps the evaluated
     findings by analysis id across builds (None = could not be evaluated, logged once)."""
@@ -43,7 +44,7 @@ def _opinions(store: Store, docs: dict[int, Doc], arows: list, cfg: Config,
     for gone in set(cache) - live:
         del cache[gone]
     todo = [a["id"] for a in rows if a["id"] not in cache]
-    reports = store.analysis_reports(todo)
+    reports = store.analysis_reports(todo) if report_json is None else report_json
     by_id = {a["id"]: a for a in rows}
     for aid in todo:
         a = by_id[aid]
@@ -112,7 +113,7 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
             "rik": _rik_link(d["url"], base), "ops": opinions.get(d["id"], []),
             "ars": (arithmetic or {}).get(d["id"], []),
             "u": d["url"], "rv": (reviews or {}).get(d["url"]),
-            "oc": (corrections or {}).get(d["url"]), "correctable": d["doc_type"] == 6}
+            "oc": (corrections or {}).get(d["url"]), "correctable": False}
 
 
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
@@ -126,8 +127,23 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         found.setdefault(f["document_id"], []).append(f)
     arows = [a for a in store.browse_analyses(parent, PROMPT_VERSION)
              if a["prompt_version"].startswith("v")]
+    report_json = store.analysis_reports([a["id"] for a in arows])
+    selected_model_analyses = [a for a in arows
+                               if a["model"] == model and a["prompt_version"] == PROMPT_VERSION]
+    classification_reports = report_json
+    classifications = {}
+    for a in selected_model_analyses:
+        try:
+            value = json.loads(classification_reports[a["id"]]).get("document_classification", {})
+            kind = value.get("kind")
+            if kind in ("rg2", "rg7", "other", "uncertain"):
+                classifications[a["document_id"]] = {
+                    "kind": kind, "evidence": str(value.get("evidence") or "")[:500]}
+        except (KeyError, TypeError, ValueError, AttributeError):
+            pass
+    overrides = store.latest_classification_overrides(parent)
     opinions = _opinions(store, {d["id"]: _doc(d) for d in docs}, arows, cfg,
-                          {} if cache is None else cache.setdefault("ops", {}))
+                          {} if cache is None else cache.setdefault("ops", {}), report_json)
     arithmetic: dict[int, list[dict]] = {}
     for a in store.arithmetic_analyses(parent, ARITHMETIC_PROMPT_VERSION):
         arithmetic.setdefault(a["document_id"], []).append(
@@ -159,6 +175,24 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     for f in store.rg7_findings(parent):
         r7_found.setdefault(f["document_id"], []).append([f["rule"], f["severity"], f["summary"]])
     readers = store.rg7_readers(parent, RG7_PROMPT_VERSION)
+
+    def uploaded(value) -> datetime | None:
+        try:
+            out = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+            return out.replace(tzinfo=out.tzinfo or timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    round_starts: dict[tuple[str, str], dict[int, datetime]] = {}
+    for source in docs:
+        if source["doc_type"] not in (10, 15, 16) or source["station_key"] is None:
+            continue
+        value = classifications.get(source["id"], {})
+        legitimate = (overrides.get(source["url"]) == "confirm_rg2" or value.get("kind") == "rg2")
+        if legitimate and (at := uploaded(source["uploaded_at"])):
+            starts = round_starts.setdefault((source["parent"], source["station_key"]), {})
+            starts[source["doc_type"]] = min(starts.get(source["doc_type"], at), at)
+
     for d, rep in sorted(r7_docs, key=lambda x: decision_sort_key(x[0]["uploaded_at"], x[0]["id"], x[1])):
         base = elections[d["parent"]].base_url if d["parent"] in elections else None
         x = _version(d, {}, {}, cache_dir, base, corrections=corrections, analysed_at=analysed_at)
@@ -166,7 +200,13 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                  ch=[change_text(c) for c in rep["changes"]] if rep else None,
                  by=[m for m in readers.get(d["id"], []) if m != model],  # read by other models only
                  f=sorted(r7_found.get(d["id"], []), key=lambda f: -SEV_RANK.get(f[1], 0)))
-        for t in RG2_OF_RG7.get(d["doc_type"], ()):
+        types = RG2_OF_RG7.get(d["doc_type"], ())
+        if d["doc_type"] in (23, 24, 25, 26):
+            at = uploaded(d["uploaded_at"])
+            starts = round_starts.get((d["parent"], d["station_key"]), {})
+            bound = bind_repeat_round(at, starts)
+            types = (bound,) if bound is not None else ()
+        for t in types:
             r7.setdefault((d["parent"], d["station_key"], t), []).append(x)
     groups: dict[tuple, list] = {}
     for d in docs:  # a NULL station_key cannot be grouped: the document stands alone
@@ -196,11 +236,23 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         row["rf"] = bool(main["active"]) and bool(found.get(main["id"]))
         row["todo"] = row["rf"] and row["rv"] is None
         rows.append(row)
+    docs_by_url = {d["url"]: d for d in docs}
+    for row in rows:
+        for version in (row, *row["v"]):
+            source = docs_by_url.get(version["u"])
+            value = classifications.get(source["id"] if source is not None else None,
+                                        {"kind": "uncertain", "evidence": "classification pending"})
+            override = overrides.get(version["u"]) == "confirm_rg2"
+            kind = "rg2" if override else value["kind"]
+            status = {"rg2": "confirmed_rg2", "rg7": "quarantined_rg7",
+                      "other": "quarantined_other", "uncertain": "pending"}[kind]
+            version["classification"] = {**value, "kind": kind, "override": override,
+                                           "status": status}
     try:
         tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
                             cache=None if cache is None else cache.setdefault("tally", {}),
                             docs=docs, arows=arows, expected_rows_cache=expected_rows_cache,
-                            include_station_results=True)
+                            include_station_results=True, report_json=report_json)
     except Exception:
         log.exception("tally could not be built")
         tally = None
@@ -212,18 +264,39 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         log.warning("operator station coordinates unavailable", exc_info=True)
     annulled = {x["id"]: {"rik": x["rik"]} for x in (tally or {}).get("annulled", [])}
     undetermined = {x["id"]: {"rik": x["rik"]} for x in (tally or {}).get("undetermined", [])}
+    selected_ids = set((tally or {}).get("selected_ids", []))
+    decision_warnings: dict[int, list[dict]] = {}
+    for warning in (tally or {}).get("decision_warnings", []):
+        decision_warnings.setdefault(warning["id"], []).append(
+            {k: warning[k] for k in ("label", "rik")})
+    decision_notices: dict[int, list[dict]] = {}
+    for notice in (tally or {}).get("decision_notices", []):
+        decision_notices.setdefault(notice["id"], []).append(
+            {k: notice[k] for k in ("label", "rik")})
     rec = {x["id"]: {k: x[k] for k in ("status", "rules", "details", "gap", "result")}
            for x in (tally or {}).pop("reconciliation", [])}
     for row in rows:
-        reason = ("tally data unavailable" if row["correctable"]
-                  else "not part of the first-round tally")
-        included = False if row["correctable"] else None
+        cstatus = row["classification"]["status"]
+        row["tally_state"] = ("selected" if row["id"] in selected_ids else
+                              "quarantined" if cstatus.startswith("quarantined_") else
+                              "pending" if cstatus == "pending" else "superseded")
+        row["correctable"] = row["id"] in rec and row["classification"]["status"] == "confirmed_rg2"
+        if row["correctable"]:
+            reason, included = "tally data unavailable", False
+        else:
+            reason = {"quarantined_rg7": "quarantined: likely mislabeled RG-7",
+                      "quarantined_other": "quarantined: not an RG-2",
+                      "pending": "pending document classification"}.get(
+                          row["classification"]["status"], "superseded by repeat vote")
+            included = None
         row["rec"] = rec.get(row["id"], {"status": "unavailable", "rules": [],
                                           "details": [reason], "gap": 0,
                                           "result": {
                                               "corrected": {"included": included, "reason": reason},
                                               "filed": {"included": included, "reason": reason},
                                           }})
+        row["rec"]["decision_warnings"] = decision_warnings.get(row["id"], [])
+        row["rec"]["decision_notices"] = decision_notices.get(row["id"], [])
         row["rec"]["annulled"] = annulled.get(row["id"])
         row["rec"]["undetermined"] = undetermined.get(row["id"])
     return {"db": store.name, "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
@@ -253,6 +326,16 @@ def _write_pair(out_dir: Path, name: str, glob: str, data) -> None:
     blob = _json(data)
     _atomic(out_dir / f"{name}.json", blob)
     _atomic(out_dir / f"{name}.js", f"window.{glob} = {blob};\n")
+
+
+def _data_meta(data: dict) -> dict:
+    corrections = {}
+    for row in data["rows"]:
+        for version in [row, *row["v"]]:
+            correction = version.get("oc")
+            if correction and correction.get("revision") is not None:
+                corrections[version["u"]] = correction["revision"]
+    return {"built": data["built"], "corrections": corrections}
 
 
 def _clean(out_dir: Path) -> None:
@@ -309,6 +392,7 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
     if Path(out_path).name != "index.html":
         _atomic(Path(out_path), (STATIC / "index.html").read_bytes())
     _write_pair(out_dir, "data", "RG2_DATA", data)
+    _atomic(out_dir / "data-meta.json", _json(_data_meta(data)))
     if with_status:
         write_status(store, out_path, parent, cache_dir=cache_dir)
     log.info("browse page built: %d form(s), %d second opinion(s); data %.2f s, total %.2f s",

@@ -35,6 +35,7 @@ CREATE INDEX IF NOT EXISTS analyses_parent_cost ON analyses(parent, cost_usd);
 CREATE INDEX IF NOT EXISTS events_parent_kind ON events(parent, kind);
 CREATE INDEX IF NOT EXISTS reviews_url ON reviews(url, id);
 CREATE INDEX IF NOT EXISTS operator_corrections_url ON operator_corrections(url, id);
+CREATE INDEX IF NOT EXISTS classification_overrides_url ON classification_overrides(url, id);
 """  # after the migrations: older DBs lack some of these columns until then
 
 SCHEMA = """
@@ -81,6 +82,9 @@ CREATE TABLE IF NOT EXISTS operator_corrections(
     id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, url TEXT NOT NULL,
     action TEXT NOT NULL, snapshot_json TEXT, reason TEXT NOT NULL,
     source_token TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS classification_overrides(
+    id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, url TEXT NOT NULL,
+    action TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS publications(
     id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE, document_id INTEGER NOT NULL, parent TEXT NOT NULL,
     summary TEXT NOT NULL, summary_sha256 TEXT NOT NULL, staged_pdf_path TEXT NOT NULL,
@@ -127,6 +131,29 @@ def _previous_url(details_json: str | None) -> str | None:
 def _doc(row) -> Doc:
     return Doc(row["municipality"], row["station_no"], row["station_name"], row["label"],
                row["doc_type"], row["url"], row["uploaded_at"])
+
+
+def _selected_rg2_urls(rows) -> set[str]:
+    eligible = []
+    for row in rows:
+        if row["class_override"] == "confirm_rg2":
+            eligible.append(row)
+            continue
+        if row["result_json"] is None:
+            if row["doc_type"] == 6:
+                eligible.append(row)
+            continue
+        try:
+            if json.loads(row["result_json"])["document_classification"]["kind"] == "rg2":
+                eligible.append(row)
+        except (KeyError, TypeError, ValueError):
+            pass
+    ranks = {6: 0, 10: 1, 15: 2, 16: 3}
+    groups = {}
+    for row in eligible:
+        groups.setdefault(row["station_key"] if row["station_key"] is not None else ("id", row["id"]), []).append(row)
+    return {max(group, key=lambda d: (ranks[d["doc_type"]], d["uploaded_at"] or "", d["id"]))["url"]
+            for group in groups.values()}
 
 
 class Store:
@@ -187,6 +214,59 @@ class Store:
         with self._lock, self._db:
             return self._db.execute(sql, args)
 
+    def add_classification_override(self, url: str, action: str) -> sqlite3.Row | None:
+        if action not in ("confirm_rg2", "revoke"):
+            raise ValueError("classification action must be confirm_rg2 or revoke")
+        with self._lock, self._db:
+            doc = self._db.execute("SELECT id,doc_type FROM documents WHERE url=?", (url,)).fetchone()
+            if doc is None:
+                return None
+            if doc["doc_type"] not in ANALYSED_TYPES:
+                raise ValueError("a RIK-listed RG-2 document is required")
+            cur = self._db.execute(
+                "INSERT INTO classification_overrides(document_id,url,action,created_at) "
+                "VALUES(?,?,?,?)", (doc["id"], url, action, _now()))
+            return self._db.execute("SELECT * FROM classification_overrides WHERE id=?",
+                                    (cur.lastrowid,)).fetchone()
+
+    def latest_classification_overrides(self, parent: str | None = None) -> dict[str, str]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT o.url,o.action FROM classification_overrides o "
+                "JOIN documents d ON d.id=o.document_id WHERE "
+                + ("d.parent=? AND " if parent is not None else "")
+                + "o.id=(SELECT MAX(x.id) FROM classification_overrides x WHERE x.url=o.url)",
+                (() if parent is None else (parent,))).fetchall()
+        return {r["url"]: r["action"] for r in rows}
+
+    def selected_rg2_url(self, parent: str, station_key: str, model: str,
+                         prompt_version: str) -> str | None:
+        """Highest legitimate active RG-2 round for a station, using current content classifications."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT d.*,a.result_json,(SELECT o.action FROM classification_overrides o "
+                "WHERE o.url=d.url ORDER BY o.id DESC LIMIT 1) AS class_override "
+                "FROM documents d LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x "
+                "WHERE x.document_id=d.id AND x.model=? AND x.prompt_version=? AND x.status='done' "
+                "AND x.result_json IS NOT NULL ORDER BY x.id DESC LIMIT 1) "
+                "WHERE d.parent=? AND d.station_key=? AND d.active=1 AND d.doc_type IN (6,10,15,16)",
+                (model, prompt_version, parent, station_key)).fetchall()
+        selected = _selected_rg2_urls(rows)
+        return next(iter(selected), None)
+
+    def selected_rg2_urls(self, parent: str, model: str, prompt_version: str) -> set[str]:
+        """Selected legitimate active RG-2 URL for every station in an election."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT d.*,a.result_json,(SELECT o.action FROM classification_overrides o "
+                "WHERE o.url=d.url ORDER BY o.id DESC LIMIT 1) AS class_override "
+                "FROM documents d LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x "
+                "WHERE x.document_id=d.id AND x.model=? AND x.prompt_version=? AND x.status='done' "
+                "AND x.result_json IS NOT NULL ORDER BY x.id DESC LIMIT 1) "
+                "WHERE d.parent=? AND d.active=1 AND d.doc_type IN (6,10,15,16)",
+                (model, prompt_version, parent)).fetchall()
+        return _selected_rg2_urls(rows)
+
     def upsert_election(self, e: Election) -> None:
         self._write(
             "INSERT INTO elections(parent, round, election_type, title, url) VALUES(?,?,?,?,?) "
@@ -223,6 +303,13 @@ class Store:
             return self._db.execute(
                 "SELECT * FROM documents WHERE parent=? AND active=1 AND doc_type=8 ORDER BY id",
                 (parent,)).fetchall()
+
+    def active_decisions(self, parent: str, types: tuple[int, ...]) -> list[sqlite3.Row]:
+        """Active decision documents of the requested RIK types."""
+        with self._lock:
+            return self._db.execute(
+                f"SELECT * FROM documents WHERE parent=? AND active=1 AND doc_type IN "
+                f"({','.join('?' * len(types))}) ORDER BY id", (parent, *types)).fetchall()
 
     def add_operator_correction(self, url: str, action: str, snapshot: dict | None,
                                 reason: str, source_token: str, expected_revision=...) -> sqlite3.Row | None:

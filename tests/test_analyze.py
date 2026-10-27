@@ -346,7 +346,7 @@ def test_prompt_distinguishes_slashes_from_ones_before_names():
     assert para in analyze.PROMPT
     assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
     from rg2watch.pipeline import PROMPT_VERSION
-    assert PROMPT_VERSION == "v9"
+    assert PROMPT_VERSION == "v10"
 
 
 def _priced(model, resp_model=None, **cfg):

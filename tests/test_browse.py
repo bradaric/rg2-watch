@@ -108,25 +108,56 @@ def test_pdf_link_only_when_cached(tmp_path):
     assert rows_of(out)[0]["pdf"] == hashlib.sha256(d.url.encode()).hexdigest()
 
 
-def test_only_first_round_rg2_rows_offer_operator_corrections(tmp_path):
+def test_selected_repeat_rg2_offers_operator_corrections(tmp_path):
     s = store()
-    add(s, doc(BASE + "/e/first.pdf", no="1", dt=6))
-    add(s, doc(BASE + "/e/repeat.pdf", no="2", dt=10))
+    first = doc(BASE + "/e/first.pdf", no="1", dt=6)
+    repeat = doc(BASE + "/e/repeat.pdf", no="1", dt=10, up="2026-10-20T20:15")
+    add(s, first)
+    add(s, repeat)
+    model = "claude-sonnet-5-5"
+    for d in (first, repeat):
+        s.save_analysis(d.url, AnalysisResult(clean_report(), 0, 0, 0, model, "stop"),
+                        PROMPT_VERSION, parent="adhoc")
     out = tmp_path / "index.html"
 
-    build_page(s, out, tmp_path / "pdfs")
+    build_page(s, out, tmp_path / "pdfs", cfg=Config(model=model))
 
-    by_no = {r["no"]: r for r in rows_of(out)}
-    assert by_no["1"]["correctable"] is True
-    assert by_no["2"]["correctable"] is False
-    assert by_no["2"]["doc_type"] == 10 and by_no["2"]["doc_type_label"] == "RG-2-R"
-    assert by_no["2"]["rec"]["result"] == {
-        "corrected": {"included": None, "reason": "not part of the first-round tally"},
-        "filed": {"included": None, "reason": "not part of the first-round tally"},
+    by_type = {r["doc_type"]: r for r in rows_of(out)}
+    assert by_type[6]["correctable"] is False
+    assert by_type[6]["tally_state"] == "superseded"
+    assert by_type[10]["correctable"] is True
+    assert by_type[10]["tally_state"] == "selected"
+    assert by_type[10]["doc_type_label"] == "RG-2-R"
+    assert by_type[6]["rec"]["result"] == {
+        "corrected": {"included": None, "reason": "superseded by repeat vote"},
+        "filed": {"included": None, "reason": "superseded by repeat vote"},
     }
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     correction_box = html[html.index("function correctionBox("):html.index("function reconciliationEl(")]
     assert 'v.ast === "done" && v.correctable' in correction_box
+
+
+def test_browse_exposes_quarantined_content_classification(tmp_path):
+    s = store()
+    d = doc(BASE + "/e/mislabeled.pdf", no="1", dt=15)
+    add(s, d)
+    rep = clean_report()
+    rep["document_classification"] = {"kind": "rg7", "evidence": "typed correction decision"}
+    s.save_analysis(d.url, AnalysisResult(rep, 0, 0, 0, M := "claude-sonnet-5-5", "stop"),
+                    PROMPT_VERSION, parent="adhoc")
+
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs", cfg=Config(model=M))
+
+    (row,) = rows_of(out)
+    assert row["classification"] == {
+        "kind": "rg7", "evidence": "typed correction decision", "override": False,
+        "status": "quarantined_rg7",
+    }
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "function classificationBox(" in html
+    assert 'fetch("classification"' in html
+    assert "Confirm as RG-2" in html and "Revoke RG-2 confirmation" in html
 
 
 def test_result_inclusion_analysis_status_filter_and_models_column_are_present():
@@ -277,6 +308,17 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
     assert '.stationmarginfill{display:block;height:100%;background:var(--bar)' in html
 
 
+def test_collapsed_station_results_defer_card_rendering_and_initial_tally_renders_once():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    station = html[html.index("function renderStationResults("):html.index("function renderHero(")]
+    assert station.index("if (!section.open)") < station.index("let records = stations.map")
+    assert '$("stationresults").addEventListener("toggle"' in station
+
+    apply = html[html.index("function applyData("):html.index("// ---- results")]
+    assert apply.count("renderTally();") == 1
+    assert "const first = !table;" in apply
+
+
 def test_forms_table_renders_settlement_on_a_small_separate_line():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "function stationCellHtml" in html
@@ -379,6 +421,20 @@ def test_script_close_tag_escaped_in_utf8_files(tmp_path):
         raw = (tmp_path / name).read_bytes()
         assert "Ћ".encode() in raw and b"</script>" not in raw and b"<!--" not in raw
     assert rows_of(out)[0]["muni"] == "</script><b>x"
+
+
+def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
+    s = store()
+    add(s, doc(BASE + "/e/a.pdf"))
+    out = tmp_path / "index.html"
+
+    build_page(s, out, tmp_path / "pdfs")
+
+    data = json.loads((tmp_path / "data.json").read_text(encoding="utf-8"))
+    meta_path = tmp_path / "data-meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta == {"built": data["built"], "corrections": {}}
+    assert meta_path.stat().st_size < 200
 
 
 def test_atomic_write_leaves_no_temp_and_keeps_old_on_failure(tmp_path, monkeypatch):

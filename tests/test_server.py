@@ -1,6 +1,7 @@
 import gzip
 import hashlib
 import http.client
+import json
 import socket
 
 import pytest
@@ -18,6 +19,7 @@ def srv(tmp_path_factory):
     cache.mkdir()
     (out / "index.html").write_text("<html>page</html>")
     (out / "data.json").write_text('{"rows": []}')
+    (out / "data-meta.json").write_text('{"built":"now","corrections":{}}')
     (out / "status.js").write_text("window.RG2_STATUS = {};")
     (out / "status.json").write_text("{}")
     (out / "official-results.json").write_text('{"lists": []}')
@@ -45,12 +47,43 @@ def req(srv, path, method="GET", host=None, headers=None):
     return r.status, r.getheader("Content-Type"), body, r
 
 
+def classification_post(srv, body, origin=None):
+    host = f"127.0.0.1:{srv.server_port}"
+    raw = json.dumps(body).encode()
+    headers = {"Host": host, "Origin": origin or f"http://{host}",
+               "Sec-Fetch-Site": "same-origin", "Content-Type": "application/json",
+               "X-RG2W": "1"}
+    c = http.client.HTTPConnection("127.0.0.1", srv.server_port)
+    c.request("POST", "/classification", body=raw, headers=headers)
+    r = c.getresponse()
+    result = r.status, json.loads(r.read())
+    c.close()
+    return result
+
+
+def test_classification_endpoint_is_guarded_and_exact(tmp_path):
+    calls = []
+    server = start_server(tmp_path, tmp_path, 0,
+                          classification_api=lambda url, action: calls.append((url, action)) or {"ok": True})
+    try:
+        assert classification_post(server, {"url": "https://x/doc.pdf",
+                                            "action": "confirm_rg2"}) == (200, {"ok": True})
+        assert calls == [("https://x/doc.pdf", "confirm_rg2")]
+        assert classification_post(server, {"url": "https://x/doc.pdf", "action": "revoke"},
+                                   "http://evil.example")[0] == 403
+        assert classification_post(server, {"url": "https://x/doc.pdf", "action": "other"})[0] == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_serves_allow_listed_files(srv):
     s, ct, body, r = req(srv, "/")
     assert s == 200 and body == b"<html>page</html>" and ct.startswith("text/html")
     assert "default-src 'self'" in r.getheader("Content-Security-Policy")
     assert req(srv, "/index.html?t=1")[0] == 200
     assert req(srv, "/data.json")[:2] == (200, "application/json")
+    assert req(srv, "/data-meta.json")[:2] == (200, "application/json")
     assert req(srv, "/official-results.json")[:2] == (200, "application/json")
     s, ct, body, r = req(srv, f"/pdfs/{H}.pdf")
     assert (s, ct, body) == (200, "application/pdf", b"%PDF-1.4 body")

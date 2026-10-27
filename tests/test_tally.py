@@ -70,6 +70,7 @@ def test_tally_exposes_per_station_results_for_operator_drilldown():
 
     assert result["station_results"] == [{
         "id": result["station_results"][0]["id"], "m": "Alpha", "no": "12", "name": "ОШ",
+        "source_round": "original",
         "annulled": None, "undetermined": None,
         "corrected": {"clean": True, "included": True, "reason": None,
                       "registered": 1000, "voted": 800, "ballots_in_box": 800,
@@ -189,6 +190,109 @@ def test_rg9_takes_display_precedence_when_rg8_and_rg9_are_both_active():
     station = result["station_results"][0]
     assert station["undetermined"] is not None and station["annulled"] is not None
     assert station["corrected"]["reason"] == "annulled by RG-9"
+
+
+def test_repeat_annulment_does_not_leak_into_a_later_repeat_round():
+    s = store()
+    form(s, 12, clean_report())
+    repeat_i = doc(BASE + "/e/repeat-I.pdf", muni="Alpha", no="12", dt=10,
+                   up="2026-10-20T20:00")
+    add(s, repeat_i)
+    put(s, repeat_i, clean_report())
+    add(s, doc(BASE + "/e/repeat-I-rg9.pdf", muni="Alpha", no="12", dt=28,
+               up="2026-10-20T22:00"))
+    repeat_ii = doc(BASE + "/e/repeat-II.pdf", muni="Alpha", no="12", dt=15,
+                    up="2026-10-21T20:00")
+    add(s, repeat_ii)
+    put(s, repeat_ii, clean_report())
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["annulled"] == 0
+    assert result["overall"]["all"]["registered"] == 1000
+    assert result["decision_notices"] == [{
+        "id": result["station_results"][0]["id"], "m": "Alpha", "no": "12",
+        "label": "RG-9-R belongs to superseded repeat vote I",
+        "rik": BASE + "/e/repeat-I-rg9.pdf",
+    }]
+    assert result["station_results"][0]["annulled"] is None
+
+
+def test_repeat_annulment_after_selected_repeat_excludes_it():
+    s = store()
+    repeat_ii = doc(BASE + "/e/repeat-II.pdf", muni="Alpha", no="12", dt=15,
+                    up="2026-10-21T20:00")
+    add(s, repeat_ii)
+    put(s, repeat_ii, clean_report())
+    add(s, doc(BASE + "/e/repeat-II-rg9.pdf", muni="Alpha", no="12", dt=28,
+               up="2026-10-21T22:00"))
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["annulled"] == 1
+    assert result["overall"]["all"]["registered"] == 0
+    assert result["station_results"][0]["annulled"]["rik"].endswith("repeat-II-rg9.pdf")
+
+
+def test_first_round_decision_gets_no_repeat_round_warning():
+    s = store()
+    form(s, 12, clean_report())
+    add(s, doc(BASE + "/e/original-rg9.pdf", muni="Alpha", no="12", dt=9,
+               up="2026-10-19T22:00"))
+    repeat_ii = doc(BASE + "/e/repeat-II.pdf", muni="Alpha", no="12", dt=15,
+                    up="2026-10-21T20:00")
+    add(s, repeat_ii)
+    put(s, repeat_ii, clean_report())
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["annulled"] == 0
+    assert result["decision_warnings"] == []
+    assert result["decision_notices"] == []
+
+
+@pytest.mark.parametrize("decision_time", ["2026-10-21T20:00", "not-a-time", None])
+def test_ambiguous_repeat_decision_time_is_not_applied(decision_time):
+    s = store()
+    repeat_i = doc(BASE + "/e/repeat-I.pdf", muni="Alpha", no="12", dt=10,
+                   up="2026-10-20T20:00")
+    add(s, repeat_i)
+    put(s, repeat_i, clean_report())
+    repeat_ii = doc(BASE + "/e/repeat-II.pdf", muni="Alpha", no="12", dt=15,
+                    up="2026-10-21T20:00")
+    add(s, repeat_ii)
+    put(s, repeat_ii, clean_report())
+    add(s, doc(BASE + "/e/ambiguous-rg9.pdf", muni="Alpha", no="12", dt=28,
+               up=decision_time))
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["annulled"] == 0
+    assert result["overall"]["all"]["registered"] == 1000
+    assert result["decision_warnings"] == [{
+        "id": result["station_results"][0]["id"], "m": "Alpha", "no": "12",
+        "label": "RG-9-R round ambiguous", "rik": BASE + "/e/ambiguous-rg9.pdf",
+    }]
+
+
+def test_same_round_replacement_keeps_decision_bound_to_that_round():
+    s = store()
+    old = doc(BASE + "/e/repeat-II-old.pdf", muni="Alpha", no="12", dt=15,
+              up="2026-10-21T20:00")
+    add(s, old)
+    put(s, old, clean_report())
+    add(s, doc(BASE + "/e/repeat-II-rg9.pdf", muni="Alpha", no="12", dt=28,
+               up="2026-10-21T21:00"))
+    replacement = doc(BASE + "/e/repeat-II-new.pdf", muni="Alpha", no="12", dt=15,
+                      up="2026-10-21T22:00")
+    add(s, replacement, "replaced", old.url)
+    put(s, replacement, clean_report())
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["annulled"] == 1
+    assert result["station_results"][0]["id"] == next(
+        r["id"] for r in s.browse_rows(P)[0] if r["url"] == replacement.url)
 
 
 def test_current_escalated_form_is_held_from_every_tally_view():
@@ -356,12 +460,70 @@ def test_forms_without_watch_model_analysis_are_not_counted():
     assert t["overall"]["counted"] == 0 and t["overall"]["unanalysed"] == 2
 
 
-def test_removed_and_repeat_vote_forms_are_left_out():
+def test_removed_form_is_left_out():
     s = store()
     d = form(s, 12, clean_report())
     s.apply_events(P, s.start_sweep(P, "t"), [Event("removed", d)])
-    form(s, 13, clean_report(), dt=10)  # repeat vote
     assert tally(s)["overall"]["counted"] == 0
+
+
+def test_highest_repeat_vote_form_replaces_original_station_result():
+    s = store()
+    form(s, 12, clean_report())
+    repeat = doc(BASE + "/e/repeat-II.pdf", muni="Alpha", no="12", dt=15,
+                 up="2026-10-20T20:15")
+    add(s, repeat)
+    put(s, repeat, report(registered=nf(500), voted=nf(400), ballots_in_box=nf(400),
+                          invalid=nf(10), valid=nf(390),
+                          list_votes=[{"row": 1, "field": nf(300)},
+                                      {"row": 2, "field": nf(90)}]))
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["counted"] == 1
+    assert result["overall"]["all"]["registered"] == 500
+    assert result["station_results"][0]["source_round"] == "repeat_ii"
+    assert result["station_results"][0]["id"] == next(
+        r["id"] for r in s.browse_rows(P)[0] if r["url"] == repeat.url)
+
+
+@pytest.mark.parametrize("kind", ["rg7", "other", "uncertain"])
+def test_non_rg2_repeat_does_not_supersede_legitimate_original(kind):
+    s = store()
+    original = form(s, 12, clean_report())
+    repeat = doc(BASE + f"/e/{kind}.pdf", muni="Alpha", no="12", dt=15,
+                 up="2026-10-20T20:15")
+    add(s, repeat)
+    rep = report(registered=nf(500), voted=nf(400), ballots_in_box=nf(400),
+                 invalid=nf(10), valid=nf(390),
+                 list_votes=[{"row": 1, "field": nf(300)}, {"row": 2, "field": nf(90)}])
+    rep["document_classification"] = {"kind": kind, "evidence": "not an RG-2 form"}
+    put(s, repeat, rep)
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["all"]["registered"] == 1000
+    assert result["station_results"][0]["id"] == next(
+        r["id"] for r in s.browse_rows(P)[0] if r["url"] == original.url)
+
+
+def test_exact_url_override_can_confirm_and_revoke_quarantined_repeat():
+    s = store()
+    form(s, 12, clean_report())
+    repeat = doc(BASE + "/e/mislabeled.pdf", muni="Alpha", no="12", dt=15,
+                 up="2026-10-20T20:15")
+    add(s, repeat)
+    rep = report(registered=nf(500), voted=nf(400), ballots_in_box=nf(400),
+                 invalid=nf(10), valid=nf(390),
+                 list_votes=[{"row": 1, "field": nf(300)}, {"row": 2, "field": nf(90)}])
+    rep["document_classification"] = {"kind": "rg7", "evidence": "typed correction decision"}
+    put(s, repeat, rep)
+
+    s.add_classification_override(repeat.url, "confirm_rg2")
+    assert tally(s)["overall"]["all"]["registered"] == 500
+
+    s.add_classification_override(repeat.url, "revoke")
+    assert tally(s)["overall"]["all"]["registered"] == 1000
 
 
 def test_per_municipality_coverage_and_unknown_municipality():
@@ -438,6 +600,7 @@ def test_page_csv_is_formula_safe_and_labelled():
                   "Corrected-only eligible", "Filed-only eligible"):
         assert label in html
     assert "invalid counts are limited to forms with reconciled valid/list totals" in html
+    assert 'SOURCE_ROUND_LABEL = {original: "original RG-2"' in html
 
 
 def test_cli_tally_prints_all_then_clean(tmp_path, capsys):
@@ -990,6 +1153,7 @@ def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_
 const assert = require("assert");
 const els = {};
 function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "", style: {}, children: [],
+  listeners: {}, addEventListener(type, handler) { this.listeners[type] = handler; },
   classList: {remove() {}, add() {}, toggle() {}}, append(...x) { this.children.push(...x); },
   replaceChildren(...x) { this.children = x; }, setAttribute(name, value) { this[name] = value; },
   get options() { return this.children; }}; }
@@ -1348,10 +1512,13 @@ T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ", settle
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [400, 380]},
   filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [390, 390]}}];
 D.rows = [{id: 9, u: "u9", rv: {v: "escalate", n: "Проверити потписе"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
-els.stationbars.value = "2";
+$("stationbars").value = "2";
 renderHero();
 assert.equal(els.stationresults.hidden, false);
 assert.equal(els.stationcount.textContent, "1 записник");
+assert.equal(els.stationlist.children.length, 0, "collapsed station results must not render cards");
+els.stationresults.open = true;
+els.stationresults.listeners.toggle();
 let stationCard = els.stationlist.children[0];
 assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 · СЕЊЕ — ОШ"));
 stationCard.open = true; stationCard.ontoggle();

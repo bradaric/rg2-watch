@@ -14,13 +14,15 @@ Each database has its own page folder, `<db dir>/<db stem>/` (`data/election-662
 watching (same port fallback, prints the URL). The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed allow-list
 (`index.html`, `status.json`, `data.json`, `reviews.json` (live verdicts), the vendored libraries, `pdfs/<sha256>.pdf`; the `.js` twins are not served, and cross-site requests are refused); the DB,
 `.env` and everything else are 404. No free port: a warning, and the watcher carries on. Writes are
-limited to `POST /review` and the explicit case preparation/publication routes described in [Review and sharing](review-and-sharing.md#public-case-handoff-google-drive-and-viber-copy). They
+limited to `POST /review`, audited numeric-correction and document-classification routes,
+and the explicit case preparation/publication routes described in [Review and sharing](review-and-sharing.md#public-case-handoff-google-drive-and-viber-copy). They
 are accepted only from the page itself - Host
 127.0.0.1/localhost on the server's port, `Sec-Fetch-Site: same-origin` (or no such header and an
 `Origin` equal to the server's), `Content-Type: application/json`, header `X-RG2W: 1` (a cross-site
-form or fetch cannot send it without a preflight, which is never answered), body at most 4 KB, a
-stored document URL, verdict `ok`/`escalate`/`unsure`, note at most 500 characters; anything else is
-403/400 and nothing is written.
+form or fetch cannot send it without a preflight, which is never answered), a bounded JSON body and
+an exact stored document URL. Classification accepts only confirm-as-RG-2 or revocation for a
+RIK-listed RG-2 URL; review accepts verdict `ok`/`escalate`/`unsure` and a note of at most 500
+characters. Anything else is 403/400 and nothing is written.
 
 ## Politeness
 
