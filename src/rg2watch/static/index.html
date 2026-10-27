@@ -392,13 +392,14 @@ stroke-width:2.5;
 <div id="scopefilters" class="filtergroup" role="group" aria-labelledby="scopetitle">
 <span id="scopetitle" class="filtertitle">Scope</span>
 <input id="q" type="search" placeholder="search">
-<select id="m"></select><select id="e"></select><select id="mod"></select>
+<select id="m"></select><select id="e"></select><label>document type <select id="dt"><option value="">all document types</option></select></label><select id="mod"></select>
 </div>
 <div id="reviewfilters" class="filtergroup" role="group" aria-labelledby="reviewtitle">
 <span id="reviewtitle" class="filtertitle">Review filters</span>
 <label>review <select id="rv"><option value="">any</option><option value="todo">to review</option><option value="escalate">escalated</option><option value="unsure">unsure</option><option value="ok">ok</option></select></label>
 <label>analysis status <select id="ast"><option value="">any</option><option value="pending">pending</option><option value="done">done</option><option value="failed">failed</option><option value="off">off</option></select></label>
 <label>result inclusion <select id="ri"><option value="">any</option><option value="corrected">not counted with corrections</option><option value="filed">not counted as filed</option></select></label>
+<label>annulment <select id="an"><option value="">any</option><option value="annulled">annulled by RG-9</option><option value="not">not annulled</option></select></label>
 <label>number check <select id="nc"><option value="">any</option><option value="ok">reconcile</option><option value="fail">any failure</option><option value="gap">turnout gap</option><option value="A1">A1</option><option value="A2">A2</option><option value="A3">A3</option><option value="A4">A4</option><option value="A5">A5</option><option value="unavailable">unavailable</option></select></label>
 <label>min severity <select id="sev"><option value="0">any</option><option value="1">LOW</option><option value="2">MEDIUM</option><option value="3">HIGH</option></select></label>
 <details id="rulesbox"><summary id="rulessum">rules: any</summary><div id="rules"></div></details>
@@ -654,9 +655,9 @@ function tickStatus() {
 // ---- table --------------------------------------------------------------------------------
 let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
-const FILTERS = ["q", "m", "e", "mod", "sev", "rv", "nc", "ri", "ast", "fl", "rp", "rm", "c7", "loc", "dis", "auto"];
+const FILTERS = ["q", "m", "e", "dt", "mod", "sev", "rv", "nc", "ri", "an", "ast", "fl", "rp", "rm", "c7", "loc", "dis", "auto"];
 const FILTER_PRESETS = {
-  "review-filed": {rv: "todo", ri: "filed", ast: "done"},
+  "review-filed": {rv: "todo", ri: "filed", ast: "done", an: "not"},
   "review-v3": {rv: "todo", ast: "done", rules: ["V3"]},
 };
 function presetControls(name, scope) { return {...scope, ...FILTER_PRESETS[name]}; }
@@ -1252,7 +1253,9 @@ function keep(r) {
   const ri = sel("ri");
   if (ri && r.rec.result[ri].included !== false) return false;
   return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
+    && (!sel("dt") || String(r.doc_type) === sel("dt"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
+    && (!sel("an") || (r.rec.annulled ? "annulled" : "not") === sel("an"))
     && (!rs.length || rs.some(x => r._rules.has(x))) && (!sel("ast") || r.ast === sel("ast")) && (!$("fl").checked || r._fl)
     && (!$("rp").checked || r.state === "replaced") && (!$("rm").checked || r.state === "removed")
     && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
@@ -1331,6 +1334,9 @@ function applyData(data) {
   const parents = [...new Set(rows.map(r => r.el))].sort();
   optsOf($("e"), "all elections", parents.map(p => [p, shortTitle(D.elections[p] || p)]));
   $("e").hidden = parents.length < 2;
+  const documentTypes = [...new Map(rows.map(r => [String(r.doc_type), r.doc_type_label])).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]));
+  optsOf($("dt"), "all document types", documentTypes);
   optsOf($("mod"), "all models", [...new Set(rows.flatMap(r => [...r._models]))].sort().map(m => [m, m]));
   $("mod").hidden = $("mod").options.length < 2;
   $("dis").parentElement.hidden = $("mod").hidden;

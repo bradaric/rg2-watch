@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .analyze import ARITHMETIC_PROMPT_VERSION, stored_model
 from .config import Config
-from .models import Doc
+from .models import DOC_TYPES, Doc
 from .operator_corrections import OperatorCorrections
 from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
 from .rules import RULE_INFO, change_text, decision_label, decision_sort_key, evaluate_report
@@ -180,7 +180,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                        arithmetic)
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
-            name=main["station_name"], label=main["label"],
+            name=main["station_name"], label=main["label"], doc_type=main["doc_type"],
+            doc_type_label=DOC_TYPES.get(main["doc_type"], main["label"]),
             state="removed" if not main["active"] else "replaced" if len(ds) > 1 else "current",
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),
             v=[_version(d, found, opinions, cache_dir, base, reviews, corrections, analysed_at,
