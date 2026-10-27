@@ -52,6 +52,7 @@ def test_groups_versions_and_states(tmp_path):
     assert build_page(s, out, tmp_path / "pdfs") == 2
     by_no = {r["no"]: r for r in rows_of(out)}
     assert by_no["1"]["state"] == "replaced" and by_no["1"]["up"] == "2026-10-19T21:00"
+    assert by_no["1"]["doc_type"] == 6 and by_no["1"]["doc_type_label"] == "RG-2"
     assert [v["rik"] for v in by_no["1"]["v"]] == [old.url]
     assert by_no["2"]["state"] == "removed"
 
@@ -103,6 +104,7 @@ def test_only_first_round_rg2_rows_offer_operator_corrections(tmp_path):
     by_no = {r["no"]: r for r in rows_of(out)}
     assert by_no["1"]["correctable"] is True
     assert by_no["2"]["correctable"] is False
+    assert by_no["2"]["doc_type"] == 10 and by_no["2"]["doc_type_label"] == "RG-2-R"
     assert by_no["2"]["rec"]["result"] == {
         "corrected": {"included": None, "reason": "not part of the first-round tally"},
         "filed": {"included": None, "reason": "not part of the first-round tally"},
@@ -119,11 +121,26 @@ def test_result_inclusion_analysis_status_filter_and_models_column_are_present()
     assert ('analysis status <select id="ast"><option value="">any</option>' in html and
             all(f'<option value="{status}">{status}</option>' in html
                 for status in ("pending", "done", "failed", "off")))
-    assert '"nc", "ri", "ast", "fl"' in html
+    assert '"nc", "ri", "an", "ast", "fl"' in html
     assert '(!sel("ast") || r.ast === sel("ast"))' in html
     assert 'title: "Result inclusion"' in html
     assert 'data: "mods", title: "Models", visible: false' in html
     assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
+
+
+def test_document_type_and_annulment_filters_are_in_their_workflow_sections():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    scope = html[html.index('id="scopefilters"'):html.index('id="reviewfilters"')]
+    review = html[html.index('id="reviewfilters"'):html.index('id="morefilters"')]
+    assert 'document type <select id="dt">' in scope
+    assert 'annulment <select id="an">' in review
+    assert '<option value="annulled">annulled by RG-9</option>' in review
+    assert '<option value="not">not annulled</option>' in review
+    assert '"e", "dt", "mod"' in html and '"ri", "an", "ast"' in html
+    assert '(!sel("dt") || String(r.doc_type) === sel("dt"))' in html
+    assert '(!sel("an") || (r.rec.annulled ? "annulled" : "not") === sel("an"))' in html
+    assert 'optsOf($("dt"), "all document types"' in html
 
 
 def test_common_review_filter_presets_preserve_scope_and_auto_refresh_setting():
@@ -139,7 +156,7 @@ def test_common_review_filter_presets_preserve_scope_and_auto_refresh_setting():
 const assert = require("assert");
 {code}
 assert.deepEqual(presetControls("review-filed", {{e: "779676", m: "Alpha", auto: false}}),
-  {{e: "779676", m: "Alpha", auto: false, rv: "todo", ri: "filed", ast: "done"}});
+  {{e: "779676", m: "Alpha", auto: false, rv: "todo", ri: "filed", ast: "done", an: "not"}});
 assert.deepEqual(presetControls("review-v3", {{e: "779676", m: "Alpha", auto: false}}),
   {{e: "779676", m: "Alpha", auto: false, rv: "todo", ast: "done", rules: ["V3"]}});
 """

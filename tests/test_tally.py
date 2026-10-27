@@ -70,12 +70,64 @@ def test_tally_exposes_per_station_results_for_operator_drilldown():
 
     assert result["station_results"] == [{
         "id": result["station_results"][0]["id"], "m": "Alpha", "no": "12", "name": "ОШ",
+        "annulled": None,
         "corrected": {"clean": True, "included": True, "reason": None,
                       "registered": 1000, "voted": 800, "ballots_in_box": 800,
                       "invalid": 20, "valid": 780, "outside_voted": 5,
                       "lists": [400, 380]},
         "filed": None,
     }]
+
+
+def test_active_rg9_annuls_station_and_removes_it_from_every_tally_view(tmp_path):
+    s = store()
+    rg2 = form(s, 12, clean_report())
+    rg9 = doc("/extfile/rg9.pdf", muni="Alpha", no="12", dt=9)
+    add(s, rg9)
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["counted"] == 1
+    assert result["overall"]["clean"] == 0
+    assert result["overall"]["annulled"] == 1
+    assert result["munis"][0]["annulled"] == 1
+    for view in ("all", "cl", "fall", "fcl"):
+        assert result["overall"][view]["registered"] == 0
+        assert result["overall"][view]["valid"] == 0
+        assert result["overall"][view]["lists"] == [0, 0]
+    assert why(result) == {"12": ["annulled by RG-9"]}
+    rec = result["reconciliation"][0]
+    assert rec["result"] == {
+        "corrected": {"included": False, "reason": "annulled by RG-9"},
+        "filed": {"included": False, "reason": "annulled by RG-9"},
+    }
+    station = result["station_results"][0]
+    assert station["corrected"]["included"] is False
+    assert station["corrected"]["clean"] is False
+    assert station["annulled"]["rik"] == BASE + "/extfile/rg9.pdf"
+    assert result["annulled"] == [{"id": station["id"], "m": "Alpha", "no": "12",
+                                    "rik": BASE + "/extfile/rg9.pdf"}]
+    text = format_tally(result)
+    assert "поништена бирачка места (RG-9):" in text
+    assert "Alpha БМ 12: Поништено" in text
+    browse_row = build_data(s, tmp_path, parent=P, cfg=Config(model=M, tally_scope={P: "national"}))["rows"][0]
+    assert browse_row["rec"]["annulled"]["rik"] == BASE + "/extfile/rg9.pdf"
+    s.set_review(rg2.url, "escalate")
+    overlap = tally(s)["overall"]
+    assert (overlap["held"], overlap["annulled"], overlap["held_annulled"]) == (1, 1, 1)
+
+
+def test_removed_rg9_does_not_annul_station():
+    s = store()
+    form(s, 12, clean_report())
+    rg9 = doc(BASE + "/extfile/removed-rg9.pdf", muni="Alpha", no="12", dt=9)
+    add(s, rg9)
+    add(s, rg9, "removed")
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["all"]["registered"] == 1000
+    assert result["station_results"][0]["annulled"] is None
 
 
 def test_current_escalated_form_is_held_from_every_tally_view():
@@ -208,7 +260,7 @@ def test_empty_list_row_counts_as_zero_when_reconciled():
     ex = extract(rep, doc(BASE + "/blank.pdf", no="12"), Config())
     assert ex["l"] == {1: 780, 2: 0}
     assert ex["bad"] == [] and not ex["rec_bad"]
-    assert _contrib(ex, [1, 2])["lists"] == ([780, 0], 780)
+    assert _contrib(ex, [1, 2])["lists"] == ([780, 0], 780, 800)
 
 
 def test_disagreement_between_models_marks_form_and_shows_values():
@@ -474,19 +526,65 @@ def test_all_mode_denominators_are_paired():
     a = tally(s)["overall"]["all"]
     assert a["registered"] == 1000 and a["voted"] == 800 and a["turnout"] == pytest.approx(0.8)
     assert a["lists"] == [400, 380] and a["lists_valid"] == 780
+    assert a["lists_ballots_in_box"] == 800
 
 
-def test_vote_totals_only_include_reconciled_forms_but_turnout_stays_independent():
+def test_list_share_denominator_uses_valid_plus_invalid_when_ballots_in_box_is_unavailable():
+    s = store()
+    form(s, 1, report(ballots_in_box=nf(None, legible=False)))
+
+    totals = tally(s)["overall"]["all"]
+
+    assert totals["lists"] == [400, 380]
+    assert totals["lists_valid"] == 780
+    assert totals["lists_ballots_in_box"] == 800
+    assert totals["ballots_in_box"] == 800
+    result = tally(s)
+    for view in ("corrected", "filed"):
+        text = format_tally(result, view=view)
+        assert "share of ballots in the box for reconciled vote forms" in text
+        assert "400 (50.0%)" in text
+
+
+def test_form_missing_invalid_contributes_no_aggregate_numbers():
+    s = store()
+    form(s, 1, report(invalid=nf(None, legible=False)))
+
+    result = tally(s)
+    totals = result["overall"]["all"]
+
+    assert totals["vote_forms"] == 0
+    assert totals["lists"] == [0, 0]
+    assert totals["lists_ballots_in_box"] == 0
+    assert all(totals[key] == 0 for key in
+               ("registered", "voted", "ballots_in_box", "invalid", "valid", "outside_voted"))
+    assert result["reconciliation"][0]["result"]["corrected"] == {
+        "included": False, "reason": "invalid unavailable for percentage denominator"}
+
+
+def test_cli_list_shares_use_ballots_in_box_in_national_and_municipal_scopes():
+    s = store()
+    form(s, 1, clean_report())
+
+    for cfg in (NAT, muni_cfg()):
+        result = tally(s, cfg=cfg)
+        for view in ("corrected", "filed"):
+            text = format_tally(result, view=view)
+            assert "400 (50.0%)" in text
+            assert "380 (47.5%)" in text
+
+
+def test_incomplete_forms_contribute_no_totals_including_turnout():
     s = store()
     form(s, 1, clean_report())
     form(s, 2, report(valid=nf(770)))
     t = tally(s)
     a = t["overall"]["all"]
-    assert a["voted"] == 1600
+    assert a["registered"] == 1000 and a["voted"] == 800
     assert a["valid"] == a["lists_valid"] == sum(a["lists"]) == 780
     assert a["invalid"] == 20
     assert a["vote_forms"] == 1
-    assert a["withheld_valid"] == 770
+    assert a["withheld_valid"] == 0
     assert t["overall"]["counted"] == 2
     rec = {x["no"]: x["result"] for x in t["reconciliation"]}
     assert rec["1"]["corrected"] == {"included": True, "reason": None}
@@ -496,8 +594,8 @@ def test_vote_totals_only_include_reconciled_forms_but_turnout_stays_independent
     assert any(reason.startswith("arithmetic") and "A3" in reason for reason in why(t)["2"])
     text = format_tally(t)
     assert "1 of 2 selected forms contributed reconciled vote totals" in text
-    assert "770 readable valid votes withheld" in text
-    assert "Unreconciled turnout gap: +800" in text
+    assert "770 readable valid votes withheld" not in text
+    assert "Unreconciled turnout gap: +800" not in text
 
 
 def test_vote_eligibility_edge_cases_and_non_vote_flags():
@@ -511,10 +609,9 @@ def test_vote_eligibility_edge_cases_and_non_vote_flags():
     non_vote_flag = extract({**clean_report(), "confidence": "low"}, doc(BASE + "/nf.pdf"), Config())
 
     assert "withheld_valid" not in _contrib(missing_valid, rows)
-    assert _contrib(unreadable_list, rows)["withheld_valid"] == 780
-    assert _contrib(wrong_rows, rows)["withheld_valid"] == 780
-    assert _contrib(unreadable_invalid, rows)["vote_forms"] == 1
-    assert "invalid" not in _contrib(unreadable_invalid, rows)
+    assert _contrib(unreadable_list, rows) == {}
+    assert _contrib(wrong_rows, rows) == {}
+    assert _contrib(unreadable_invalid, rows) == {}
     assert _contrib(non_vote_flag, rows)["vote_forms"] == 1
 
 
@@ -727,7 +824,9 @@ def test_municipal_unknown_municipality_gets_no_list_totals():
     u = next(m for m in t["munis"] if m["m"] == "(unknown)")
     assert u["nlists"] == 0 and u["names"] == [] and "different ballots" in u["names_note"]
     assert u["fallback_name_indices"] == [] and u["generated_unknown_muni"] is True
-    assert u["counted"] == 1 and u["all"]["valid"] == 0 and u["all"]["withheld_valid"] == 780
+    assert u["counted"] == 1
+    assert all(u["all"][key] == 0 for key in
+               ("registered", "voted", "ballots_in_box", "invalid", "valid", "withheld_valid"))
     assert "lists" not in u["all"] and "lists" not in u["cl"]
     assert "(unknown): warning: municipality unknown" in format_tally(t)
     nat = next(m for m in tally(s)["munis"] if m["m"] == "(unknown)")
@@ -797,6 +896,7 @@ def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_
     assert "OKABE" not in html
     assert 'const RESULT_BAR_COLOR = "var(--bar)"' in html
     assert 'id="stationresults"' in html and "function renderStationResults(" in html
+    assert 'data-station-filter="annulled"' in html
     helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
     hero = html[html.index("const RESULT_BAR_COLOR") : html.index('$("herobtn").onclick')]
     status = html[html.index("function paintHero"):html.index("// ---- table")]
@@ -849,7 +949,7 @@ for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, 
 function totals(valid, lists) {
   const o = {registered: 1000, voted: 100, turnout: .1, ballots_in_box: 100, invalid: 0,
     valid, outside_voted: 0, vote_forms: lists ? 1 : 0, withheld_valid: lists ? 0 : 100,
-    lists: lists || [0, 0], lists_valid: valid};
+    lists: lists || [0, 0], lists_valid: valid, lists_ballots_in_box: lists ? 100 : 0};
   return o;
 }
 function row(correctedLists, filedLists) {
@@ -879,6 +979,7 @@ assert.equal(vrow(r).all.valid, 100);
 let csv = tallyCsv();
 assert.equal(csvValue(csv, "Reconciled valid"), "100");
 assert.equal(csvValue(csv, "Held by escalation"), "0");
+assert.equal(csvValue(csv, "Поништено (RG-9)"), "0");
 assert.equal(csvValue(csv, "1 · Листа А votes"), "60");
 assert.equal(csvValue(csv, "Unreconciled turnout gap (signed)"), "0");
 renderHero();
@@ -890,6 +991,29 @@ assert.equal(slots[0].val.children[1].textContent, "60.0%");
 assert.equal(slots[0].val.children[1].className, "resultpct");
 assert.equal(slots[0].nm.textContent, "Листа А");
 assert.equal(slots[1].nm.textContent, "Листа 2");
+const ballotDenominator = row([400, 380], null);
+for (const key of ["all", "cl"]) Object.assign(ballotDenominator[key],
+  {valid: 780, ballots_in_box: 800, lists_valid: 780, lists_ballots_in_box: 800});
+setData(ballotDenominator); renderHero();
+assert.equal(slots[0].val.children[1].textContent, "50.0%");
+assert.equal(slots[1].val.children[1].textContent, "47.5%");
+assert.equal(csvValue(tallyCsv(), "1 · Листа А %"), "50.0");
+ballotDenominator.all.lists_ballots_in_box = null;
+renderHero();
+assert.equal(slots[0].val.children[0].textContent, "400");
+assert.equal(slots[0].val.children[1].textContent, "-");
+ballotDenominator.all.lists_ballots_in_box = 800;
+const differingDenominators = deltaOf(
+  {...totals(100, [60, 40]), lists_ballots_in_box: 200},
+  {...totals(100, [55, 45]), lists_ballots_in_box: 100});
+assert.equal(differingDenominators.lists[0], 5);
+assert(Math.abs(differingDenominators.sh[0] + .25) < 1e-12);
+const missingPairedDenominator = deltaOf(
+  {...totals(100, [60, 40]), lists_ballots_in_box: null},
+  {...totals(100, [55, 45]), lists_ballots_in_box: 100});
+assert.equal(missingPairedDenominator.lists[0], 5);
+assert.equal(missingPairedDenominator.sh[0], null);
+setData(r); renderHero();
 T.names = ["List 1", "List 2"];
 T.fallback_name_indices = [1];
 renderHero();
@@ -1135,8 +1259,8 @@ renderHero();
 assert.equal(els.hmuni.options.find(o => o.value === "Ћуприја").textContent, "Ћуприја");
 assert(els.herotitle.textContent.startsWith("Ћуприја"));
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
-  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
-  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [390, 390]}}];
 D.rows = [{id: 9, u: "u9", rv: {v: "escalate", n: "Проверити потписе"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
 els.stationbars.value = "2";
 renderHero();
@@ -1151,18 +1275,62 @@ assert.equal(stationWinner.title, "A");
 let stationShares = stationCard.children[0].children.find(x => x.className.startsWith("stationshare"));
 assert.equal(stationShares.className, "stationshare");
 assert.equal(stationShares.children.length, 2);
-assert.equal(stationShares.children[0].children[2].textContent, "51.3%");
+assert.equal(stationShares.children[0].children[2].textContent, "50.0%");
 assert.equal(stationShares.children[1].children[0].textContent, "2");
-assert.equal(stationShares.children[1].children[2].textContent, "48.7%");
+assert.equal(stationShares.children[1].children[2].textContent, "47.5%");
 const stationMarginEl = stationCard.children[0].children.find(x => x.className === "stationmargin visual");
-assert(Math.abs(parseFloat(stationMarginEl.children[0].children[0].style.width) - 20 / 780 * 100) < 1e-9);
-assert.equal(stationMarginEl.children[1].children[0].textContent, "+2.6 п. п.");
+assert(Math.abs(parseFloat(stationMarginEl.children[0].children[0].style.width) - 20 / 800 * 100) < 1e-9);
+assert.equal(stationMarginEl.children[1].children[0].textContent, "+2.5 п. п.");
 assert.equal(stationMarginEl.children[1].children[1].textContent, "+20");
+T.station_results[0].corrected.ballots_in_box = null;
+renderHero();
+let unavailableCard = els.stationlist.children[0];
+let unavailableShares = unavailableCard.children[0].children.find(x => x.className.startsWith("stationshare"));
+assert.equal(unavailableShares.children[0].children[2].textContent, "50.0%");
+T.station_results[0].corrected.invalid = null;
+renderHero();
+unavailableCard = els.stationlist.children[0];
+unavailableShares = unavailableCard.children[0].children.find(x => x.className.startsWith("stationshare"));
+assert.equal(unavailableShares.children[0].children[2].textContent, "—");
+let unavailableMargin = unavailableCard.children[0].children.find(x => x.className === "stationmargin visual");
+assert.equal(unavailableMargin.children[1].children[0].textContent, "—");
+assert.equal(unavailableMargin.children[1].children[1].textContent, "+20");
+T.station_results[0].corrected.lists = [390, 390];
+renderHero();
+unavailableCard = els.stationlist.children[0];
+unavailableMargin = unavailableCard.children[0].children.find(x => x.className === "stationmargin visual");
+assert.equal(unavailableMargin.children[1].children[0].textContent, "—");
+assert.equal(unavailableMargin.children[1].children[1].textContent, "Нерешено");
+T.station_results[0].corrected.ballots_in_box = 800;
+T.station_results[0].corrected.invalid = 20;
+T.station_results[0].corrected.lists = [400, 380];
+renderHero();
+stationCard = els.stationlist.children[0];
 let stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
 let stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
 assert(stationActions, "station status must have a compact actions menu");
 assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "прикажи"]);
 assert.equal(stationActions.menu.hidden, true);
+T.station_results[0].annulled = {rik: "https://example.test/rg9.pdf"};
+T.overall.annulled = T.munis[0].annulled = 1;
+renderHero();
+assert(els["hs-forms-context"].textContent.includes("Поништено: 1 бирачко место (RG-9)"));
+stationCard = els.stationlist.children[0];
+stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
+assert.equal(stationStatusEl.children[0].textContent, "Поништено");
+stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "RG-9", "прикажи"]);
+assert.equal(els["stationfilter-annulled"].textContent, "Поништено 1");
+setStationFilter("annulled");
+assert.equal(els.stationlist.children.length, 1);
+setStationFilter("all");
+const formStatus = documentStatusEl({state: "current", ast: "done",
+  rec: {annulled: {rik: "https://example.test/rg9.pdf"}}});
+assert(formStatus.children.some(x => x.textContent === "Поништено — RG-9"));
+assert.equal(formStatus.children.at(-1).textContent, "RG-9");
+T.station_results[0].annulled = null;
+T.overall.annulled = T.munis[0].annulled = 0;
+renderHero();
 let prevented = 0, stopped = 0;
 stationActions.button.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
 assert.equal(stationActions.menu.hidden, false);
@@ -1210,7 +1378,7 @@ assert.equal(stationReviewEl().textContent, "прихваћен");
 assert.equal(stationReviewEl().dataset.note, "Проверено");
 function sortableStation(id, no, voted, lists) {
   const result = {clean: true, included: false, reason: "test reason", registered: 1000,
-    voted, valid: lists[0] + lists[1], lists};
+    voted, ballots_in_box: lists[0] + lists[1], invalid: 0, valid: lists[0] + lists[1], lists};
   return {id, m: "Ћуприја", no: String(no), name: "БМ " + no, corrected: result, filed: result};
 }
 T.station_results = [
@@ -1294,8 +1462,8 @@ heroMuni = ""; els.stationsort.value = "winner"; renderHero();
 assert.equal(els.sortwinner.hidden, true);
 assert.equal(els.stationsort.value, "station");
 T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
-  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
-  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [390, 390]}}];
 setStationFilter("all");
 els.stationsort.value = "station";
 REV = null; els.tview.value = "corrected";
@@ -1352,7 +1520,7 @@ T.scope = "municipal"; T.names = []; alpha.names = ["A", "B"];
 
 unknown.generated_unknown_muni = true;
 unknown.names = ["List 1", "Стварна листа"]; unknown.fallback_name_indices = [0]; unknown.nlists = 2;
-for (const k of ["all", "cl", "fall", "fcl"]) { unknown[k].lists = [60, 40]; unknown[k].lists_valid = 100; unknown[k].vote_forms = 1; }
+for (const k of ["all", "cl", "fall", "fcl"]) { unknown[k].lists = [60, 40]; unknown[k].lists_valid = 100; unknown[k].lists_ballots_in_box = 100; unknown[k].vote_forms = 1; }
 heroMuni = "(unknown)"; heroPicked = true;
 renderHero();
 assert.equal(els.hmuni.options.find(o => o.value === "(unknown)").textContent, "Непозната општина");

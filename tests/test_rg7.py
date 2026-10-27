@@ -216,7 +216,7 @@ def test_tally_latest_decision_wins_and_table_is_final():
         invalid=nf(20), valid=nf(780), ballots_in_box=nf(800))
     t = tally(s)
     assert (t["overall"]["all"]["invalid"], t["overall"]["all"]["valid"]) == (0, 0)
-    assert t["overall"]["all"]["withheld_valid"] == 782
+    assert t["overall"]["all"]["withheld_valid"] == 0
     assert [d["d"] for d in t["corrected"][0]["rg7"]] == ["20/10/2026", "27/10/2026"]
 
 
@@ -249,7 +249,8 @@ def test_tally_cache_follows_new_decisions():
     add(s, x)
     put(s, x, rg7([("10.4", 780, 700), ("10.3", 20, 100), ("10.2", 800, 800)]), version=RG7_PROMPT_VERSION)
     changed = build_tally(s, c, BP, M, cache=cache)["overall"]["all"]
-    assert changed["valid"] == 0 and changed["withheld_valid"] == 700
+    assert changed["valid"] == 0 and changed["withheld_valid"] == 0
+    assert changed["registered"] == changed["voted"] == 0
 
 
 def test_cli_format_marks_corrected_with_star():
@@ -482,7 +483,7 @@ def test_correction_does_not_rescue_an_illegible_field_unless_the_table_gives_it
     station(s2, clean_report(), [(rg7([("10.4", None, 700)], [("10.4", 700)]), "2026-10-20T10:00:00Z")],
             valid=nf(None, legible=False))
     t2 = tally(s2)
-    assert t2["overall"]["all"]["valid"] == 0 and t2["overall"]["all"]["withheld_valid"] == 700
+    assert t2["overall"]["all"]["valid"] == 0 and t2["overall"]["all"]["withheld_valid"] == 0
     assert [c["rg7"][0]["ch"] for c in t2["corrected"]] == [["10.4 table 700"]]
 
 
@@ -711,6 +712,35 @@ def test_diff_is_like_for_like_stations_joining_a_total_are_counted_separately()
     assert "+500" not in row and "+400" not in row  # not shown as voter deltas
 
 
+def test_paired_list_denominators_use_valid_plus_invalid_when_box_is_unavailable():
+    s = bstore()
+    station(s, clean_report(), no="1")
+    station(s, clean_report(), [(rg7(table=[("ballots_in_box", 800)]),
+                                 "2026-10-20T10:00:00Z")], no="2",
+            ballots_in_box=nf(None, legible=False, mark="empty"))
+
+    paired = tally(s)["overall"]["pair"]["all"]
+
+    assert paired["pair_vote_forms"] == 2
+    assert paired["c"]["lists"] == paired["f"]["lists"] == [800, 760]
+    assert paired["c"]["lists_ballots_in_box"] == 1600
+    assert paired["f"]["lists_ballots_in_box"] == 1600
+
+
+def test_paired_list_denominators_ignore_differing_standalone_box_values():
+    s = bstore()
+    station(s, clean_report(), no="1")
+    station(s, clean_report(), [(rg7([("10.2", 800, 790)]),
+                                 "2026-10-20T10:00:00Z")], no="2")
+
+    paired = tally(s)["overall"]["pair"]["all"]
+
+    assert paired["pair_vote_forms"] == 2
+    assert paired["c"]["lists"] == paired["f"]["lists"] == [800, 760]
+    assert paired["c"]["lists_ballots_in_box"] == 1600
+    assert paired["f"]["lists_ballots_in_box"] == 1600
+
+
 def test_diff_clean_view_status_flip_is_a_station_change_not_a_delta():
     s = bstore()
     station(s, clean_report(), [(rg7([("10.2", 180, 178), ("10.3", 20, 18), ("10.4", 160, 160)]), "2026-10-20T10:00:00Z")],
@@ -730,13 +760,13 @@ def test_rg7_vote_reconciliation_change_is_one_sided_in_paired_difference():
             list_votes=[{"row": 1, "field": nf(400)}, {"row": 2, "field": nf(370)}])
     o = tally(s)["overall"]
     assert o["all"]["valid"] == 780 and o["fall"]["valid"] == 0
-    assert o["fall"]["withheld_valid"] == 780
+    assert o["fall"]["withheld_valid"] == 0
     p = o["pair"]["all"]
     assert (p["pair_selected"], p["pair_vote_forms"], p["pair_not_contributing"]) == (1, 0, 1)
     assert (p["corrected_only_vote_forms"], p["filed_only_vote_forms"]) == (1, 0)
     assert p["c"]["valid"] == p["f"]["valid"] == 0
     assert p["c"]["lists_valid"] == p["f"]["lists_valid"] == 0
-    assert (p["in"], p["out"]) == (1, 1)
+    assert (p["in"], p["out"]) == (1, 0)
     clean = o["pair"]["cl"]
     assert clean["pair_selected"] == clean["pair_not_contributing"] == 0
     text = format_tally(tally(s), view="diff")
@@ -750,7 +780,7 @@ def test_rg7_can_make_corrected_vote_terms_ineligible_while_filed_stays_eligible
     s = bstore()
     station(s, clean_report(), [(rg7([("list:2", 380, 370)]), "2026-10-20T10:00:00Z")])
     o = tally(s)["overall"]
-    assert o["all"]["valid"] == 0 and o["all"]["withheld_valid"] == 780
+    assert o["all"]["valid"] == 0 and o["all"]["withheld_valid"] == 0
     assert o["fall"]["valid"] == o["fall"]["lists_valid"] == 780
     p = o["pair"]["all"]
     assert (p["pair_selected"], p["pair_vote_forms"], p["pair_not_contributing"]) == (1, 0, 1)
@@ -758,16 +788,17 @@ def test_rg7_can_make_corrected_vote_terms_ineligible_while_filed_stays_eligible
     assert p["c"]["valid"] == p["f"]["valid"] == 0
 
 
-def test_paired_invalid_is_omitted_when_unreadable_on_one_side_only():
+def test_unreadable_invalid_makes_that_side_ineligible_for_paired_totals():
     s = bstore()
     station(s, clean_report(), [(rg7(table=[("invalid", 20)]), "2026-10-20T10:00:00Z")],
             invalid=nf(None, legible=False))
     o = tally(s)["overall"]
     assert o["all"]["invalid"] == 20 and o["fall"]["invalid"] == 0
     p = o["pair"]["all"]
-    assert p["pair_vote_forms"] == 1
-    assert p["c"]["valid"] == p["f"]["valid"] == 780
-    assert p["c"]["lists_valid"] == p["f"]["lists_valid"] == 780
+    assert (p["pair_selected"], p["pair_vote_forms"], p["pair_not_contributing"]) == (1, 0, 1)
+    assert (p["corrected_only_vote_forms"], p["filed_only_vote_forms"]) == (1, 0)
+    assert p["c"]["valid"] == p["f"]["valid"] == 0
+    assert p["c"]["lists_valid"] == p["f"]["lists_valid"] == 0
     assert p["c"]["invalid"] == p["f"]["invalid"] == 0
 
 

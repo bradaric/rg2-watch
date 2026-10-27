@@ -13,7 +13,8 @@ from .tally import build_tally
 
 
 TOTAL_KEYS = ("registered", "voted", "turnout", "ballots_in_box", "invalid", "valid",
-              "outside_voted", "vote_forms", "withheld_valid", "lists", "lists_valid")
+              "outside_voted", "vote_forms", "withheld_valid", "lists", "lists_valid",
+              "lists_ballots_in_box")
 REVIEW_KEYS = ("ok", "escalate", "unsure", "undecided")
 RECORDS_TITLE_PREFIX = re.compile(r"^(?:записници|zapisnici)(?:\s*[-–—:]\s*|\s+|$)", re.I)
 SERBIAN_CYRILLIC = "абвгдђежзијклљмнњопрстћуфхцчџш"
@@ -58,6 +59,8 @@ def _public_row(row: dict, flagged: list[dict], verdicts: dict[int, str]) -> dic
         "stations": row["stations"],
         "counted": row["counted"],
         "held": row.get("held", 0),
+        "annulled": row.get("annulled", 0),
+        "held_annulled": row.get("held_annulled", 0),
         "clean": row["clean"],
         "flagged": len({item["id"] for item in flagged}),
         "review": _review_counts(flagged, verdicts),
@@ -76,8 +79,11 @@ def _public_station(station: dict) -> dict:
         "no": station["no"],
         "name": station["name"],
         "included": corrected["included"],
+        "annulled": station["annulled"] is not None,
         "registered": corrected["registered"],
         "voted": corrected["voted"],
+        "ballots_in_box": corrected["ballots_in_box"],
+        "invalid": corrected["invalid"],
         "valid": corrected["valid"],
         "lists": corrected["lists"],
     }
