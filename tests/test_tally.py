@@ -990,6 +990,7 @@ def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_
 const assert = require("assert");
 const els = {};
 function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "", style: {}, children: [],
+  listeners: {}, addEventListener(type, handler) { this.listeners[type] = handler; },
   classList: {remove() {}, add() {}, toggle() {}}, append(...x) { this.children.push(...x); },
   replaceChildren(...x) { this.children = x; }, setAttribute(name, value) { this[name] = value; },
   get options() { return this.children; }}; }
@@ -1348,10 +1349,13 @@ T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ", settle
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [400, 380]},
   filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [390, 390]}}];
 D.rows = [{id: 9, u: "u9", rv: {v: "escalate", n: "Проверити потписе"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
-els.stationbars.value = "2";
+$("stationbars").value = "2";
 renderHero();
 assert.equal(els.stationresults.hidden, false);
 assert.equal(els.stationcount.textContent, "1 записник");
+assert.equal(els.stationlist.children.length, 0, "collapsed station results must not render cards");
+els.stationresults.open = true;
+els.stationresults.listeners.toggle();
 let stationCard = els.stationlist.children[0];
 assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 · СЕЊЕ — ОШ"));
 stationCard.open = true; stationCard.ontoggle();

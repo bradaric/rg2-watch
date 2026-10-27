@@ -1385,9 +1385,11 @@ function applyData(data) {
   $("rulesbox").hidden = !$("rules").children.length;
   rulesSummary();
   T = D.tally;
-  renderTally();
   $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
-  if (!table) { readHash(); initTable(); renderTally(); return; }
+  const first = !table;
+  if (first) { readHash(); initTable(); }
+  renderTally();
+  if (first) return;
   const shown = new Set();
   table.rows().every(function () { if (this.child.isShown()) shown.add(this.data().id); });
   table.clear().rows.add(rows).draw(false);
@@ -1947,6 +1949,15 @@ function renderStationResults() {
     return viewName === "diff" ? station.corrected.clean && filed.clean
       : (viewName === "filed" ? filed : station.corrected).clean;
   });
+  section.hidden = false;
+  if (!section.open) {
+    stationKey = "";
+    list.replaceChildren();
+    $("stationmore").hidden = true;
+    $("stationcount").textContent = num(stations.length) + " " +
+      serbianCount(stations.length, "записник", "записника", "записника");
+    return;
+  }
   const requestedSort = $("stationsort").value || "station", barCount = Number($("stationbars").value) || 1,
     diff = viewName === "diff", incompatibleSort = ["margin-close", "margin-wide", "review"].includes(requestedSort),
     localAll = T.scope === "municipal" && allScope,
@@ -2081,6 +2092,9 @@ function renderStationResults() {
   more.textContent = "Прикажи још (" + num(Math.min(100, matching - shown)) + ")";
   updateStationToggle();
 }
+$("stationresults").addEventListener("toggle", () => {
+  if ($("stationresults").open && T) { stationKey = ""; renderStationResults(); }
+});
 function renderHero() {
   heroMunis();
   const foot = $("herofoot");

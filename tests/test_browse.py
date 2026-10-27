@@ -277,6 +277,17 @@ def test_station_results_are_collapsed_with_compact_controls_and_columns():
     assert '.stationmarginfill{display:block;height:100%;background:var(--bar)' in html
 
 
+def test_collapsed_station_results_defer_card_rendering_and_initial_tally_renders_once():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    station = html[html.index("function renderStationResults("):html.index("function renderHero(")]
+    assert station.index("if (!section.open)") < station.index("let records = stations.map")
+    assert '$("stationresults").addEventListener("toggle"' in station
+
+    apply = html[html.index("function applyData("):html.index("// ---- results")]
+    assert apply.count("renderTally();") == 1
+    assert "const first = !table;" in apply
+
+
 def test_forms_table_renders_settlement_on_a_small_separate_line():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "function stationCellHtml" in html
