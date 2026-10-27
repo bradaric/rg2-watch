@@ -346,7 +346,8 @@ _warned: set[tuple] = set()
 
 def build_tally(store: Store, cfg: Config, parent: str, model: str,
                 municipalities: set[str] | None = None, cache: dict | None = None,
-                docs=None, arows=None) -> dict:
+                docs=None, arows=None, include_station_results: bool = False,
+                expected_rows_cache: dict | None = None) -> dict:
     """Totals per municipality and overall, over all counted forms and over clean ones only.
     `model` is the stored model name; `cache` keeps extracts by analysis id between builds;
     `docs`/`arows` let the caller share its reads (browse_rows / browse_analyses)."""
@@ -383,7 +384,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     latest_operator = {r["url"]: r for r in store.latest_operator_corrections(parent)}
     operator_states = {}
     if latest_operator:
-        service = OperatorCorrections(store, cfg, model)
+        service = OperatorCorrections(store, cfg, model,
+                                      expected_rows_cache=expected_rows_cache)
         for d in mains:
             if d["url"] not in latest_operator:
                 continue
@@ -583,8 +585,23 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     # empty and each municipality row carries its own
     top = ballot("", len(rows)) if national else {
         "nlists": 0, "names": [], "fallback_name_indices": [], "names_note": None}
+
+    def station_view(ex: dict, expected: list[int], why: list[str], inclusion: dict) -> dict:
+        return {"clean": not why, **inclusion, **{key: ex["n"][key] for key in COUNTED},
+                "lists": [ex["l"].get(row) for row in expected]}
+
+    station_results = [] if not include_station_results else [
+        {"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
+         "name": f["d"]["station_name"],
+         "corrected": station_view(f["ex"], f["rows"], f["why"],
+                                   f["rec"]["result"]["corrected"]),
+         "filed": (station_view(as_filed(f["ex"]), f["rows"], f["why_f"],
+                                f["rec"]["result"]["filed"])
+                   if f["ex"].get("filed") is not None else None)}
+        for f in forms]
     return {"model": model, "parent": parent, "title": e.title if e else parent, "scope": scope,
             "scope_note": scope_note, **top, "munis": munis, "overall": total, "notes": notes,
+            "station_results": station_results,
             "corrected": [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
                            "rg7": f["ex"]["rg7"]} for f in forms if f["ex"]["rg7"]],
             "operator_corrected": [{"id": f["d"]["id"], "m": f["muni"],

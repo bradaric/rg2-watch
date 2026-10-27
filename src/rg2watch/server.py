@@ -1,4 +1,5 @@
 """Local browse server: strict GET/HEAD allow-list and same-origin review/correction/case writes."""
+import gzip
 import json
 import logging
 import os
@@ -30,6 +31,21 @@ REVIEW_HEADERS = ("Host", "Origin", "Content-Length", "Content-Type", "X-RG2W", 
 LENGTH = re.compile(r"[0-9]{1,6}")
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
        "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+GZIP_MIN_BYTES = 1024
+
+
+def _accepts_gzip(value: str) -> bool:
+    for item in value.split(","):
+        encoding, *params = item.strip().lower().split(";")
+        if encoding != "gzip":
+            continue
+        quality = next((param.strip()[2:] for param in params
+                        if param.strip().startswith("q=")), "1")
+        try:
+            return float(quality) > 0
+        except ValueError:
+            return False
+    return False
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -79,16 +95,29 @@ class _Handler(BaseHTTPRequestHandler):
                 self.wfile.write(msg)
             return
         with f:
+            size = os.fstat(f.fileno()).st_size
+            can_gzip = t[1] == "application/json" and size >= GZIP_MIN_BYTES
+            accepted = ",".join(self.headers.get_all("Accept-Encoding") or ())
+            compressed = (gzip.compress(f.read(), mtime=0)
+                          if can_gzip and _accepts_gzip(accepted)
+                          else None)
             self.send_response(200)
             self.send_header("Content-Type", t[1])
-            self.send_header("Content-Length", str(os.fstat(f.fileno()).st_size))
+            self.send_header("Content-Length", str(len(compressed) if compressed is not None else size))
+            if can_gzip:
+                self.send_header("Vary", "Accept-Encoding")
+            if compressed is not None:
+                self.send_header("Content-Encoding", "gzip")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             if t[1].startswith("text/html"):
                 self.send_header("Content-Security-Policy", CSP)
             self.end_headers()
             if body:
-                shutil.copyfileobj(f, self.wfile)
+                if compressed is not None:
+                    self.wfile.write(compressed)
+                else:
+                    shutil.copyfileobj(f, self.wfile)
 
     def _json(self, status: int, data, body: bool = True) -> None:
         blob = json.dumps(data, ensure_ascii=True).encode()

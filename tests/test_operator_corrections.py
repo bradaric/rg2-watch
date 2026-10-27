@@ -270,6 +270,20 @@ def test_editor_uses_ballot_rows_even_when_target_model_read_omitted_one():
                                                   {"row": 2, "value": None}]
 
 
+def test_normal_correction_state_reloads_expected_rows_after_ballot_shape_changes():
+    s = analysed_store()
+    service = OperatorCorrections(s, Config(model=MODEL), MODEL)
+    assert service.state(URL)["expected_rows"] == [1, 2]
+    report = clean_report()
+    report["numbers"]["list_votes"].append({"row": 3, "field": {"value": 0}})
+    other = doc(BASE + "/extfile/three-row-ballot.pdf", no="2")
+    add(s, other)
+    s.save_analysis(other.url, AnalysisResult(report, 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    assert service.state(URL)["expected_rows"] == [1, 2, 3]
+
+
 def test_editor_prefills_empty_list_vote_as_zero():
     report = clean_report()
     report["numbers"]["list_votes"][1]["field"].update(
@@ -368,6 +382,34 @@ def test_browse_row_has_compact_operator_correction_status(tmp_path):
                          "at": row["oc"]["at"], "revision": row["oc"]["revision"]}
     assert isinstance(row["oc"]["revision"], int)
     assert row["rec"]["status"] == "ok"
+
+
+def test_browse_build_loads_expected_ballot_rows_once_for_national_corrections(tmp_path,
+                                                                               monkeypatch):
+    s = analysed_store()
+    other = doc(BASE + "/extfile/operator-correction-2.pdf", no="2")
+    add(s, other)
+    s.save_analysis(other.url, AnalysisResult(clean_report(), 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+    service = OperatorCorrections(s, Config(model=MODEL, tally_scope={P: "national"}), MODEL)
+    for url in (URL, other.url):
+        service.save(url, snapshot(), "checked", service.state(url)["source_token"])
+
+    calls = {"rows": 0, "analyses": 0, "reports": 0}
+    for name, key in (("browse_rows", "rows"), ("browse_analyses", "analyses"),
+                      ("analysis_reports", "reports")):
+        real = getattr(s, name)
+
+        def counted(*args, _real=real, _key=key, **kwargs):
+            calls[_key] += 1
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(s, name, counted)
+
+    build_data(s, tmp_path, parent=P,
+               cfg=Config(model=MODEL, tally_scope={P: "national"}))
+
+    assert calls == {"rows": 2, "analyses": 2, "reports": 3}
 
 
 def test_old_prompt_correction_is_quietly_skipped_until_current_analysis(tmp_path, caplog):

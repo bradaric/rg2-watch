@@ -62,6 +62,22 @@ def test_clean_form_counts_and_totals_and_turnout():
     assert o["cl"] == o["all"] and t["excluded"] == [] and t["nlists"] == 2
 
 
+def test_tally_exposes_per_station_results_for_operator_drilldown():
+    s = store()
+    form(s, 12, clean_report())
+
+    result = tally(s, include_station_results=True)
+
+    assert result["station_results"] == [{
+        "id": result["station_results"][0]["id"], "m": "Alpha", "no": "12", "name": "ОШ",
+        "corrected": {"clean": True, "included": True, "reason": None,
+                      "registered": 1000, "voted": 800, "ballots_in_box": 800,
+                      "invalid": 20, "valid": 780, "outside_voted": 5,
+                      "lists": [400, 380]},
+        "filed": None,
+    }]
+
+
 def test_current_escalated_form_is_held_from_every_tally_view():
     s = store()
     form(s, 12, clean_report())
@@ -364,7 +380,8 @@ def test_hero_markup_labelled_and_safe():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert ('id="hero"' in html and "НЕЗВАНИЧНО" in html and
             "Рани резултати — обрађено је мало бирачких места; проценти се могу знатно променити." in html)
-    assert "#E69F00" in html and "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
+    assert "--bar:#b51e34" in html and "--bar:#e84a5f" in html
+    assert "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
     assert "Esc" in html and 'get("hero") === "1"' in html and 'ev.key === "Escape"' in html
     assert 'id="hs-forms-primary"' in html and 'id="hs-forms-context"' in html
     assert '<span id="hv-forms">-</span><span class="of" id="hv-formstot"></span>' in html
@@ -384,7 +401,7 @@ def test_hero_markup_labelled_and_safe():
     assert "#hs-forms-context{border-top:1px solid var(--line2)" in html
     assert '"За проверу: " + num(seen.size)' in html and 'serbianCount(seen.size, "записник"' in html
     assert "урачунато у резултат" in html
-    assert "Held by escalation" in html and "Задржано из резултата" in html
+    assert "Held by escalation" in html and "Изузето из резултата" in html
     assert "Ван заједничког збира: " in html
     assert '"Неусаглашено: " + snum(gap)' in html
     assert "само са исправкама: " in html and "само оригинално: " in html
@@ -666,8 +683,40 @@ def test_operator_results_use_editorial_accents():
     assert ".kicker{" in html and "background:var(--accent-bg)" in html
     assert "#heronums .tile:first-child{box-shadow:inset 0 3px var(--accent)" in html
     assert '<div class="hero-eyebrow">Пресек резултата</div>' in html
-    assert "#resview>h3{" in html and "border-left:3px solid var(--accent)" in html
+    assert ".resultgroup h3{" in html and "border-left:3px solid var(--accent)" in html
     assert "body.hero>*:not(#resview):not(.serbian-flag-bg){display:none!important}" in html
+    assert ".resultvotes{" in html and ".resultpct{" in html
+    assert ".resultvotes{color:var(--mut)" in html
+    assert ".resultpct{color:var(--fg);font-weight:800" in html
+    assert ".minifill{display:block;" in html
+    assert ".stationshare.single .minibar{" in html
+
+
+def test_operator_results_sort_municipality_picker_by_serbian_alphabet():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl")' in html
+    assert 'rows = sortHeroMunis(T ? T.munis : [])' in html
+    helper = html[html.index("const SERBIAN_MUNICIPALITY_COLLATOR"):html.index("function heroListNames")]
+    script = helper + r'''
+const assert = require("assert");
+const rows = ["Љиг", "Ћуприја", "Ада", "Шид", "Лапово", "Тител", "Чока", "Џеп"].map(m => ({m}));
+assert.deepEqual(sortHeroMunis(rows).map(row => row.m),
+  ["Ада", "Лапово", "Љиг", "Тител", "Ћуприја", "Чока", "Џеп", "Шид"]);
+assert.deepEqual(rows.map(row => row.m),
+  ["Љиг", "Ћуприја", "Ада", "Шид", "Лапово", "Тител", "Чока", "Џеп"], "must not mutate tally order");
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_forms_and_results_share_the_url_municipality_context():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "function setHeroMunicipality(" in html
+    assert 'setHeroMunicipality(o.m || "", true);' in html
+    assert '$("hmuni").addEventListener("input", () => setSharedMunicipality($("hmuni").value));' in html
+    assert '$("m").value = value;' in html
+    assert "redraw();" in html
 
 
 def test_municipal_unknown_municipality_gets_no_list_totals():
@@ -745,19 +794,22 @@ def test_cli_diff_heading_describes_term_specific_comparable_cohorts():
 def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_lists():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "TOP_LISTS" not in html and 'Остале (" + rest.length' not in html
+    assert "OKABE" not in html
+    assert 'const RESULT_BAR_COLOR = "var(--bar)"' in html
+    assert 'id="stationresults"' in html and "function renderStationResults(" in html
     helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
-    hero = html[html.index("const OKABE") : html.index('$("herobtn").onclick')]
-    assert "function paintHero" in html
-    paint = html[html.index("function paintHero"):html.index("// ---- table")]
+    hero = html[html.index("const RESULT_BAR_COLOR") : html.index('$("herobtn").onclick')]
+    status = html[html.index("function paintHero"):html.index("// ---- table")]
     refresh = html[html.index("function rowOf"):html.index("function escalatedCsv")]
     script = r'''
 const assert = require("assert");
 const els = {};
 function el(id) { return els[id] ||= {textContent: "", hidden: false, value: "", style: {}, children: [],
   classList: {remove() {}, add() {}, toggle() {}}, append(...x) { this.children.push(...x); },
-  replaceChildren(...x) { this.children = x; }, get options() { return this.children; }}; }
+  replaceChildren(...x) { this.children = x; }, setAttribute(name, value) { this[name] = value; },
+  get options() { return this.children; }}; }
 const $ = el;
-function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}, append(...nodes) { this.children = this.children || []; this.children.push(...nodes); }}; }
+function mk(tag, text, cls) { return {tag, textContent: text == null ? "" : String(text), className: cls || "", hidden: false, style: {}, dataset: {}, append(...nodes) { this.children = this.children || []; this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }}; }
 function epoch() { return "20:00"; }
 function shortTitle(x) { return x; }
 function Option(text, value) { this.textContent = text; this.value = value; }
@@ -782,13 +834,18 @@ function ruleEl() {}
 function when() {}
 function reviewCounts() {}
 function alertForm() {}
-function localHref() {}
-function rikHref() {}
+function localHref(value) { return value ? "local:" + value : null; }
+function rikHref(value) { return value ? value : null; }
+function link(text, href) { const a = mk("a", text); a.href = href; a.target = "_blank"; return a; }
 function setTab(name) { selectedTab = name; }
+let shownForm = null;
+function showForm(id, label) { shownForm = [id, label]; }
+let redrawCalls = 0;
+function redraw() { redrawCalls++; }
 els.tview = {value: "corrected"};
 els.tmode = {value: "all"};
-''' + helpers + hero + paint + refresh + r'''
-for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, nm: {}, fill: {style: {}}, val: {}});
+''' + helpers + hero + status + refresh + r'''
+for (let i = 0; i < 9; i++) slots.push({row: {hidden: true, title: ""}, no: {}, nm: {}, fill: {style: {}}, val: mk("div")});
 function totals(valid, lists) {
   const o = {registered: 1000, voted: 100, turnout: .1, ballots_in_box: 100, invalid: 0,
     valid, outside_voted: 0, vote_forms: lists ? 1 : 0, withheld_valid: lists ? 0 : 100,
@@ -827,6 +884,10 @@ assert.equal(csvValue(csv, "Unreconciled turnout gap (signed)"), "0");
 renderHero();
 assert(els["hs-valid-primary"].textContent.includes("Неусаглашено: 0"));
 assert(els.herotitle.textContent.includes("Избори Ћирилица"));
+assert.equal(slots[0].val.children[0].textContent, "60");
+assert.equal(slots[0].val.children[0].className, "resultvotes");
+assert.equal(slots[0].val.children[1].textContent, "60.0%");
+assert.equal(slots[0].val.children[1].className, "resultpct");
 assert.equal(slots[0].nm.textContent, "Листа А");
 assert.equal(slots[1].nm.textContent, "Листа 2");
 T.names = ["List 1", "List 2"];
@@ -870,8 +931,8 @@ assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
 r.held = 1;
 renderHero();
 assert.equal(heldReviewSummary(13,11),
-  "Задржано из резултата: 13 ескалираних записника — 11 из скупа за проверу · 2 додатно");
-assert(els["hs-forms-context"].textContent.includes("Задржано из резултата: 1 ескалирани записник"));
+  "Изузето из резултата: 13 ескалираних записника — 11 из скупа за проверу · 2 додатно");
+assert(els["hs-forms-context"].textContent.includes("Изузето из резултата: 1 ескалирани записник"));
 assert(els["hs-forms-context"].textContent.includes(
   "Није урачунато: 2 записника — подаци по листама нису потпуни или усаглашени"));
 r.held = 0;
@@ -981,7 +1042,7 @@ r = row(null, [55, 45]);
 setData(r);
 renderHero();
 assert.equal(slots[0].row.hidden, false, "filed-only eligible selected view must show the chart");
-assert(!slots[0].val.textContent.includes("NaN"));
+assert(!slots[0].val.children.map(x => x.textContent).join(" ").includes("NaN"));
 
 els.tview.value = "diff";
 r = row([60, 40], [55, 45]);
@@ -1022,7 +1083,7 @@ assert.deepEqual(els["hs-valid-primary"].textContent.split("\n").slice(0, 3), [
 assert(els["hs-valid-primary"].textContent.includes("Разлика неурачунатих важећих гласова: −8"));
 assert(els["hs-valid-primary"].textContent.includes("Разлика неусаглашене излазности: ·"));
 els.tmode.value = "all";
-assert(slots[0].val.textContent.includes("п. п."));
+assert(slots[0].val.children[1].textContent.includes("п. п."));
 const diffCols = resultCols("all");
 const selected = diffCols.find(x => x.t === "Selected in both views");
 assert.equal(selected.f(selected.v(vrow(r))), "13");
@@ -1071,20 +1132,235 @@ assert(csv.includes("Unavailable - no comparable ballot"), "unknown ballot must 
 assert(csv.includes("Unavailable - no universal ballot"), "municipal overall list fields must be explicit");
 heroMuni = "Ћуприја"; heroPicked = true;
 renderHero();
-assert.equal(els.hmuni.options[1].textContent, "Ћуприја");
+assert.equal(els.hmuni.options.find(o => o.value === "Ћуприја").textContent, "Ћуприја");
 assert(els.herotitle.textContent.startsWith("Ћуприја"));
+T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+D.rows = [{id: 9, u: "u9", rv: {v: "escalate", n: "Проверити потписе"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
+els.stationbars.value = "2";
+renderHero();
+assert.equal(els.stationresults.hidden, false);
+assert.equal(els.stationcount.textContent, "1 записник");
+let stationCard = els.stationlist.children[0];
+assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 — ОШ"));
+const stationWinner = stationCard.children[0].children.find(x => x.className === "stationwinner");
+assert.equal(stationWinner.children[0].textContent, "1");
+assert.equal(stationWinner.children.length, 1, "compact winner column must show only the list number");
+assert.equal(stationWinner.title, "A");
+let stationShares = stationCard.children[0].children.find(x => x.className.startsWith("stationshare"));
+assert.equal(stationShares.className, "stationshare");
+assert.equal(stationShares.children.length, 2);
+assert.equal(stationShares.children[0].children[2].textContent, "51.3%");
+assert.equal(stationShares.children[1].children[0].textContent, "2");
+assert.equal(stationShares.children[1].children[2].textContent, "48.7%");
+const stationMarginEl = stationCard.children[0].children.find(x => x.className === "stationmargin visual");
+assert(Math.abs(parseFloat(stationMarginEl.children[0].children[0].style.width) - 20 / 780 * 100) < 1e-9);
+assert.equal(stationMarginEl.children[1].children[0].textContent, "+2.6 п. п.");
+assert.equal(stationMarginEl.children[1].children[1].textContent, "+20");
+let stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
+let stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
+assert(stationActions, "station status must have a compact actions menu");
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "прикажи"]);
+assert.equal(stationActions.menu.hidden, true);
+let prevented = 0, stopped = 0;
+stationActions.button.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
+assert.equal(stationActions.menu.hidden, false);
+const stationShow = stationActions.menu.children.find(x => x.textContent === "прикажи");
+assert.equal(stationShow.tag, "a");
+assert.equal(stationShow.href, "#form=9");
+assert.equal(stationShow.target, "_blank");
+assert.equal(shownForm, null, "opening a deep link must leave the current Results tab untouched");
+assert.equal(prevented, 1); assert.equal(stopped, 1);
+function stationReviewEl() {
+  const card = els.stationlist.children[0], status = card.children[0].children.find(x => x.className.startsWith("stationstatus"));
+  return (status.children || []).find(x => x.className.startsWith("stationreview"));
+}
+els.tview.value = "filed";
+renderHero();
+const stationStatusMain = els.stationlist.children[0].children[0].children.find(x => x.className.startsWith("stationstatus"))
+  .children.find(x => x.className.startsWith("stationstatusmain"));
+assert(stationStatusMain.className.includes("hasreason"));
+assert.equal(stationStatusMain.dataset.reason, "list votes mismatch");
+assert.equal(stationStatusMain.tabIndex, 0);
+assert.equal(stationReviewEl().textContent, "ескалиран");
+assert.equal(stationReviewEl().dataset.note, "Проверити потписе");
+assert.equal(stationReviewEl().tabIndex, 0);
+assert(stationReviewEl().className.includes("hasnote"));
+assert.equal(els["stationfilter-all"].textContent, "Сва бирачка места 1");
+assert.equal(els["stationfilter-out"].textContent, "Није урачунато 1");
+assert.equal(els["stationfilter-escalate"].textContent, "Ескалирано 1");
+setStationFilter("escalate");
+assert.equal(els.stationlist.children.length, 1);
+REV = {u9: {v: "escalate", n: "Нова напомена"}}; renderHero();
+assert.equal(stationReviewEl().dataset.note, "Нова напомена", "a changed note must repaint without a verdict change");
+REV = {u9: {v: "unsure", n: "Поново упоредити"}}; renderHero();
+assert.equal(els.stationlist.children.length, 1, "empty filtered results render one empty-state message");
+assert.equal(els.stationlist.children[0].textContent, "Нема записника за изабрани филтер.");
+setStationFilter("unsure");
+assert.equal(stationReviewEl().textContent, "несигуран");
+assert.equal(stationReviewEl().dataset.note, "Поново упоредити");
+REV = {}; renderHero();
+setStationFilter("undecided");
+assert.equal(stationReviewEl().textContent, "без одлуке");
+assert(!stationReviewEl().className.includes("hasnote"));
+REV = {u9: {v: "ok", n: "Проверено"}}; renderHero();
+setStationFilter("all");
+assert.equal(stationReviewEl().textContent, "прихваћен");
+assert.equal(stationReviewEl().dataset.note, "Проверено");
+function sortableStation(id, no, voted, lists) {
+  const result = {clean: true, included: false, reason: "test reason", registered: 1000,
+    voted, valid: lists[0] + lists[1], lists};
+  return {id, m: "Ћуприја", no: String(no), name: "БМ " + no, corrected: result, filed: result};
+}
+T.station_results = [
+  sortableStation(10, 2, 500, [51, 49]),
+  sortableStation(11, 10, 900, [90, 10]),
+  sortableStation(12, 5, 700, [60, 40]),
+  sortableStation(13, 1, 800, [55, 45]),
+];
+D.rows = [
+  {id: 10, u: "u10", rv: {v: "unsure"}},
+  {id: 11, u: "u11", rv: {v: "ok"}},
+  {id: 12, u: "u12", rv: null},
+  {id: 13, u: "u13", rv: {v: "escalate"}},
+];
+REV = null;
+const stationIds = () => els.stationlist.children.filter(x => x.stationId).map(x => Number(x.stationId));
+els.stationsort.value = "margin-close"; renderHero();
+assert.deepEqual(stationIds(), [10, 13, 12, 11]);
+els.stationsort.value = "margin-wide"; renderHero();
+assert.deepEqual(stationIds(), [11, 12, 13, 10]);
+els.stationsort.value = "turnout-high"; renderHero();
+assert.deepEqual(stationIds(), [11, 13, 12, 10]);
+els.stationsort.value = "turnout-low"; renderHero();
+assert.deepEqual(stationIds(), [10, 12, 13, 11]);
+els.stationsort.value = "review"; renderHero();
+assert.deepEqual(stationIds(), [13, 10, 12, 11], "review sorting puts actionable states first");
+assert.equal(els["stationfilter-all"].textContent, "Сва бирачка места 4");
+assert.equal(els["stationfilter-out"].textContent, "Није урачунато 4");
+assert.equal(els["stationfilter-unsure"].textContent, "Несигурно 1");
+assert.equal(els["stationfilter-undecided"].textContent, "Без одлуке 1");
+const rememberedOpen = els.stationlist.children.find(x => x.stationId === "10");
+rememberedOpen.open = true; rememberedOpen.ontoggle();
+setStationFilter("escalate");
+assert.deepEqual(stationIds(), [13]);
+setStationFilter("all");
+assert.equal(els.stationlist.children.find(x => x.stationId === "10").open, true,
+  "filtering a station out and back in must preserve its expansion state");
+setStationFilter("escalate");
+els.tview.value = "diff";
+els.stationsort.value = "margin-wide";
+renderHero();
+assert.equal(els.stationfilters.hidden, true);
+assert.equal(els.sortturnouthigh.textContent, "Највећа промена излазности");
+assert.equal(els.sortturnoutlow.textContent, "Најмања промена излазности");
+assert.deepEqual(stationIds(), [13, 10, 12, 11], "difference mode ignores review filters and incompatible sorts");
+T.scope = "national"; T.names = ["A", "B"];
+T.station_results = Array.from({length: 102}, (_, i) => {
+  const station = sortableStation(1000 + i, i + 1, 500 + i, [300 + i, 190]);
+  station.m = i % 2 ? "(unknown)" : "Ћуприја";
+  return station;
+});
+D.rows = T.station_results.map(station => ({id: station.id}));
+let stationSourceFinds = 0;
+const nativeStationSourceFind = D.rows.find.bind(D.rows);
+D.rows.find = (...args) => { stationSourceFinds++; return nativeStationSourceFind(...args); };
+REV = null; els.tview.value = "corrected"; els.stationsort.value = "station";
+setStationFilter("all");
+let stationOutcomeCalls = 0, stationSourceCalls = 0;
+const realStationOutcome = stationOutcome, realStationSource = stationSource;
+stationOutcome = (...args) => { stationOutcomeCalls++; return realStationOutcome(...args); };
+stationSource = (...args) => { stationSourceCalls++; return realStationSource(...args); };
+heroMuni = ""; heroPicked = true; renderHero();
+assert(stationSourceFinds <= 1, "all-municipality rendering must not scan every form for every station");
+assert(stationOutcomeCalls <= 100, "station-order rendering computes outcomes only for visible rows");
+assert(stationSourceCalls <= 205, "off-screen rows do not build action-link cache data");
+stationOutcome = realStationOutcome; stationSource = realStationSource;
+assert.equal(els.stationresults.hidden, false);
+assert.equal(stationIds().length, 100);
+assert(els.stationlist.children[0].children[0].children[0].textContent.includes(" · БМ "));
+assert.equal(els.stationmore.hidden, false);
+assert.equal(els.stationmore.textContent, "Прикажи још (2)");
+loadMoreStations();
+assert.equal(stationIds().length, 102);
+assert.equal(els.stationmore.hidden, true);
+heroMuni = "Ћуприја"; renderHero();
+assert.equal(stationIds().length, 51, "a selected municipality renders every matching station");
+assert.equal(els.stationmore.hidden, true);
+assert(!els.stationlist.children[0].children[0].children[0].textContent.startsWith("Ћуприја ·"));
+T.scope = "municipal"; unknown.names = ["X", "Y"]; unknown.nlists = 2;
+heroMuni = ""; els.stationsort.value = "winner"; renderHero();
+assert.equal(els.sortwinner.hidden, true);
+assert.equal(els.stationsort.value, "station");
+T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ",
+  corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, valid: 780, lists: [400, 380]},
+  filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, valid: 780, lists: [390, 390]}}];
+setStationFilter("all");
+els.stationsort.value = "station";
+REV = null; els.tview.value = "corrected";
+D.rows = [{id: 9}];
+renderHero();
+stationCard = els.stationlist.children[0];
+stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
+stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["прикажи"],
+  "unavailable PDF and RIK actions must be omitted after a live refresh");
+els.tview.value = "diff";
+renderHero();
+stationCard = els.stationlist.children[0];
+stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
+assert.equal(stationStatusEl.children.find(x => x.className === "stationstatusmain").textContent, "Поређење");
+assert((stationStatusEl.children || []).some(x => x.className === "stationactions"));
+els.tview.value = "corrected";
+els.stationbars.value = "1";
+renderHero();
+stationCard = els.stationlist.children[0];
+stationShares = stationCard.children[0].children.find(x => x.className.startsWith("stationshare"));
+assert.equal(stationShares.className, "stationshare single");
+assert.equal(stationShares.children.length, 1);
+assert.equal(stationCard.children[1].children, undefined, "station chart is lazy");
+setAllStations(true);
+assert.equal(stationCard.open, true);
+assert.equal(els.stationtoggle.textContent, "Скупи све");
+setAllStations(false);
+assert.equal(stationCard.open, false);
+assert.equal(els.stationtoggle.textContent, "Прошири све");
+stationCard.open = true; stationCard.ontoggle();
+assert(stationCard.children[1].children.length > 1);
+const firstStationValue = stationCard.children[1].children.find(x => x.className === "stationbar").children[2];
+assert.equal(firstStationValue.children[0].className, "resultvotes");
+assert.equal(firstStationValue.children[1].className, "resultpct");
+assert(!stationCard.children[1].children.some(x => x.textContent === "Урачунат"),
+  "the inclusion status already shown in the station summary must not be repeated");
+renderHero();
+assert.strictEqual(els.stationlist.children[0], stationCard,
+  "unchanged live data must not rebuild and collapse expanded stations");
+setSharedMunicipality("Ћуприја");
+assert.equal(els.m.value, "Ћуприја");
+assert.equal(heroMuni, "Ћуприја");
+assert.equal(redrawCalls, 1);
+
+T.scope = "national"; T.names = ["Републичка А", "Републичка Б"]; T.fallback_name_indices = [];
+alpha.names = []; alpha.fallback_name_indices = [];
+renderHero();
+const nationalStation = els.stationlist.children[0];
+nationalStation.open = true; nationalStation.ontoggle();
+assert(nationalStation.children[1].children.some(x => x.children && x.children[0].textContent.includes("Републичка А")),
+  "national station charts must use national list names");
+T.scope = "municipal"; T.names = []; alpha.names = ["A", "B"];
 
 unknown.generated_unknown_muni = true;
 unknown.names = ["List 1", "Стварна листа"]; unknown.fallback_name_indices = [0]; unknown.nlists = 2;
 for (const k of ["all", "cl", "fall", "fcl"]) { unknown[k].lists = [60, 40]; unknown[k].lists_valid = 100; unknown[k].vote_forms = 1; }
 heroMuni = "(unknown)"; heroPicked = true;
 renderHero();
-assert.equal(els.hmuni.options[2].textContent, "Непозната општина");
+assert.equal(els.hmuni.options.find(o => o.value === "(unknown)").textContent, "Непозната општина");
 assert(els.herotitle.textContent.startsWith("Непозната општина"));
 assert.equal(slots[0].nm.textContent, "Листа 1");
 unknown.generated_unknown_muni = false; delete unknown.fallback_name_indices;
 renderHero();
-assert.equal(els.hmuni.options[2].textContent, "(unknown)");
+assert.equal(els.hmuni.options.find(o => o.value === "(unknown)").textContent, "(unknown)");
 assert(els.herotitle.textContent.startsWith("(unknown)"));
 assert.equal(slots[0].nm.textContent, "List 1");
 heroMuni = ""; heroPicked = true;

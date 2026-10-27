@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import http.client
 import socket
@@ -31,10 +32,12 @@ def srv(tmp_path_factory):
     server.server_close()
 
 
-def req(srv, path, method="GET", host=None):
+def req(srv, path, method="GET", host=None, headers=None):
     c = http.client.HTTPConnection("127.0.0.1", srv.server_port)
     c.putrequest(method, path, skip_host=True)
     c.putheader("Host", host or f"127.0.0.1:{srv.server_port}")
+    for name, value in (headers or {}).items():
+        c.putheader(name, value)
     c.endheaders()
     r = c.getresponse()
     body = r.read()
@@ -77,6 +80,31 @@ def test_cross_site_requests_refused(srv):
 def test_head_has_length_and_no_body(srv):
     s, _, body, r = req(srv, "/data.json", "HEAD")
     assert s == 200 and body == b"" and r.getheader("Content-Length") == "12"
+
+
+def test_large_json_supports_gzip_get_and_head(tmp_path):
+    out, cache = tmp_path / "web", tmp_path / "cache"
+    out.mkdir()
+    cache.mkdir()
+    raw = ('{"rows":["' + "Ћ" * 5000 + '"]}').encode()
+    (out / "data.json").write_bytes(raw)
+    server = start_server(out, cache, 0)
+    try:
+        s, _, body, r = req(server, "/data.json", headers={"Accept-Encoding": "br, gzip"})
+        assert s == 200 and r.getheader("Content-Encoding") == "gzip"
+        assert r.getheader("Vary") == "Accept-Encoding"
+        assert int(r.getheader("Content-Length")) == len(body)
+        assert gzip.decompress(body) == raw
+
+        s, _, body, r = req(server, "/data.json", "HEAD",
+                            headers={"Accept-Encoding": "gzip"})
+        assert s == 200 and body == b"" and r.getheader("Content-Encoding") == "gzip"
+        assert int(r.getheader("Content-Length")) == len(gzip.compress(raw, mtime=0))
+
+        assert req(server, "/data.json", headers={"Accept-Encoding": "gzip;q=0.0"})[2] == raw
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 @pytest.mark.parametrize("path", [

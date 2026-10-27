@@ -9,13 +9,13 @@
   --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--r:6px;
   --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --bg:#eaf0f6;--panel:#fff;--surface:#f3f7fb;--surface2:#dce6ef;--fg:#10243b;--mut:#526980;
-  --line:#d3dee8;--line2:#aebfd0;--accent:#b51e34;--accent-bg:#fae8eb;--link:#155ca2;
+  --line:#d3dee8;--line2:#aebfd0;--accent:#b51e34;--accent-bg:#fae8eb;--bar:#b51e34;--link:#155ca2;
   --hi:#a9142a;--hi-fg:#fff;--md:#8a5300;--md-bg:#f7b84b;--md-fg:#2b1a00;--lo:#3b668f;--good:#18794e;
   --warn:#a35f00;--warn-bg:#fff5e0;--warn-line:#f0c46c;--banner:#b51e34;--track:#d5e1ec;
   --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08)}
 @media (prefers-color-scheme:dark){:root{
   --bg:#061321;--panel:#0d2136;--surface:#122b45;--surface2:#193650;--fg:#f4f7fb;--mut:#a4b5c7;
-  --line:#1c3853;--line2:#36536f;--accent:#ff6174;--accent-bg:#3a1722;--link:#75b7f0;
+  --line:#1c3853;--line2:#36536f;--accent:#ff6174;--accent-bg:#3a1722;--bar:#e84a5f;--link:#75b7f0;
   --hi:#ff6174;--hi-fg:#fff;--md:#f5b54a;--md-bg:#f5b54a;--md-fg:#231700;--lo:#a9c7e3;--good:#58d09a;
   --warn:#f0a73a;--warn-bg:#2a2112;--warn-line:#6b4d17;--banner:#c6363c;--track:#17334e;
   --shadow:0 1px 2px rgba(0,0,0,.4)}}
@@ -204,7 +204,15 @@ button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 /* results */
 #tctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;margin:0 0 var(--s3)}
 #tctl label{color:var(--mut);display:inline-flex;align-items:center;gap:6px}
-#resview>h3{margin:var(--s5) 0 var(--s2);padding-left:var(--s2);border-left:3px solid var(--accent);color:var(--fg)}
+.resultgroup{margin-top:var(--s3);border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:var(--shadow)}
+.resultgroup>summary{cursor:pointer;padding:var(--s3) var(--s4);font-weight:800;list-style:none}
+.resultgroup>summary::-webkit-details-marker{display:none}
+.resultgroup>summary::before{content:"▸";display:inline-block;width:1.25em;color:var(--accent)}
+.resultgroup[open]>summary::before{content:"▾"}
+.resultgroup>summary span{color:var(--mut);font-weight:600;margin-left:var(--s1)}
+.resultgroup>.resultgroupbody{border-top:1px solid var(--line);padding:var(--s4)}
+.resultgroup h3{margin:var(--s5) 0 var(--s2);padding-left:var(--s2);border-left:3px solid var(--accent);color:var(--fg)}
+.resultgroup h3:first-child{margin-top:0}
 #toverall{overflow-x:auto;margin-bottom:var(--s3);padding:var(--s1) var(--s3)}
 #toverall table{border-collapse:collapse;font-variant-numeric:tabular-nums}
 #toverall th,#toverall td{padding:6px 10px;text-align:right;white-space:nowrap}
@@ -256,8 +264,39 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .hrow .no[hidden]{display:none}
 .hrow .track{grid-area:tr}.hrow .val{grid-area:val}
 .hrow .track{background:var(--track);border-radius:3px;height:1.05em;overflow:hidden}
-.hrow .fill{height:100%;width:0;min-width:3px;border-radius:0 3px 3px 0;transition:width .8s ease,background-color .3s}
+.hrow .fill{height:100%;width:0;min-width:3px;border-radius:0 3px 3px 0;background:var(--bar);transition:width .8s ease}
 .hrow .val{text-align:right;font-variant-numeric:tabular-nums;white-space:pre;font-weight:700;letter-spacing:-.01em}
+.hrow .val,.stationbar .value{display:flex;justify-content:flex-end;align-items:baseline;gap:.45em}
+.resultvotes{color:var(--mut);font-size:.82em;font-weight:600}.resultpct{color:var(--fg);font-weight:800}
+#stationresults{margin-top:var(--s5);border-top:2px solid var(--accent);padding-top:var(--s3)}
+#stationresults[hidden]{display:none}
+#stationhead{cursor:pointer;display:flex;align-items:baseline;gap:var(--s3);list-style:none;padding:0 0 var(--s2)}
+#stationhead::-webkit-details-marker{display:none}#stationhead::before{content:"▸";color:var(--accent);font-weight:800}
+#stationresults[open]>#stationhead::before{content:"▾"}
+#stationhead h3{font-size:1rem;color:var(--fg);margin:0}#stationcount{color:var(--mut);margin-left:auto}
+#stationtools{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:var(--s2);padding:var(--s1) 0 var(--s2)}
+#stationtools label{display:flex;align-items:center;gap:var(--s1);color:var(--mut)}
+#stationfilters{display:flex;flex-wrap:wrap;gap:4px;margin-right:auto}.stationfilter{padding:4px 7px;border:1px solid var(--line2);border-radius:999px;background:var(--surface);color:var(--mut);font-size:11px;cursor:pointer}.stationfilter:hover,.stationfilter:focus{color:var(--fg);border-color:var(--mut)}.stationfilter[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+.stationcols,.station summary{display:grid;grid-template-columns:auto minmax(12rem,1.3fr) 5.5rem 5.5rem 3.5rem minmax(9rem,.8fr) 10rem 11rem;gap:var(--s3);align-items:center}
+.stationcols{padding:var(--s1) var(--s2);color:var(--mut);font-size:10.5px;font-weight:750;text-transform:uppercase;letter-spacing:.055em;border-bottom:2px solid var(--line2)}
+.stationcols span:nth-child(3),.stationcols span:nth-child(4),.stationcols span:nth-child(6),.stationcols span:nth-child(7),.stationcols span:nth-child(8){text-align:right}
+.station{border-top:1px solid var(--line)}.station:first-child{border-top:0}
+.station summary{cursor:pointer;padding:var(--s2);list-style:none}
+.station summary::-webkit-details-marker{display:none}.station summary::before{content:"▸";color:var(--accent);font-weight:800}
+.station[open] summary::before{content:"▾"}.stationname{font-weight:750;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stationmetric,.stationshare,.stationmargin{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.stationwinner{display:flex;align-items:center;justify-content:center;font-weight:700}.stationwinner .no{flex:none;min-width:1.8em;padding:1px 5px;border-radius:4px;background:var(--fg);color:var(--panel);text-align:center}
+.stationshare{display:grid;gap:2px}.minibar{display:grid;grid-template-columns:1.2em minmax(2.5rem,1fr) 3.2em;gap:3px;align-items:center;height:8px;font-size:9px;line-height:8px}.minino{color:var(--mut);text-align:right}.minitrack{height:4px;background:var(--track);border-radius:2px;overflow:hidden}.minifill{display:block;height:100%;background:var(--bar);border-radius:2px}.minipct{text-align:right}
+.stationshare.single .minibar{height:12px;font-size:11px;line-height:12px}.stationshare.single .minitrack{height:6px}.stationshare.single .minipct{font-weight:700}
+.stationmargin.visual{display:grid;grid-template-columns:minmax(2.5rem,1fr) auto;gap:var(--s2);align-items:center}.stationmargintrack{height:5px;background:var(--track);border-radius:3px;overflow:hidden}.stationmarginfill{display:block;height:100%;background:var(--bar);border-radius:3px}.stationmarginvalues{display:grid;line-height:1.05}.stationmarginpp{font-weight:800}.stationmarginvotes{margin-top:3px;color:var(--mut);font-size:.8em}
+.stationstatus{display:grid;grid-template-columns:auto auto auto;align-items:center;justify-content:end;color:var(--mut);white-space:nowrap}.stationstatus.in::before,.stationstatus.out::before{grid-column:1;grid-row:1/3;margin-right:5px}.stationstatus.in::before{content:"●";color:var(--good)}.stationstatus.out::before{content:"●";color:var(--hi)}.stationstatusmain{grid-column:2;grid-row:1;text-align:right}.stationreview{font-size:.8em;grid-column:2;grid-row:2;text-align:right;color:var(--mut)}.stationreview.escalate{color:var(--hi)}.stationreview.unsure{color:var(--md)}.stationreview.ok{color:var(--good)}.stationreview.hasnote{position:relative;cursor:help;text-decoration:underline dotted;text-underline-offset:2px}.stationreview.hasnote::after{content:attr(data-note);position:absolute;z-index:30;right:0;bottom:calc(100% + 6px);display:none;width:max-content;max-width:min(24rem,70vw);padding:7px 9px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008;color:var(--fg);font-size:12px;font-weight:400;line-height:1.35;text-align:left;white-space:normal}.stationreview.hasnote:hover::after,.stationreview.hasnote:focus::after{display:block}
+.stationstatusmain.hasreason{position:relative;cursor:help;text-decoration:underline dotted;text-underline-offset:2px}.stationstatusmain.hasreason::after{content:attr(data-reason);position:absolute;z-index:30;right:0;bottom:calc(100% + 6px);display:none;width:max-content;max-width:min(24rem,70vw);padding:7px 9px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008;color:var(--fg);font-size:12px;font-weight:400;line-height:1.35;text-align:left;white-space:normal}.stationstatusmain.hasreason:hover::after,.stationstatusmain.hasreason:focus::after{display:block}
+.stationactions{position:relative;display:inline-flex;grid-column:3;grid-row:1/3;margin-left:var(--s1)}.stationmenubtn{display:inline-grid;place-items:center;width:1.8rem;height:1.65rem;padding:0;border:1px solid var(--line2);border-radius:5px;background:var(--surface);color:var(--fg);cursor:pointer}.stationmenubtn::before{content:"";width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid currentColor}.stationmenu{position:absolute;z-index:20;right:0;top:calc(100% + 3px);display:grid;min-width:8rem;padding:4px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 8px 24px #0008}.stationmenu[hidden]{display:none}.stationmenuitem{display:block;border:0;border-radius:4px;background:none;color:var(--fg);font:inherit;text-align:left;text-decoration:none;padding:6px 8px;cursor:pointer}.stationmenuitem:hover,.stationmenuitem:focus{background:var(--surface);color:var(--accent)}
+.stationbody{padding:0 var(--s3) var(--s3) 2rem}.stationnote{color:var(--mut);margin:var(--s2) 0}
+.stationbar{display:grid;grid-template-columns:minmax(12rem,30%) minmax(8rem,1fr) 11rem;gap:var(--s3);align-items:center;padding:5px 0}
+.stationbar .track{height:11px;background:var(--track);border-radius:6px;overflow:hidden}.stationbar .fill{height:100%;background:var(--bar);border-radius:6px}
+.stationbar .value{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:700}
+#stationmore{display:block;margin:var(--s3) auto 0}#stationmore[hidden]{display:none}
 #heronote{font-size:clamp(1rem,1.5vw,1.7rem);font-weight:700;color:var(--md);margin:var(--s2) 0}
 #heronote:empty{display:none}
 #heronames{margin-top:var(--s3);font-size:clamp(.9rem,1.2vw,1.45rem)}
@@ -302,6 +341,9 @@ body.hero #herochart{margin:var(--s2) 0 0}
   .tile:first-child{border-top:0}
   .hrow{grid-template-columns:1fr auto;gap:var(--s1) var(--s3)}
   .hrow .hd{font-size:.9em}
+  .stationcols{display:none}.station summary{grid-template-columns:auto 1fr auto auto;gap:var(--s1) var(--s2)}
+  .stationname{grid-column:2/-1}.stationwinner{grid-column:2/-1}.stationshare,.stationmargin{text-align:left}.stationstatus{grid-column:2/-1;justify-content:start}
+  .stationbar{grid-template-columns:1fr auto}.stationbar .track{grid-column:1/-1;grid-row:2}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 </style></head><body>
@@ -396,18 +438,26 @@ stroke-width:2.5;
 <div id="heronote"></div>
 <div id="herocharthead"><div class="hero-eyebrow">Пресек резултата</div></div>
 <div id="herochart"></div>
+<details id="stationresults" hidden><summary id="stationhead"><h3>Резултати по бирачким местима</h3><span id="stationcount"></span></summary>
+<div id="stationtools"><div id="stationfilters" role="group" aria-label="Филтер бирачких места"><button type="button" id="stationfilter-all" class="stationfilter" data-station-filter="all" aria-pressed="true">Сва бирачка места</button><button type="button" id="stationfilter-out" class="stationfilter" data-station-filter="out" aria-pressed="false">Није урачунато</button><button type="button" id="stationfilter-escalate" class="stationfilter" data-station-filter="escalate" aria-pressed="false">Ескалирано</button><button type="button" id="stationfilter-unsure" class="stationfilter" data-station-filter="unsure" aria-pressed="false">Несигурно</button><button type="button" id="stationfilter-undecided" class="stationfilter" data-station-filter="undecided" aria-pressed="false">Без одлуке</button></div><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option><option id="sortmarginclose" value="margin-close">Најтешња трка</option><option id="sortmarginwide" value="margin-wide">Највећа маргина</option><option id="sortturnouthigh" value="turnout-high">Највећа излазност</option><option id="sortturnoutlow" value="turnout-low">Најмања излазност</option><option id="sortreview" value="review">Статус провере</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2" selected>2 листе</option><option value="3">3 листе</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
+<div class="stationcols" aria-hidden="true"><span></span><span>Бирачко место</span><span>Излазност</span><span>Важећи</span><span id="stationwinnerlabel">Победник</span><span id="stationsharelabel">Удео</span><span id="stationmarginlabel">Маргина</span><span>Статус</span></div>
+<div id="stationlist"></div><button id="stationmore" type="button" hidden>Прикажи још</button></details>
 <div id="herofoot"></div>
 </section>
 <p class="warnbox">Unofficial - numbers read by a model from the scanned forms. <span id="tmeta"></span></p>
 <p id="tscope" class="warnbox" hidden></p>
+<details id="tdetails" class="resultgroup"><summary>Detailed totals <span id="tdetailcount"></span></summary><div class="resultgroupbody">
 <div id="tctl"><label>totals over <select id="tmode"><option value="cl">clean forms only (leave out flagged)</option><option value="all" selected>all counted forms</option></select></label>
 <label>numbers: <select id="tview"><option value="corrected" selected>with RG-7 / operator corrections</option><option value="filed">as filed on RG-2 forms</option><option value="diff">difference (corrected − as filed)</option></select></label>
 <button id="csv">Download CSV</button></div>
 <h3>Overall</h3><div id="toverall"></div>
 <h3>Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
+</div></details>
+<details id="taudit" class="resultgroup"><summary>Result audit trail <span id="tauditcount"></span></summary><div class="resultgroupbody">
 <h3>Flagged forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
 <h3 id="tcorhead" hidden>Corrections counted (RG-7 / operator-entered)</h3><ul id="tcor"></ul>
 <h3 id="tnoteshead" hidden>Notes (not flagged)</h3><ul id="tnotes"></ul>
+</div></details>
 </div>
 <div id="officialview" hidden>
 <div id="officialhead"><div><h2 id="officialtitle">RIK official results</h2><p><span id="officialmeta">Official results have not been loaded yet.</span> <a id="officialsource" target="_blank" rel="noopener noreferrer" hidden>Извор: РИК</a></p></div><span id="officialbadge">Official RIK data · ЗВАНИЧНИ ПОДАЦИ РИК</span></div>
@@ -542,7 +592,6 @@ function renderStatus() {
     alertsKey = null;
     ban.style.display = "block";
     ban.textContent = "no status yet";
-    paintHero();
     return;
   }
   const age = Date.now() / 1000 - S.ts;
@@ -590,7 +639,6 @@ function renderStatus() {
   cards.push(card("Review & alerts", reviewAlerts));
   box.replaceChildren(...cards);
   renderAlerts();
-  paintHero();
 }
 function applyStatus(s) {
   const key = JSON.stringify(s);
@@ -807,6 +855,7 @@ function refreshRow(id) {
   if (row.child.isShown()) row.child(child(row.data())).show();
   table.draw(false);
   renderStatus();
+  paintHero();
 }
 function submitReview(r, verdict, note, msg) {
   if (!HTTP) return;
@@ -844,6 +893,7 @@ function loadReviews() {
         table.draw(false);
       }
       renderStatus();
+      paintHero();
     }, e => console.error("fetching reviews.json failed", e));
 }
 
@@ -1295,7 +1345,7 @@ function applyData(data) {
   T = D.tally;
   renderTally();
   $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
-  if (!table) { readHash(); initTable(); if ($("tview").value !== "corrected") renderTally(); return; }
+  if (!table) { readHash(); initTable(); renderTally(); return; }
   const shown = new Set();
   table.rows().every(function () { if (this.child.isShown()) shown.add(this.data().id); });
   table.clear().rows.add(rows).draw(false);
@@ -1306,6 +1356,10 @@ function applyData(data) {
 const nf = new Intl.NumberFormat("en-GB");
 const num = v => v == null ? "-" : nf.format(v);
 const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
+function resultValue(el, votes, share, diff) {
+  el.replaceChildren(mk("span", diff ? dnum(votes) : num(votes), "resultvotes"),
+    mk("span", diff ? dpp(share) + " п. п." : pc(share), "resultpct"));
+}
 const ratio = (a, b) => b ? a / b : null;
 const NV = () => $("tview").value;  // numbers: corrected | filed | diff
 const NV_LABEL = {corrected: "With RG-7 and operator-entered corrections.", filed: "As filed on the RG-2 forms (RG-7 and operator corrections not applied).",
@@ -1402,15 +1456,14 @@ function tallyCsv() {
   const lines = rows.map((r, i) => [...cols.map(c => csvCell(c.c(r))), i ? "" : csvCell(note)].join(","));
   return [head, ...lines].join("\r\n") + "\r\n";
 }
-function showForm(id, label) {
+function showForm(id, label, updateUrl = true) {
   onlyId = id;
   setCtl({});  // other form filters would hide it
-  writeHash();
   $("onlytxt").textContent = "showing only: " + label + " (other filters cleared)";
   $("onlyid").hidden = false;
   setHero(false);
-  setTab("forms");
-  redraw();
+  setTab("forms", false);
+  if (updateUrl) redraw();
 }
 let tkey = "", tcols = "";
 function listsOf(r) {  // municipal scope: this municipality's own lists, in ballot order
@@ -1431,6 +1484,12 @@ $("tmunis").addEventListener("click", ev => {
   if (!td || !tmTable) return;
   const row = tmTable.row(td.parentElement);
   row.child.isShown() ? row.child.hide() : row.child(listsOf(row.data())).show();
+});
+$("tdetails").addEventListener("toggle", () => {
+  if ($("tdetails").open && tmTable) tmTable.columns.adjust();
+});
+$("taudit").addEventListener("toggle", () => {
+  if ($("taudit").open && teTable) teTable.columns.adjust();
 });
 function renderTally() {
   $("hmode").value = $("tmode").value;
@@ -1507,12 +1566,28 @@ function renderTally() {
     return li;
   });
   $("tcor").replaceChildren(...rg7Items, ...operatorItems);
-  $("tcorhead").hidden = $("tcor").hidden = !(rg7Items.length + operatorItems.length) || NV() === "filed";
+  const correctionCount = NV() === "filed" ? 0 : rg7Items.length + operatorItems.length;
+  $("tcorhead").hidden = $("tcor").hidden = !correctionCount;
+  $("tdetailcount").textContent = "— " + num(T.overall.counted) + " forms · " + num(T.munis.length) + " municipalities";
+  $("tauditcount").textContent = "— " + num(flagged.length) + " flagged · " + num(correctionCount) +
+    " corrections · " + num(T.notes.length) + " notes";
 }
 
 // ---- hero display -------------------------------------------------------------------------
-const OKABE = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"];
-let heroMuni = "", heroPicked = false, slots = [];
+const RESULT_BAR_COLOR = "var(--bar)";
+let heroMuni = "", heroPicked = false, slots = [], stationKey = "", stationScope = null, stationLimit = 100;
+function setHeroMunicipality(value, picked = true) {
+  const next = value || "";
+  if (heroMuni !== next) { stationLimit = 100; stationScope = next; stationKey = ""; }
+  heroMuni = next;
+  heroPicked = picked;
+}
+function setSharedMunicipality(value) {
+  $("m").value = value;
+  setHeroMunicipality($("m").value, true);
+  redraw();
+  if (T) renderHero();
+}
 function put(id, text) {  // set text; flash when it changed
   const el = $(id);
   if (el.textContent === text) return;
@@ -1544,7 +1619,11 @@ function heroWarning(note) {
       ", записници имају " + m[2] + " " + serbianCount(lists, "листу", "листе", "листа") + " — проверите конфигурацију";
   }).join("; ");
 }
+const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl");
 function heroMuniName(row) { return row && row.generated_unknown_muni ? "Непозната општина" : row.m; }
+function sortHeroMunis(rows) {
+  return [...rows].sort((a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(heroMuniName(a), heroMuniName(b)));
+}
 function heroListNames(owner) {
   const names = owner && owner.names || [], fallback = new Set(owner && owner.fallback_name_indices || []);
   return names.map((name, i) => fallback.has(i) ? "Листа " + (i + 1) : name);
@@ -1573,7 +1652,7 @@ function flaggedReviewSummary(flagged) {
 }
 function heldReviewSummary(held, escalatedAmongFlagged) {
   const inReview = Math.min(held, escalatedAmongFlagged), extra = held - inReview;
-  let text = "Задржано из резултата: " + num(held) + " " +
+  let text = "Изузето из резултата: " + num(held) + " " +
     serbianCount(held, "ескалирани записник", "ескалирана записника", "ескалираних записника");
   if (inReview && extra) text += " — " + num(inReview) + " из скупа за проверу · " + num(extra) + " додатно";
   else if (inReview) text += " — сви из скупа за проверу";
@@ -1598,7 +1677,7 @@ function initHero() {
   $("herochart").replaceChildren();
 }
 function heroMunis() {
-  const sel = $("hmuni"), rows = T ? T.munis : [], names = rows.map(m => m.m);
+  const sel = $("hmuni"), rows = sortHeroMunis(T ? T.munis : []), names = rows.map(m => m.m);
   const wanted = rows.map(r => r.m + "\t" + heroMuniName(r)).join("\n");
   if ([...sel.options].slice(1).map(o => o.value + "\t" + o.textContent).join("\n") !== wanted || !sel.options.length)
     sel.replaceChildren(new Option("Све општине", ""), ...rows.map(r => new Option(heroMuniName(r), r.m)));
@@ -1609,13 +1688,306 @@ function heroMunis() {
   }
   sel.value = heroMuni;
 }
+function stationStatus(view) {
+  return view.included ? "Урачунат" : "Није урачунат" + (view.reason ? " — " + view.reason : "");
+}
+function stationTurnout(view) {
+  return view && view.registered > 0 && view.voted != null ? view.voted / view.registered : null;
+}
+function stationOutcome(station, owner, viewName) {
+  const corrected = station.corrected, filed = station.filed || corrected, names = heroListNames(owner);
+  const chosen = viewName === "filed" ? filed : corrected, diff = viewName === "diff";
+  const rows = names.map((name, i) => {
+    const c = corrected.lists[i], f = filed.lists[i];
+    const value = diff ? c == null || f == null ? null : c - f : chosen.lists[i];
+    const share = diff ? c == null || f == null || !corrected.valid || !filed.valid ? null
+      : c / corrected.valid - f / filed.valid : value == null || !chosen.valid ? null : value / chosen.valid;
+    return {name, no: i + 1, value, share};
+  }).filter(row => row.value != null);
+  if (!rows.length) return {name: "—", no: null, share: null, margin: null, marginShare: null, value: null, leaders: []};
+  if (diff) {
+    rows.sort((a, b) => Math.abs(b.value) - Math.abs(a.value) || a.no - b.no);
+    return {...rows[0], margin: null, marginShare: null, leaders: rows};
+  }
+  rows.sort((a, b) => b.value - a.value || a.no - b.no);
+  const top = rows[0], second = rows[1], tied = second && second.value === top.value;
+  if (tied) return {name: "Нерешено", no: null, share: top.share, margin: 0, marginShare: 0,
+    value: top.value, leaders: rows};
+  const margin = top.value - (second ? second.value : 0);
+  return {...top, margin, marginShare: chosen.valid ? margin / chosen.valid : null, leaders: rows};
+}
+function stationMiniBars(outcome, count, diff) {
+  const cell = mk("span", null, "stationshare" + (count === 1 ? " single" : "")), shown = outcome.leaders.slice(0, count);
+  const max = Math.max(1e-9, ...shown.map(row => Math.abs(row.share || 0)));
+  for (const item of shown) {
+    const mini = mk("span", null, "minibar"), no = mk("span", String(item.no), "minino"),
+      track = mk("span", null, "minitrack"), fill = mk("span", null, "minifill"),
+      value = mk("span", item.share == null ? "—" : diff ? dpp(item.share) : pc(item.share), "minipct");
+    mini.title = item.name;
+    fill.style.width = item.share == null ? "0" : Math.min(100, Math.abs(item.share) / (diff ? max : 1) * 100) + "%";
+    track.append(fill); mini.append(no, track, value); cell.append(mini);
+  }
+  if (!shown.length) cell.textContent = "—";
+  return cell;
+}
+function stationMargin(outcome, diff) {
+  if (diff) return mk("span", outcome.share == null ? "—" : dpp(outcome.share) + " п. п.", "stationmargin");
+  if (outcome.margin == null) return mk("span", "—", "stationmargin");
+  const cell = mk("span", null, "stationmargin visual"), track = mk("span", null, "stationmargintrack"),
+    fill = mk("span", null, "stationmarginfill"), values = mk("span", null, "stationmarginvalues"),
+    pp = mk("span", outcome.margin === 0 ? "0.0 п. п." : dpp(outcome.marginShare) + " п. п.", "stationmarginpp"),
+    votes = mk("span", outcome.margin === 0 ? "Нерешено" : "+" + num(outcome.margin), "stationmarginvotes");
+  fill.style.width = Math.min(100, Math.abs(outcome.marginShare || 0) * 100) + "%";
+  if (outcome.margin > 0) fill.style.minWidth = "2px";
+  track.append(fill); values.append(pp, votes); cell.append(track, values);
+  return cell;
+}
+let openStationActions = null;
+function setStationActionsOpen(actions, open) {
+  if (openStationActions && openStationActions !== actions) {
+    openStationActions.menu.hidden = true;
+    openStationActions.button.ariaExpanded = "false";
+  }
+  actions.menu.hidden = !open;
+  actions.button.ariaExpanded = String(open);
+  openStationActions = open ? actions : null;
+}
+function closeStationActions() {
+  if (openStationActions) setStationActionsOpen(openStationActions, false);
+}
+let stationSourceRows = null, stationSourceById = new Map();
+function stationSource(id) {
+  if (stationSourceRows !== D.rows) {
+    stationSourceRows = D.rows;
+    stationSourceById = new Map((D.rows || []).map(row => [String(row.id), row]));
+  }
+  return stationSourceById.get(String(id)) || {};
+}
+function stationReview(id, source = stationSource(id)) {
+  const review = source.u ? rvOf(source) || {} : {}, verdict = review.v || "";
+  const labels = {ok: "прихваћен", escalate: "ескалиран", unsure: "несигуран"};
+  return {verdict, label: labels[verdict] || "без одлуке", note: review.n || ""};
+}
+const STATION_FILTERS = {
+  all: "Сва бирачка места", out: "Није урачунато", escalate: "Ескалирано", unsure: "Несигурно", undecided: "Без одлуке"
+};
+let stationFilter = "all";
+function setStationFilter(value) {
+  stationFilter = value in STATION_FILTERS ? value : "all";
+  stationLimit = 100;
+  stationKey = "";
+  if (T) renderStationResults();
+}
+function loadMoreStations() {
+  stationLimit += 100;
+  stationKey = "";
+  if (T) renderStationResults();
+}
+function stationActionMenu(station, source = stationSource(station.id)) {
+  const actions = mk("span", null, "stationactions"), button = mk("button", null, "stationmenubtn"),
+    menu = mk("span", null, "stationmenu");
+  button.type = "button"; button.ariaLabel = "Actions"; button.ariaHasPopup = "menu"; button.ariaExpanded = "false";
+  menu.hidden = true; menu.role = "menu";
+  const pdf = localHref(source.pdf), rik = rikHref(source.rik);
+  if (pdf) { const item = link("PDF", pdf); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
+  if (rik) { const item = link("RIK", rik); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
+  const show = link("прикажи", "#form=" + encodeURIComponent(station.id));
+  show.className = "stationmenuitem"; show.role = "menuitem";
+  show.onclick = ev => { ev.stopPropagation(); closeStationActions(); };
+  menu.append(show);
+  button.onclick = ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    setStationActionsOpen(actions, actions.menu.hidden);
+  };
+  menu.onclick = ev => ev.stopPropagation();
+  actions.button = button; actions.menu = menu; actions.title = "";
+  actions.append(button, menu);
+  return actions;
+}
+const openStationIds = new Set();
+function stationCards() { return [...$("stationlist").children].filter(card => card.stationId != null); }
+function updateStationToggle() {
+  const cards = stationCards(), allOpen = cards.length && cards.every(card => card.open);
+  $("stationtoggle").textContent = allOpen ? "Скупи све" : "Прошири све";
+}
+function setAllStations(open) {
+  for (const card of stationCards()) {
+    card.open = open;
+    if (open) openStationIds.add(String(card.stationId)); else openStationIds.delete(String(card.stationId));
+    if (open && card.ontoggle) card.ontoggle();
+  }
+  updateStationToggle();
+}
+function renderStationChart(body, station, owner, viewName) {
+  const corrected = station.corrected, filed = station.filed || corrected, diff = viewName === "diff";
+  const chosen = viewName === "filed" ? filed : corrected, names = heroListNames(owner);
+  const listRows = names.map((name, i) => {
+    const c = corrected.lists[i], f = filed.lists[i];
+    const value = diff ? c == null || f == null ? null : c - f : chosen.lists[i];
+    const share = diff
+      ? c == null || f == null || !corrected.valid || !filed.valid ? null : c / corrected.valid - f / filed.valid
+      : value == null || !chosen.valid ? null : value / chosen.valid;
+    return {name, no: i + 1, value, share};
+  }).sort((a, b) => diff ? Math.abs(b.value || 0) - Math.abs(a.value || 0) || a.no - b.no
+    : (b.value || 0) - (a.value || 0) || a.no - b.no);
+  const status = diff ? "Са исправкама: " + stationStatus(corrected) + " · Оригинално: " + stationStatus(filed)
+    : stationStatus(chosen);
+  if (diff) body.append(mk("p", status, "stationnote"));
+  if (!listRows.length) { body.append(mk("p", "Подаци по листама нису доступни.", "stationnote")); return; }
+  const max = Math.max(1, ...listRows.map(row => Math.abs(row.value || 0)));
+  for (const item of listRows) {
+    const row = mk("div", null, "stationbar"), label = mk("div", item.no + ". " + item.name),
+      track = mk("div", null, "track"), fill = mk("div", null, "fill"), value = mk("div", null, "value");
+    fill.style.width = item.value == null ? "0" : (diff ? Math.abs(item.value) / max * 100
+      : Math.min(100, (item.share || 0) * 100)) + "%";
+    resultValue(value, item.value, item.share, diff);
+    track.append(fill); row.append(label, track, value); body.append(row);
+  }
+}
+function renderStationResults() {
+  const section = $("stationresults"), list = $("stationlist");
+  if (!T) { stationKey = ""; section.hidden = true; list.replaceChildren(); $("stationmore").hidden = true; return; }
+  if (stationScope !== heroMuni) { stationScope = heroMuni; stationLimit = 100; stationKey = ""; }
+  const allScope = !heroMuni, mode = $("tmode").value, viewName = NV();
+  let stations = (T.station_results || []).filter(station => allScope || station.m === heroMuni);
+  if (mode === "cl") stations = stations.filter(station => {
+    const filed = station.filed || station.corrected;
+    return viewName === "diff" ? station.corrected.clean && filed.clean
+      : (viewName === "filed" ? filed : station.corrected).clean;
+  });
+  const requestedSort = $("stationsort").value || "station", barCount = Number($("stationbars").value) || 1,
+    diff = viewName === "diff", incompatibleSort = ["margin-close", "margin-wide", "review"].includes(requestedSort),
+    localAll = T.scope === "municipal" && allScope,
+    sort = (localAll && requestedSort === "winner") || (diff && incompatibleSort) ? "station" : requestedSort;
+  if (sort !== requestedSort) $("stationsort").value = sort;
+  $("stationfilters").hidden = diff;
+  for (const id of ["sortmarginclose", "sortmarginwide", "sortreview"]) $(id).hidden = diff;
+  $("sortwinner").hidden = localAll;
+  $("stationwinnerlabel").textContent = viewName === "diff" ? "Највећа промена" : "Победник";
+  $("stationsharelabel").textContent = viewName === "diff" ? "Гласови" : "Удео";
+  $("stationmarginlabel").textContent = viewName === "diff" ? "Удео" : "Маргина";
+  $("sortwinner").textContent = viewName === "diff" ? "Листа са највећом променом" : "Победник";
+  $("sortshare").textContent = viewName === "diff" ? "Величина промене" : "Удео победника";
+  $("sortturnouthigh").textContent = viewName === "diff" ? "Највећа промена излазности" : "Највећа излазност";
+  $("sortturnoutlow").textContent = viewName === "diff" ? "Најмања промена излазности" : "Најмања излазност";
+  const municipalityByName = new Map(T.munis.map(row => [row.m, row]));
+  let records = stations.map(station => {
+    const corrected = station.corrected, filed = station.filed || corrected,
+      chosen = viewName === "filed" ? filed : corrected, source = stationSource(station.id),
+      review = stationReview(station.id, source),
+      municipality = municipalityByName.get(station.m),
+      listOwner = T.scope === "municipal" ? municipality : T,
+      correctedTurnout = stationTurnout(corrected), filedTurnout = stationTurnout(filed),
+      turnout = diff ? correctedTurnout == null || filedTurnout == null ? null : correctedTurnout - filedTurnout
+        : stationTurnout(chosen);
+    return {station, source, chosen, review, turnout, listOwner,
+      municipalityName: heroMuniName(municipality || station), outcome: null};
+  });
+  const outcomeOf = record => record.outcome || (record.outcome = stationOutcome(record.station, record.listOwner, viewName));
+  const allRecords = records;
+  const filterMatch = (record, filter) => filter === "all" ? true : record.chosen.included ? false
+    : filter === "out" ? true : filter === "undecided" ? !record.review.verdict : record.review.verdict === filter;
+  for (const [value, label] of Object.entries(STATION_FILTERS)) {
+    const button = $("stationfilter-" + value), count = allRecords.filter(record => filterMatch(record, value)).length;
+    button.textContent = label + " " + num(count);
+    button.setAttribute("aria-pressed", String(stationFilter === value));
+  }
+  if (!diff && stationFilter !== "all") records = records.filter(record => filterMatch(record, stationFilter));
+  const byStation = (a, b) => (allScope
+    ? SERBIAN_MUNICIPALITY_COLLATOR.compare(a.municipalityName, b.municipalityName)
+    : 0) || String(a.station.no).localeCompare(String(b.station.no), undefined, {numeric: true});
+  const byNumber = (getter, descending = false) => (a, b) => {
+    const av = getter(a), bv = getter(b);
+    if (av == null) return bv == null ? byStation(a, b) : 1;
+    if (bv == null) return -1;
+    return (descending ? bv - av : av - bv) || byStation(a, b);
+  };
+  const reviewRank = record => record.chosen.included ? 4
+    : ({escalate: 0, unsure: 1, "": 2, ok: 3}[record.review.verdict] ?? 3);
+  const comparators = {
+    winner: (a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(outcomeOf(a).name, outcomeOf(b).name) || byStation(a, b),
+    share: byNumber(record => Math.abs(outcomeOf(record).share || 0), true),
+    "margin-close": byNumber(record => outcomeOf(record).marginShare),
+    "margin-wide": byNumber(record => outcomeOf(record).marginShare, true),
+    "turnout-high": byNumber(record => record.turnout == null ? null : Math.abs(record.turnout), true),
+    "turnout-low": byNumber(record => record.turnout == null ? null : Math.abs(record.turnout)),
+    review: (a, b) => reviewRank(a) - reviewRank(b) || byStation(a, b),
+    station: byStation,
+  };
+  records.sort(comparators[sort] || byStation);
+  const matching = records.length, shown = allScope ? Math.min(matching, stationLimit) : matching;
+  records = records.slice(0, shown);
+  for (const record of records) outcomeOf(record);
+  const sourceLinks = records.map(({station, source, review}) => {
+    return [station.id, source.pdf || "", source.rik || "", review.verdict, review.note];
+  });
+  const key = JSON.stringify([heroMuni, mode, viewName, T.scope, sort, barCount, stationFilter,
+    stationLimit, records, sourceLinks]);
+  if (key === stationKey) return;
+  stationKey = key;
+  section.hidden = false;
+  $("stationcount").textContent = shown < matching ? num(shown) + " од " + num(matching) + " записника"
+    : !diff && stationFilter !== "all" ? num(matching) + " од " + num(stations.length) + " записника"
+    : num(matching) + " " + serbianCount(matching, "записник", "записника", "записника");
+  const cards = records.map(({station, source, outcome, chosen, review, turnout, listOwner, municipalityName}) => {
+    const corrected = station.corrected, filed = station.filed || corrected;
+    const valid = viewName === "diff" ? corrected.valid == null || filed.valid == null ? null
+      : corrected.valid - filed.valid : chosen.valid;
+    const details = mk("details", null, "station"), summary = mk("summary"), body = mk("div", null, "stationbody"),
+      winner = mk("span", null, "stationwinner"), winnerNo = outcome.no == null ? outcome.name === "Нерешено" ? "=" : "—" : String(outcome.no);
+    winner.append(mk("span", winnerNo, "no"));
+    winner.title = outcome.name;
+    const status = viewName === "diff" ? "Поређење" : chosen.included ? "Урачунат" : "Није урачунат",
+      statusEl = mk("span", null, "stationstatus" + (viewName === "diff" ? "" : chosen.included ? " in" : " out"));
+    const statusMain = mk("span", status, "stationstatusmain" + (chosen.reason && !chosen.included ? " hasreason" : ""));
+    if (chosen.reason && !chosen.included) {
+      statusMain.dataset.reason = chosen.reason;
+      statusMain.tabIndex = 0;
+      statusMain.ariaLabel = status + ": " + chosen.reason;
+    }
+    statusEl.append(statusMain);
+    if (viewName !== "diff" && !chosen.included) {
+      const reviewEl = mk("span", review.label,
+        "stationreview " + (review.verdict || "undecided") + (review.note ? " hasnote" : ""));
+      if (review.note) {
+        reviewEl.dataset.note = review.note;
+        reviewEl.tabIndex = 0;
+        reviewEl.ariaLabel = review.label + ": " + review.note;
+      }
+      statusEl.append(reviewEl);
+    }
+    statusEl.append(stationActionMenu(station, source));
+    summary.append(mk("span", (allScope ? municipalityName + " · " : "") + "БМ " + station.no + (station.name ? " — " + station.name : ""), "stationname"),
+      mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric"),
+      mk("span", valid == null ? "—" : viewName === "diff" ? dnum(valid) : num(valid), "stationmetric"), winner,
+      stationMiniBars(outcome, barCount, viewName === "diff"), stationMargin(outcome, viewName === "diff"), statusEl);
+    details.append(summary, body);
+    details.stationId = String(station.id);
+    let rendered = false;
+    const draw = () => { if (!rendered) { rendered = true; renderStationChart(body, station, listOwner, viewName); } };
+    details.ontoggle = () => {
+      if (details.open) { openStationIds.add(details.stationId); draw(); }
+      else openStationIds.delete(details.stationId);
+      updateStationToggle();
+    };
+    if (openStationIds.has(details.stationId)) { details.open = true; draw(); }
+    return details;
+  });
+  list.replaceChildren(...cards);
+  if (!cards.length) list.replaceChildren(mk("p", !diff && stationFilter !== "all"
+    ? "Нема записника за изабрани филтер." : "Нема записника у изабраном обухвату.", "stationnote"));
+  const more = $("stationmore");
+  more.hidden = !allScope || shown >= matching;
+  more.textContent = "Прикажи још (" + num(Math.min(100, matching - shown)) + ")";
+  updateStationToggle();
+}
 function renderHero() {
   heroMunis();
   const foot = $("herofoot");
   const label = T ? "НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а. Стање у " +
     epoch(Date.parse(D.built) / 1000).slice(-5) + "." : "НЕЗВАНИЧНО — резултати још нису доступни.";
   foot.replaceChildren(label);
-  if (!T) { $("heronames").hidden = true; $("herotitle").textContent = ""; $("heronote").textContent = "Још нема анализираних записника."; for (const s of slots) s.row.hidden = true; return; }
+  if (!T) { $("heronames").hidden = true; $("herotitle").textContent = ""; $("heronote").textContent = "Још нема анализираних записника."; for (const s of slots) s.row.hidden = true; renderStationResults(); return; }
   const raw = (heroMuni && T.munis.find(m => m.m === heroMuni)) || T.overall, r = vrow(raw), t = r[$("tmode").value], none = !r.counted;
   const dg = NV() === "diff", mode = $("tmode").value;
   const cover = r.stations ? r.counted / r.stations : null;
@@ -1704,10 +2076,11 @@ function renderHero() {
     s.no.textContent = e.i < 0 ? "" : String(e.i + 1);  // ballot number = the list row on the form
     s.no.hidden = e.i < 0;
     s.nm.textContent = e.n; s.row.title = e.n;
-    s.val.textContent = dg ? dnum(e.v) + "  " + dpp(share) + " п. п." : num(e.v) + "  " + pc(share);
+    resultValue(s.val, e.v, share, dg);
     s.fill.style.width = (dg ? Math.abs(e.v) / maxAbs * 100 : Math.min(100, share * 100)) + "%";
-    s.fill.style.backgroundColor = e.i < 0 ? "#777" : OKABE[e.i % (OKABE.length - 1)];
+    s.fill.style.backgroundColor = RESULT_BAR_COLOR;
   });
+  renderStationResults();
 }
 function setHero(on) {
   document.body.classList.toggle("hero", on);
@@ -1715,10 +2088,18 @@ function setHero(on) {
   if (on) setTab("results");
 }
 $("herobtn").onclick = () => setHero(!document.body.classList.contains("hero"));
-document.addEventListener("keydown", ev => { if (ev.key === "Escape") setHero(false); });
-$("hmuni").addEventListener("input", () => { heroMuni = $("hmuni").value; heroPicked = true; if (T) renderHero(); });
+document.addEventListener("click", closeStationActions);
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape") { if (openStationActions) closeStationActions(); else setHero(false); }
+});
+$("hmuni").addEventListener("input", () => setSharedMunicipality($("hmuni").value));
 $("hmode").addEventListener("input", () => { $("tmode").value = $("hmode").value; if (T) renderTally(); });
 $("hview").addEventListener("input", () => { $("tview").value = $("hview").value; writeHash(); if (T) renderTally(); });
+$("stationsort").addEventListener("input", () => { stationLimit = 100; stationKey = ""; if (T) renderStationResults(); });
+$("stationbars").addEventListener("input", () => { if (T) renderStationResults(); });
+for (const value of Object.keys(STATION_FILTERS)) $("stationfilter-" + value).onclick = () => setStationFilter(value);
+$("stationtoggle").onclick = () => setAllStations(!stationCards().every(card => card.open));
+$("stationmore").onclick = loadMoreStations;
 initHero();
 if (new URLSearchParams(location.search).get("hero") === "1") setHero(true);
 
@@ -1765,13 +2146,18 @@ function loadOfficialResults() {
     });
 }
 
-function setTab(name) {
+function activeTab() {
+  return !$("resview").hidden ? "results" : !$("officialview").hidden ? "official" : "forms";
+}
+function setTab(name, updateHash = true) {
+  name = ["results", "official"].includes(name) ? name : "forms";
   const res = name === "results", official = name === "official";
   $("formsview").hidden = res || official; $("resview").hidden = !res; $("officialview").hidden = !official;
   $("tabforms").classList.toggle("on", !res && !official); $("tabres").classList.toggle("on", res);
   $("tabofficial").classList.toggle("on", official);
   if (res && tmTable) { tmTable.columns.adjust(); teTable.columns.adjust(); }
   if (official) loadOfficialResults();
+  if (updateHash) writeHash();
 }
 $("tabforms").onclick = () => setTab("forms");
 $("tabres").onclick = () => setTab("results");
@@ -1813,8 +2199,12 @@ function readHash() {
   const o = {rules: (p.get("rules") || "").split(",")};
   for (const k of FILTERS) o[k] = $(k).type === "checkbox" ? (k === "auto" ? p.get(k) !== "0" : p.get(k) === "1") : p.get(k);
   setCtl(o);
+  setHeroMunicipality(o.m || "", true);
   const nv = p.get("nv");
   $("tview").value = ["corrected", "filed", "diff"].includes(nv) ? nv : "corrected";
+  const formId = p.get("form"), form = D.rows.find(row => String(row.id) === formId);
+  if (form) showForm(form.id, form.muni + " BM " + form.no, false);
+  else { onlyId = null; $("onlyid").hidden = true; setTab(p.get("tab"), false); }
 }
 function writeHash() {
   const c = readCtl(), p = new URLSearchParams();
@@ -1825,9 +2215,19 @@ function writeHash() {
   }
   if (c.rules.length) p.set("rules", c.rules.join(","));
   if (NV() !== "corrected") p.set("nv", NV());
+  if (activeTab() !== "forms") p.set("tab", activeTab());
+  if (onlyId != null && activeTab() === "forms") p.set("form", String(onlyId));
   try { history.replaceState(null, "", "#" + p); } catch (e) {}
 }
-function redraw() { writeHash(); if (table) table.draw(); if (S) renderStatus(); }
+function redraw() {
+  const municipality = $("m").value;
+  const municipalityChanged = municipality !== heroMuni || !heroPicked;
+  if (municipalityChanged) setHeroMunicipality(municipality, true);
+  writeHash();
+  if (table) table.draw();
+  if (S) renderStatus();
+  if (municipalityChanged && T) renderHero();
+}
 let timer = 0;
 $("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(redraw, 200); });
 for (const id of FILTERS) if (id !== "q") $(id).addEventListener("input", redraw);

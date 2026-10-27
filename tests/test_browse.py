@@ -188,6 +188,54 @@ def test_review_and_alert_status_share_one_card():
     assert 'card("Review"' not in html and 'card("Alerts"' not in html
 
 
+def test_results_details_and_audit_are_secondary_collapsed_groups():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<details id="tdetails" class="resultgroup">' in html
+    assert '<summary>Detailed totals <span id="tdetailcount"></span></summary>' in html
+    assert '<details id="taudit" class="resultgroup">' in html
+    assert '<summary>Result audit trail <span id="tauditcount"></span></summary>' in html
+    assert '<details id="tdetails" class="resultgroup" open>' not in html
+    assert '<details id="taudit" class="resultgroup" open>' not in html
+
+    detailed = html[html.index('<details id="tdetails"'):html.index('</details>', html.index('<details id="tdetails"'))]
+    audit = html[html.index('<details id="taudit"'):html.index('</details>', html.index('<details id="taudit"'))]
+    assert all(marker in detailed for marker in ('id="tctl"', 'id="csv"', 'id="toverall"', 'id="tmunis"'))
+    assert all(marker in audit for marker in ('id="texcl"', 'id="tcor"', 'id="tnotes"'))
+    assert '$("tdetailcount").textContent = ' in html
+    assert '$("tauditcount").textContent = ' in html
+
+
+def test_station_results_are_collapsed_with_compact_controls_and_columns():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<details id="stationresults" hidden>' in html
+    assert '<details id="stationresults" hidden open>' not in html
+    assert all(f'id="{control}"' in html for control in (
+        "stationsort", "stationbars", "stationtoggle", "stationmore"))
+    assert "#stationmore[hidden]{display:none}" in html
+    assert all(f'<option value="{n}">' in html for n in (1, 2, 3))
+    assert '<option value="1">1 листа</option>' in html
+    assert '<option value="2" selected>2 листе</option>' in html
+    assert '<option value="3">3 листе</option>' in html
+    assert 'id="stationfilters"' in html
+    assert all(f'data-station-filter="{value}"' in html for value in (
+        "all", "out", "escalate", "unsure", "undecided"))
+    assert all(f'value="{value}"' in html for value in (
+        "margin-close", "margin-wide", "turnout-high", "turnout-low", "review"))
+    assert 'id="sortturnouthigh"' in html and 'id="sortturnoutlow"' in html
+    assert all(label in html for label in (
+        "Бирачко место", "Излазност", "Важећи", "Победник", "Удео", "Маргина", "Статус"))
+    assert 'Прошири све' in html and 'Скупи све' in html
+    assert '.stationstatus{display:grid;grid-template-columns:auto auto auto;align-items:center;justify-content:end;' in html
+    assert '.stationmenubtn{display:inline-grid;place-items:center;' in html
+    assert '.stationmenubtn::before{content:"";' in html
+    assert '.stationreview{font-size:.8em;' in html
+    assert '.stationreview.hasnote:hover::after,.stationreview.hasnote:focus::after{display:block}' in html
+    assert '.stationstatusmain.hasreason:hover::after,.stationstatusmain.hasreason:focus::after{display:block}' in html
+    assert '.stationmarginfill{display:block;height:100%;background:var(--bar)' in html
+
+
 def test_non_default_form_select_filters_use_active_filter_colors():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
@@ -215,20 +263,39 @@ def test_operator_page_has_separate_official_rik_results_tab():
     assert "РИК" in html and "НЕЗВАНИЧНО" in html
 
 
-def test_json_is_ascii_even_with_lone_surrogate():
+def test_operator_page_preserves_active_tab_in_url_hash():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "function activeTab()" in html
+    assert 'if (activeTab() !== "forms") p.set("tab", activeTab());' in html
+    assert 'setTab(p.get("tab"), false);' in html
+    assert 'function setTab(name, updateHash = true)' in html
+
+
+def test_operator_page_supports_shareable_form_deep_links():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'const formId = p.get("form")' in html
+    assert 'showForm(form.id, form.muni + " BM " + form.no, false);' in html
+    assert 'if (onlyId != null && activeTab() === "forms") p.set("form", String(onlyId));' in html
+
+
+def test_json_uses_utf8_and_escapes_lone_surrogate_and_script_markup():
     from rg2watch.browse import _json
-    blob = _json({"x": "a\ud800b\u2028</script>"})
-    assert blob.isascii() and "</script>" not in blob and json.loads(blob)["x"].startswith("a")
+    blob = _json({"x": "Ћирилица a\ud800b\u2028</script>"})
+    raw = blob.encode("utf-8")
+    assert b"\\ud800" in raw and b"</script>" not in raw
+    assert "Ћирилица" in blob and json.loads(blob)["x"].startswith("Ћирилица")
 
 
-def test_script_close_tag_escaped_and_ascii_only(tmp_path):
+def test_script_close_tag_escaped_in_utf8_files(tmp_path):
     s = store()
-    add(s, doc(BASE + "/e/a.pdf", muni="</script><b>x", label="<!-- y"))
+    add(s, doc(BASE + "/e/a.pdf", muni="</script><b>x", label="Ћ<!-- y"))
     out = tmp_path / "index.html"
     build_page(s, out, tmp_path / "pdfs")
     for name in ("data.js", "data.json"):
         raw = (tmp_path / name).read_bytes()
-        assert raw.isascii() and b"</script>" not in raw and b"<!--" not in raw
+        assert "Ћ".encode() in raw and b"</script>" not in raw and b"<!--" not in raw
     assert rows_of(out)[0]["muni"] == "</script><b>x"
 
 
@@ -456,7 +523,7 @@ def test_page_marks_stale_status():
 
 def test_status_refresh_preserves_unchanged_alerts_and_skips_static_repaints():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    status = html[html.index("function paintHero"):html.index("// ---- table")]
+    status = html[html.index("let statusKey"):html.index("// ---- table")]
     script = r'''
 const assert = require("assert");
 const els = {};
@@ -480,7 +547,8 @@ function rikHref() { return null; }
 function link() { return mk("a"); }
 function showForm() {}
 const STALE_S = 60, SEV = ["HIGH", "MEDIUM", "LOW"];
-let slots = [], rows = [], D = {db: "db", built: "one"}, S = null;
+let heroPaints = 0, slots = [{}], rows = [], D = {db: "db", built: "one"}, S = null;
+function renderHero() { heroPaints++; }
 ''' + status + r'''
 const view = {
   ts: 1, watching: false, db: "db", watcher: null,
@@ -496,6 +564,7 @@ const alertReplaces = els["status-alerts"].replaceCount;
 renderStatus();
 assert.strictEqual(els["status-alerts"].children[0], alertCard, "unchanged alerts keep the same DOM node");
 assert.equal(els["status-alerts"].replaceCount, alertReplaces, "unchanged alerts are not replaced");
+assert.equal(heroPaints, 0, "status-only updates must not repaint election results");
 
 let paints = 0;
 renderStatus = () => { paints++; };
