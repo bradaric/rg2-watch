@@ -141,6 +141,7 @@ table.dataTable td.dt-empty{color:var(--mut);padding:var(--s5)!important}
 table.dataTable td.dt-right,table.dataTable th.dt-right{text-align:right;font-variant-numeric:tabular-nums}
 table.dataTable td.scol{min-width:11em}
 table.dataTable td.scol::first-line{font-weight:650}
+.stationplace{display:block;color:var(--mut);font-size:12px;font-weight:400;margin-top:2px}
 table.dataTable td.nw{white-space:nowrap}
 #forms td.nw{font-variant-numeric:tabular-nums}
 #forms td.models{white-space:normal;max-width:14rem;overflow-wrap:anywhere}
@@ -1266,6 +1267,10 @@ function keep(r) {
     && (!$("rp").checked || r.state === "replaced") && (!$("rm").checked || r.state === "removed")
     && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
 }
+function stationCellHtml(r) {
+  const main = esc(r.muni) + "<br>" + esc((r.no ? "BM " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""));
+  return main + (r.settlement ? '<span class="stationplace">' + esc(r.settlement) + "</span>" : "");
+}
 function initTable() {
   DataTable.ext.search.push((s, _d, _i, row) => s.nTable.id !== "forms" || keep(row));
   table = new DataTable("#forms", {
@@ -1281,8 +1286,7 @@ function initTable() {
       {data: null, orderable: false, className: "dt-control", defaultContent: "",
        createdCell: td => td.setAttribute("aria-label", "details and review")},
       {data: "el", title: "Election", visible: false, render: {_: d => d, display: d => esc(shortTitle(D.elections[d] || d))}},
-      {data: "_stn", title: "Station", className: "scol", render: {_: d => d, display: (d, t, r) => esc(r.muni) + "<br>" +
-        esc((r.no ? "BM " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""))}},
+      {data: "_stn", title: "Station", className: "scol", render: {_: d => d, display: (d, t, r) => stationCellHtml(r)}},
       {data: "label", title: "Document", render: txt(), defaultContent: ""},
       {data: "up", title: "Times (RS)", className: "nw", render: {_: d => d || "", display: (d, t, r) =>
         [["up", d], ["seen", r.seen], ["cache", r.cache], ["done", r.done]].filter(x => x[1])
