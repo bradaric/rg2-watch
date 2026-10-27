@@ -326,6 +326,15 @@ def test_public_page_aligns_chart_bars_and_values_in_shared_columns():
     assert ".row{grid-template-columns:1fr auto}.row>.track{grid-column:1/-1;grid-row:2}" in html
 
 
+def test_public_station_span_bar_fills_are_block_level():
+    s = store()
+    form(s, 1, clean_report())
+
+    html = render_public_results(build_public_results(s, config(), P))
+
+    assert ".fill{display:block;height:100%;background:var(--bar)" in html
+
+
 def test_public_page_uses_adaptive_navy_serbian_theme():
     s = store()
     form(s, 1, clean_report())
