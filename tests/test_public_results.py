@@ -63,6 +63,8 @@ def test_public_rg9_station_is_annulled_without_exposing_the_document():
     data = build_public_results(s, config(), P)
 
     assert data["overall"]["totals"]["registered"] == 0
+    assert data["overall"]["annulled"] == 1
+    assert data["municipalities"][0]["annulled"] == 1
     assert data["stations"][0]["included"] is False
     assert data["stations"][0]["annulled"] is True
     assert "private-rg9" not in json.dumps(data)
@@ -239,6 +241,7 @@ def test_public_page_renders_sanitized_station_results_with_global_progressive_f
     assert 'id="station-results"' in html
     assert 'data-station-filter="in"' in html
     assert 'data-station-filter="out"' in html
+    assert 'data-station-filter="annulled"' in html
     assert 'id="station-more"' in html
     assert '.station-more[hidden]{display:none}' in html
 
@@ -282,6 +285,13 @@ setStationFilter("out");
 assert.equal(els.stationlist.children.length,1);
 DATA.stations.at(-1).annulled=true;renderStationResults();
 assert.equal(els.stationlist.children[0].children[0].children.at(-1).textContent,"Поништено");
+assert.equal(els["station-filter-annulled"].textContent,"Поништено 1");
+DATA.overall.annulled=1;render();
+assert(els["forms-sub"].textContent.includes("Поништено: 1 бирачко место (RG-9)"));
+setStationFilter("annulled");
+assert.equal(els.stationlist.children.length,1);
+setStationFilter("out");
+DATA.overall.annulled=0;
 DATA.stations.at(-1).annulled=false;renderStationResults();
 const excluded=els.stationlist.children[0];
 assert(excluded.className.includes("excluded"));

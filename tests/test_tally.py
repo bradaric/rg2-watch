@@ -79,9 +79,9 @@ def test_tally_exposes_per_station_results_for_operator_drilldown():
     }]
 
 
-def test_active_rg9_annuls_station_and_removes_it_from_every_tally_view():
+def test_active_rg9_annuls_station_and_removes_it_from_every_tally_view(tmp_path):
     s = store()
-    form(s, 12, clean_report())
+    rg2 = form(s, 12, clean_report())
     rg9 = doc("/extfile/rg9.pdf", muni="Alpha", no="12", dt=9)
     add(s, rg9)
 
@@ -89,6 +89,8 @@ def test_active_rg9_annuls_station_and_removes_it_from_every_tally_view():
 
     assert result["overall"]["counted"] == 1
     assert result["overall"]["clean"] == 0
+    assert result["overall"]["annulled"] == 1
+    assert result["munis"][0]["annulled"] == 1
     for view in ("all", "cl", "fall", "fcl"):
         assert result["overall"][view]["registered"] == 0
         assert result["overall"][view]["valid"] == 0
@@ -103,6 +105,16 @@ def test_active_rg9_annuls_station_and_removes_it_from_every_tally_view():
     assert station["corrected"]["included"] is False
     assert station["corrected"]["clean"] is False
     assert station["annulled"]["rik"] == BASE + "/extfile/rg9.pdf"
+    assert result["annulled"] == [{"id": station["id"], "m": "Alpha", "no": "12",
+                                    "rik": BASE + "/extfile/rg9.pdf"}]
+    text = format_tally(result)
+    assert "поништена бирачка места (RG-9):" in text
+    assert "Alpha БМ 12: Поништено" in text
+    browse_row = build_data(s, tmp_path, parent=P, cfg=Config(model=M, tally_scope={P: "national"}))["rows"][0]
+    assert browse_row["rec"]["annulled"]["rik"] == BASE + "/extfile/rg9.pdf"
+    s.set_review(rg2.url, "escalate")
+    overlap = tally(s)["overall"]
+    assert (overlap["held"], overlap["annulled"], overlap["held_annulled"]) == (1, 1, 1)
 
 
 def test_removed_rg9_does_not_annul_station():
@@ -837,6 +849,7 @@ def test_results_javascript_uses_selected_view_and_exports_explicit_unavailable_
     assert "OKABE" not in html
     assert 'const RESULT_BAR_COLOR = "var(--bar)"' in html
     assert 'id="stationresults"' in html and "function renderStationResults(" in html
+    assert 'data-station-filter="annulled"' in html
     helpers = html[html.index('const nf = new Intl.NumberFormat("en-GB")'):html.index("function showForm")]
     hero = html[html.index("const RESULT_BAR_COLOR") : html.index('$("herobtn").onclick')]
     status = html[html.index("function paintHero"):html.index("// ---- table")]
@@ -919,6 +932,7 @@ assert.equal(vrow(r).all.valid, 100);
 let csv = tallyCsv();
 assert.equal(csvValue(csv, "Reconciled valid"), "100");
 assert.equal(csvValue(csv, "Held by escalation"), "0");
+assert.equal(csvValue(csv, "Поништено (RG-9)"), "0");
 assert.equal(csvValue(csv, "1 · Листа А votes"), "60");
 assert.equal(csvValue(csv, "Unreconciled turnout gap (signed)"), "0");
 renderHero();
@@ -1204,13 +1218,24 @@ assert(stationActions, "station status must have a compact actions menu");
 assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "прикажи"]);
 assert.equal(stationActions.menu.hidden, true);
 T.station_results[0].annulled = {rik: "https://example.test/rg9.pdf"};
+T.overall.annulled = T.munis[0].annulled = 1;
 renderHero();
+assert(els["hs-forms-context"].textContent.includes("Поништено: 1 бирачко место (RG-9)"));
 stationCard = els.stationlist.children[0];
 stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
 assert.equal(stationStatusEl.children[0].textContent, "Поништено");
 stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
 assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "RG-9", "прикажи"]);
+assert.equal(els["stationfilter-annulled"].textContent, "Поништено 1");
+setStationFilter("annulled");
+assert.equal(els.stationlist.children.length, 1);
+setStationFilter("all");
+const formStatus = documentStatusEl({state: "current", ast: "done",
+  rec: {annulled: {rik: "https://example.test/rg9.pdf"}}});
+assert(formStatus.children.some(x => x.textContent === "Поништено — RG-9"));
+assert.equal(formStatus.children.at(-1).textContent, "RG-9");
 T.station_results[0].annulled = null;
+T.overall.annulled = T.munis[0].annulled = 0;
 renderHero();
 let prevented = 0, stopped = 0;
 stationActions.button.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});

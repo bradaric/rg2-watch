@@ -439,7 +439,7 @@ stroke-width:2.5;
 <div id="herocharthead"><div class="hero-eyebrow">Пресек резултата</div></div>
 <div id="herochart"></div>
 <details id="stationresults" hidden><summary id="stationhead"><h3>Резултати по бирачким местима</h3><span id="stationcount"></span></summary>
-<div id="stationtools"><div id="stationfilters" role="group" aria-label="Филтер бирачких места"><button type="button" id="stationfilter-all" class="stationfilter" data-station-filter="all" aria-pressed="true">Сва бирачка места</button><button type="button" id="stationfilter-out" class="stationfilter" data-station-filter="out" aria-pressed="false">Није урачунато</button><button type="button" id="stationfilter-escalate" class="stationfilter" data-station-filter="escalate" aria-pressed="false">Ескалирано</button><button type="button" id="stationfilter-unsure" class="stationfilter" data-station-filter="unsure" aria-pressed="false">Несигурно</button><button type="button" id="stationfilter-undecided" class="stationfilter" data-station-filter="undecided" aria-pressed="false">Без одлуке</button></div><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option><option id="sortmarginclose" value="margin-close">Најтешња трка</option><option id="sortmarginwide" value="margin-wide">Највећа маргина</option><option id="sortturnouthigh" value="turnout-high">Највећа излазност</option><option id="sortturnoutlow" value="turnout-low">Најмања излазност</option><option id="sortreview" value="review">Статус провере</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2" selected>2 листе</option><option value="3">3 листе</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
+<div id="stationtools"><div id="stationfilters" role="group" aria-label="Филтер бирачких места"><button type="button" id="stationfilter-all" class="stationfilter" data-station-filter="all" aria-pressed="true">Сва бирачка места</button><button type="button" id="stationfilter-out" class="stationfilter" data-station-filter="out" aria-pressed="false">Није урачунато</button><button type="button" id="stationfilter-annulled" class="stationfilter" data-station-filter="annulled" aria-pressed="false">Поништено</button><button type="button" id="stationfilter-escalate" class="stationfilter" data-station-filter="escalate" aria-pressed="false">Ескалирано</button><button type="button" id="stationfilter-unsure" class="stationfilter" data-station-filter="unsure" aria-pressed="false">Несигурно</button><button type="button" id="stationfilter-undecided" class="stationfilter" data-station-filter="undecided" aria-pressed="false">Без одлуке</button></div><label>Редослед <select id="stationsort"><option value="station">БМ</option><option id="sortwinner" value="winner">Победник</option><option id="sortshare" value="share">Удео победника</option><option id="sortmarginclose" value="margin-close">Најтешња трка</option><option id="sortmarginwide" value="margin-wide">Највећа маргина</option><option id="sortturnouthigh" value="turnout-high">Највећа излазност</option><option id="sortturnoutlow" value="turnout-low">Најмања излазност</option><option id="sortreview" value="review">Статус провере</option></select></label><label>Мини-график <select id="stationbars"><option value="1">1 листа</option><option value="2" selected>2 листе</option><option value="3">3 листе</option></select></label><button id="stationtoggle" type="button">Прошири све</button></div>
 <div class="stationcols" aria-hidden="true"><span></span><span>Бирачко место</span><span>Излазност</span><span>Важећи</span><span id="stationwinnerlabel">Победник</span><span id="stationsharelabel">Удео</span><span id="stationmarginlabel">Маргина</span><span>Статус</span></div>
 <div id="stationlist"></div><button id="stationmore" type="button" hidden>Прикажи још</button></details>
 <div id="herofoot"></div>
@@ -1230,10 +1230,11 @@ function prep(r) {
     ...x.ops.map(o => o.m), ...x.ars.map(a => a.m + " (arithmetic)")]));
   r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models,
     ...r.r7.flatMap(x => x.ch || []), r.rec.status, ...r.rec.rules, ...r.rec.details,
+    ...(r.rec.annulled ? ["поништено rg-9"] : []),
     ...all.flatMap(v => v.oc ? [v.oc.status, v.oc.reason || ""] : [])].join("\n").toLowerCase();
   r.mods = [...r._models].sort().join(", ") + (r.dis.length ? " - DISAGREE" : "");
   r._stn = r.muni.toLowerCase() + " " + (parseInt(r.no) || 0);
-  r._st = r.state + " " + r.ast;
+  r._st = r.state + " " + r.ast + (r.rec.annulled ? " annulled rg-9" : "");
   r._pdfs = all.some(x => x.pdf);
   return r;
 }
@@ -1277,8 +1278,8 @@ function initTable() {
       {data: "up", title: "Times (RS)", className: "nw", render: {_: d => d || "", display: (d, t, r) =>
         [["up", d], ["seen", r.seen], ["cache", r.cache], ["done", r.done]].filter(x => x[1])
           .map(x => esc(x[0] + " " + stamp(x[1]))).join("<br>")}},
-      {data: "_st", title: "Status", className: "nw", render: {_: d => d, display: (d, t, r) =>
-        esc(r.state) + "<br>" + esc("analysis " + r.ast)}},
+      {data: "_st", title: "Status", className: "nw", render: {_: d => d, display: () => ""},
+       createdCell: (td, d, r) => td.append(documentStatusEl(r))},
       {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
        createdCell: (td, d, r) => { td.append(badges(r.f), rg7Badges(r)); if (r._note) td.append(mk("span", r._note, "note")); }},
       {data: "rec", title: "Numbers", className: "nw", render: {
@@ -1356,6 +1357,16 @@ function applyData(data) {
 const nf = new Intl.NumberFormat("en-GB");
 const num = v => v == null ? "-" : nf.format(v);
 const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
+function documentStatusEl(r) {
+  const box = mk("span");
+  box.append(mk("span", r.state), mk("br"), mk("span", "analysis " + r.ast));
+  if (r.rec.annulled) {
+    box.append(mk("br"), mk("span", "Поништено — RG-9", "bad"));
+    const href = rikHref(r.rec.annulled.rik);
+    if (href) box.append(" ", link("RG-9", href));
+  }
+  return box;
+}
 function resultValue(el, votes, share, diff) {
   el.replaceChildren(mk("span", diff ? dnum(votes) : num(votes), "resultvotes"),
     mk("span", diff ? dpp(share) + " п. п." : pc(share), "resultpct"));
@@ -1396,6 +1407,7 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come
     ["Municipality", r => r.m, s => s, r => r.m],
     ["Stations", r => r.stations, num], ["Counted", r => r.counted, num], ["Clean", r => r.clean, n],
     ["Flagged", r => r.excluded, n], ["Held by escalation", r => r.held || 0, num],
+    ["Поништено (RG-9)", r => r.annulled || 0, num],
     ["Coverage", r => ratio(r.counted, r.stations), pc, r => ratio(r.counted, r.stations) == null ? "" : (100 * r.counted / r.stations).toFixed(1)],
     ["Registered", r => t(r).registered, n], ["Voted", r => t(r).voted, n],
     ["Turnout" + (dg ? " (pp)" : ""), r => t(r).turnout, p, r => t(r).turnout == null ? "" : (100 * t(r).turnout).toFixed(1)],
@@ -1436,7 +1448,7 @@ function tallyCsv() {
   // header is row 1 (pandas/Excel read it cleanly); the unofficial note is a last column, first data row
   const note = "Unofficial - numbers read by " + T.model + " from the scanned forms; " +
     (mode === "cl" ? "clean forms only (leave out flagged)" : "all counted forms") +
-    "; escalated forms are held from totals; numbers: " + NV_LABEL[NV()] +
+    "; escalated and RG-9 annulled forms are held from totals; numbers: " + NV_LABEL[NV()] +
     " Reported invalid counts are limited to forms with reconciled valid/list totals." +
     (NV() === "diff" ? " Paired cohort columns are unsigned actual sizes; turnout and shares are differences in percentage points." : "");
   if (T.scope === "municipal") {  // long format: one row per (municipality, list), shared totals repeated
@@ -1769,7 +1781,7 @@ function stationReview(id, source = stationSource(id)) {
   return {verdict, label: labels[verdict] || "без одлуке", note: review.n || ""};
 }
 const STATION_FILTERS = {
-  all: "Сва бирачка места", out: "Није урачунато", escalate: "Ескалирано", unsure: "Несигурно", undecided: "Без одлуке"
+  all: "Сва бирачка места", out: "Није урачунато", annulled: "Поништено", escalate: "Ескалирано", unsure: "Несигурно", undecided: "Без одлуке"
 };
 let stationFilter = "all";
 function setStationFilter(value) {
@@ -1887,7 +1899,7 @@ function renderStationResults() {
   });
   const outcomeOf = record => record.outcome || (record.outcome = stationOutcome(record.station, record.listOwner, viewName));
   const allRecords = records;
-  const filterMatch = (record, filter) => filter === "all" ? true : record.chosen.included ? false
+  const filterMatch = (record, filter) => filter === "all" ? true : filter === "annulled" ? !!record.station.annulled : record.chosen.included ? false
     : filter === "out" ? true : filter === "undecided" ? !record.review.verdict : record.review.verdict === filter;
   for (const [value, label] of Object.entries(STATION_FILTERS)) {
     const button = $("stationfilter-" + value), count = allRecords.filter(record => filterMatch(record, value)).length;
@@ -2027,7 +2039,12 @@ function renderHero() {
     const formContext = [num(cleanContributing) + " без уочених проблема",
       reviewSummary.text];
     if (held) formContext.push(heldReviewSummary(held, reviewSummary.escalate));
-    if (selected - t.vote_forms - held > 0) formContext.push("Није урачунато: " + num(selected - t.vote_forms - held) +
+    const annulled = raw.annulled || 0;
+    if (annulled) formContext.push("Поништено: " + num(annulled) + " " +
+      serbianCount(annulled, "бирачко место", "бирачка места", "бирачких места") + " (RG-9)");
+    const overlap = mode === "all" ? raw.held_annulled || 0 : 0;
+    const otherExcluded = selected - t.vote_forms - held - (mode === "all" ? annulled : 0) + overlap;
+    if (otherExcluded > 0) formContext.push("Није урачунато: " + num(otherExcluded) +
       " записника — подаци по листама нису потпуни или усаглашени");
     put("hs-forms-context", formContext.join("\n"));
   }

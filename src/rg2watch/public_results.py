@@ -58,6 +58,8 @@ def _public_row(row: dict, flagged: list[dict], verdicts: dict[int, str]) -> dic
         "stations": row["stations"],
         "counted": row["counted"],
         "held": row.get("held", 0),
+        "annulled": row.get("annulled", 0),
+        "held_annulled": row.get("held_annulled", 0),
         "clean": row["clean"],
         "flagged": len({item["id"] for item in flagged}),
         "review": _review_counts(flagged, verdicts),
