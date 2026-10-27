@@ -11,7 +11,8 @@ from .names import to_cyrillic
 from .operator_corrections import OperatorCorrections, apply_operator_snapshot
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from .rules import (RG7_FIELDS, _dash_zero, _list_zero, _ok, change_text, decision_label,
-                    decision_sort_key, evaluate_report, repeats, rg2_value, rg7_field, rg7_mismatch)
+                     decision_sort_key, evaluate_report, repeats, rg2_value, rg7_field, rg7_mismatch)
+from .status import _rik_link
 from .store import Store, _doc
 
 log = logging.getLogger("rg2watch.tally")
@@ -372,6 +373,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             mains.append(max(active, key=lambda d: (d["uploaded_at"] or "", d["id"])))
     held_ids = {r["document_id"] for r in store.latest_reviews(parent)
                 if r["active"] and not r["superseded"] and r["verdict"] == "escalate"}
+    annulled = {d["station_key"]: d for d in store.active_rg9(parent)
+                if d["station_key"] is not None}
     corr: dict[str, list[dict]] = {}  # station_key -> RG-7 decisions in decision order
     for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION):
         if row["doc_type"] in RG7_FIRST_ROUND and row["station_key"] is not None:
@@ -443,6 +446,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                   and (e := ex_of(a)) is not None}
         forms.append({"d": d, "muni": muni, "ex": mine, "others": others,
                       "held": d["id"] in held_ids,
+                      "annulled": annulled.get(d["station_key"]),
                       "operator": operator_states.get(d["id"])})
     scope, scope_note = scope_of(store, cfg, parent)
     national = scope == "national"
@@ -479,13 +483,18 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         f["why"] = reasons(f["ex"], dis, f["rows"])
         fdis, _ = disagreements(as_filed(f["ex"]), {m: as_filed(e) for m, e in f["others"].items()}, model)
         f["why_f"] = reasons(as_filed(f["ex"]), fdis, f["rows"])
+        if f["annulled"] is not None:
+            f["why"].append("annulled by RG-9")
+            f["why_f"].append("annulled by RG-9")
         contribution = _contrib(f["ex"], f["rows"])
         turnout_gap = (contribution.get("rv", (0, 0))[1] - contribution.get("valid", 0)
                        - contribution.get("invalid", 0))
         unavailable = (f["ex"]["rec_bad"] or not f["rows"]
                        or sorted(f["ex"]["l"]) != f["rows"])
         status = "fail" if f["ex"]["arith"] else "unavailable" if unavailable else "ok"
-        inclusion = ({"included": False, "reason": "held by escalation"} if f["held"] else None)
+        inclusion = ({"included": False, "reason": "annulled by RG-9"}
+                     if f["annulled"] is not None else
+                     {"included": False, "reason": "held by escalation"} if f["held"] else None)
         f["rec"] = {"status": status, "rules": f["ex"]["arith"],
                      "details": [f["ex"]["arith_details"][r] for r in f["ex"]["arith"]],
                      "gap": turnout_gap,
@@ -511,7 +520,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         acc = {k: _acc(len(mrows)) for k in overall}
         pair = {k: _pair_acc(len(mrows)) for k in opair}
         for f in mine:
-            if f["held"]:
+            if f["held"] or f["annulled"] is not None:
                 continue
             filed = as_filed(f["ex"])
             for key, take_c, take_f in (("all", True, True), ("cl", not f["why"], not f["why_f"])):
@@ -593,6 +602,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     station_results = [] if not include_station_results else [
         {"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
          "name": f["d"]["station_name"],
+         "annulled": ({"rik": _rik_link(f["annulled"]["url"], e.base_url if e else None)}
+                       if f["annulled"] is not None else None),
          "corrected": station_view(f["ex"], f["rows"], f["why"],
                                    f["rec"]["result"]["corrected"]),
          "filed": (station_view(as_filed(f["ex"]), f["rows"], f["why_f"],

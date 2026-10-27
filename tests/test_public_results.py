@@ -40,10 +40,10 @@ def test_public_payload_has_only_sanitized_corrected_results_and_review_counts()
     assert data["municipalities"][0]["m"] == "Alpha"
     assert len(data["stations"]) == 2
     assert set(data["stations"][0]) == {
-        "m", "no", "name", "included", "registered", "voted", "valid", "lists",
+        "m", "no", "name", "included", "annulled", "registered", "voted", "valid", "lists",
     }
     assert data["stations"][0] == {
-        "m": "Alpha", "no": "1", "name": "ОШ", "included": True,
+        "m": "Alpha", "no": "1", "name": "ОШ", "included": True, "annulled": False,
         "registered": 1000, "voted": 800, "valid": 780, "lists": [400, 380],
     }
 
@@ -52,6 +52,20 @@ def test_public_payload_has_only_sanitized_corrected_results_and_review_counts()
                     '"id"', '"reason"', '"filed"', '"rv"',
                     '"db"', '"model"', '"operator_corrected"'):
         assert private not in blob
+
+
+def test_public_rg9_station_is_annulled_without_exposing_the_document():
+    s = store()
+    form(s, 1, clean_report())
+    rg9 = doc(BASE + "/private-rg9.pdf", muni="Alpha", no="1", dt=9)
+    add(s, rg9)
+
+    data = build_public_results(s, config(), P)
+
+    assert data["overall"]["totals"]["registered"] == 0
+    assert data["stations"][0]["included"] is False
+    assert data["stations"][0]["annulled"] is True
+    assert "private-rg9" not in json.dumps(data)
 
 
 def test_public_payload_sorts_municipalities_by_serbian_cyrillic_alphabet():
@@ -266,6 +280,9 @@ assert.equal(els["station-more"].hidden,true);
 
 setStationFilter("out");
 assert.equal(els.stationlist.children.length,1);
+DATA.stations.at(-1).annulled=true;renderStationResults();
+assert.equal(els.stationlist.children[0].children[0].children.at(-1).textContent,"Поништено");
+DATA.stations.at(-1).annulled=false;renderStationResults();
 const excluded=els.stationlist.children[0];
 assert(excluded.className.includes("excluded"));
 assert.equal(excluded.children[0].children.at(-1).textContent,"Није урачунато");

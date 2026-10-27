@@ -70,12 +70,52 @@ def test_tally_exposes_per_station_results_for_operator_drilldown():
 
     assert result["station_results"] == [{
         "id": result["station_results"][0]["id"], "m": "Alpha", "no": "12", "name": "ОШ",
+        "annulled": None,
         "corrected": {"clean": True, "included": True, "reason": None,
                       "registered": 1000, "voted": 800, "ballots_in_box": 800,
                       "invalid": 20, "valid": 780, "outside_voted": 5,
                       "lists": [400, 380]},
         "filed": None,
     }]
+
+
+def test_active_rg9_annuls_station_and_removes_it_from_every_tally_view():
+    s = store()
+    form(s, 12, clean_report())
+    rg9 = doc("/extfile/rg9.pdf", muni="Alpha", no="12", dt=9)
+    add(s, rg9)
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["counted"] == 1
+    assert result["overall"]["clean"] == 0
+    for view in ("all", "cl", "fall", "fcl"):
+        assert result["overall"][view]["registered"] == 0
+        assert result["overall"][view]["valid"] == 0
+        assert result["overall"][view]["lists"] == [0, 0]
+    assert why(result) == {"12": ["annulled by RG-9"]}
+    rec = result["reconciliation"][0]
+    assert rec["result"] == {
+        "corrected": {"included": False, "reason": "annulled by RG-9"},
+        "filed": {"included": False, "reason": "annulled by RG-9"},
+    }
+    station = result["station_results"][0]
+    assert station["corrected"]["included"] is False
+    assert station["corrected"]["clean"] is False
+    assert station["annulled"]["rik"] == BASE + "/extfile/rg9.pdf"
+
+
+def test_removed_rg9_does_not_annul_station():
+    s = store()
+    form(s, 12, clean_report())
+    rg9 = doc(BASE + "/extfile/removed-rg9.pdf", muni="Alpha", no="12", dt=9)
+    add(s, rg9)
+    add(s, rg9, "removed")
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"]["all"]["registered"] == 1000
+    assert result["station_results"][0]["annulled"] is None
 
 
 def test_current_escalated_form_is_held_from_every_tally_view():
@@ -1163,6 +1203,15 @@ let stationActions = (stationStatusEl.children || []).find(x => x.className === 
 assert(stationActions, "station status must have a compact actions menu");
 assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "прикажи"]);
 assert.equal(stationActions.menu.hidden, true);
+T.station_results[0].annulled = {rik: "https://example.test/rg9.pdf"};
+renderHero();
+stationCard = els.stationlist.children[0];
+stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
+assert.equal(stationStatusEl.children[0].textContent, "Поништено");
+stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "RG-9", "прикажи"]);
+T.station_results[0].annulled = null;
+renderHero();
 let prevented = 0, stopped = 0;
 stationActions.button.onclick({preventDefault() { prevented++; }, stopPropagation() { stopped++; }});
 assert.equal(stationActions.menu.hidden, false);

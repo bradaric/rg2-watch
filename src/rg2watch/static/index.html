@@ -1791,6 +1791,8 @@ function stationActionMenu(station, source = stationSource(station.id)) {
   const pdf = localHref(source.pdf), rik = rikHref(source.rik);
   if (pdf) { const item = link("PDF", pdf); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
   if (rik) { const item = link("RIK", rik); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
+  const rg9 = rikHref(station.annulled && station.annulled.rik);
+  if (rg9) { const item = link("RG-9", rg9); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
   const show = link("прикажи", "#form=" + encodeURIComponent(station.id));
   show.className = "stationmenuitem"; show.role = "menuitem";
   show.onclick = ev => { ev.stopPropagation(); closeStationActions(); };
@@ -1937,8 +1939,8 @@ function renderStationResults() {
       winner = mk("span", null, "stationwinner"), winnerNo = outcome.no == null ? outcome.name === "Нерешено" ? "=" : "—" : String(outcome.no);
     winner.append(mk("span", winnerNo, "no"));
     winner.title = outcome.name;
-    const status = viewName === "diff" ? "Поређење" : chosen.included ? "Урачунат" : "Није урачунат",
-      statusEl = mk("span", null, "stationstatus" + (viewName === "diff" ? "" : chosen.included ? " in" : " out"));
+    const status = station.annulled ? "Поништено" : viewName === "diff" ? "Поређење" : chosen.included ? "Урачунат" : "Није урачунат",
+      statusEl = mk("span", null, "stationstatus" + (station.annulled ? " out" : viewName === "diff" ? "" : chosen.included ? " in" : " out"));
     const statusMain = mk("span", status, "stationstatusmain" + (chosen.reason && !chosen.included ? " hasreason" : ""));
     if (chosen.reason && !chosen.included) {
       statusMain.dataset.reason = chosen.reason;

@@ -76,6 +76,7 @@ def _public_station(station: dict) -> dict:
         "no": station["no"],
         "name": station["name"],
         "included": corrected["included"],
+        "annulled": station["annulled"] is not None,
         "registered": corrected["registered"],
         "voted": corrected["voted"],
         "valid": corrected["valid"],
