@@ -227,7 +227,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
             name=main["station_name"], label=main["label"], doc_type=main["doc_type"],
-            doc_type_label=DOC_TYPES.get(main["doc_type"], main["label"]),
+            doc_type_label=DOC_TYPES.get(main["doc_type"], main["label"]).replace("RG-", "РГ-", 1),
             state="removed" if not main["active"] else "replaced" if len(ds) > 1 else "current",
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),
             v=[_version(d, found, opinions, cache_dir, base, reviews, corrections, analysed_at,

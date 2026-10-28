@@ -624,7 +624,7 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "Operator verification / correction" in html and "Verify / correct values" in html
     assert 'verification: "values verified"' in html
     assert 'correction: "numbers corrected"' in html
-    assert "Corrections counted (RG-7 / operator-entered)" in html
+    assert "Corrections counted (РГ-7 / operator-entered)" in html
     assert "T.operator_corrected.map" in html
     # The dialog is a static body child, not a DataTable child-row element rebuilt by loadData.
     assert html.index('<dialog id="ocdlg"') < html.index('<div id="formsview">')
