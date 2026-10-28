@@ -1782,6 +1782,13 @@ function heldReviewSummary(held, escalatedAmongFlagged) {
   else if (extra) text += " — " + num(extra) + " додатно";
   return text;
 }
+function exclusionSummary(excluded, held, decisionOnly, other) {
+  const parts = [];
+  if (held) parts.push(num(held) + " ескалирано");
+  if (decisionOnly) parts.push(num(decisionOnly) + " по RG-8/RG-9 ван ескалираних");
+  if (other) parts.push(num(other) + " непотпуно или неусаглашено");
+  return "Није урачунато: " + num(excluded) + (parts.length ? " — " + parts.join(" · ") : "");
+}
 function ensureHeroSlots(count) {
   while (slots.length < count) {
     const row = mk("div", null, "hrow"), hd = mk("div", null, "hd"), no = mk("span", null, "no"),
@@ -2198,19 +2205,24 @@ function renderHero() {
     const cleanContributing = r.cl.vote_forms;
     put("hv-forms", num(t.vote_forms));
     put("hv-formstot", " / " + num(selected));
-    put("hs-forms-primary", "урачунато у резултат");
-    const formContext = [num(cleanContributing) + " без уочених проблема",
-      reviewSummary.text];
-    if (held) formContext.push(heldReviewSummary(held, reviewSummary.escalate));
+    const excluded = selected - t.vote_forms;
+    put("hs-forms-primary", "Урачунато: " + num(t.vote_forms) + " · Није урачунато: " + num(excluded));
+    const formContext = mode === "all" ? [
+      "Обрађено: " + num(r.clean) + " без уочених проблема + " + num(r.excluded) + " за проверу = " + num(selected)]
+      : [num(cleanContributing) + " без уочених проблема"];
     const annulled = raw.annulled || 0;
-    if (annulled) formContext.push("Поништено: " + num(annulled) + " " +
-      serbianCount(annulled, "бирачко место", "бирачка места", "бирачких места") + " (RG-9)");
     const undetermined = raw.undetermined || 0;
-    if (undetermined) formContext.push("Резултати се не могу утврдити: " + num(undetermined) + " " +
-      serbianCount(undetermined, "бирачко место", "бирачка места", "бирачких места") + " (RG-8)");
     const decisions = mode === "all" ? raw.decision_excluded || 0 : 0;
     const overlap = mode === "all" ? raw.held_decision_excluded || 0 : 0;
     const otherExcluded = selected - t.vote_forms - held - decisions + overlap;
+    if (mode === "all") formContext.push(exclusionSummary(excluded, held, Math.max(0, decisions - overlap), Math.max(0, otherExcluded)),
+      "Детаљи статуса (бројеви се могу преклапати):");
+    formContext.push(reviewSummary.text);
+    if (held) formContext.push(heldReviewSummary(held, reviewSummary.escalate));
+    if (annulled) formContext.push("Поништено: " + num(annulled) + " " +
+      serbianCount(annulled, "бирачко место", "бирачка места", "бирачких места") + " (RG-9)");
+    if (undetermined) formContext.push("Резултати се не могу утврдити: " + num(undetermined) + " " +
+      serbianCount(undetermined, "бирачко место", "бирачка места", "бирачких места") + " (RG-8)");
     if (otherExcluded > 0) formContext.push("Није урачунато: " + num(otherExcluded) +
       " записника — подаци по листама нису потпуни или усаглашени");
     put("hs-forms-context", formContext.join("\n"));
