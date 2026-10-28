@@ -421,16 +421,21 @@ const esc = value => String(value).replaceAll("&", "&amp;").replaceAll('"', "&qu
   .replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 ''' + verdict + r'''
 const noted = verdictHtml({v: "escalate", n: 'Проверити "потписе" <сада>'});
+assert(noted.startsWith('<span class="rvgroup">'));
 assert(noted.includes('class="rv rv-escalate hasnote"'));
+assert(noted.includes('<span class="rvnote-inline">Проверити &quot;потписе&quot; &lt;сада&gt;</span>'));
 assert(noted.includes('data-note="Проверити &quot;потписе&quot; &lt;сада&gt;"'));
 assert(noted.includes('tabindex="0"'));
 assert(noted.includes('aria-label="escalate: Проверити &quot;потписе&quot; &lt;сада&gt;"'));
 assert(!verdictHtml({v: "escalate"}).includes("hasnote"));
+assert(!verdictHtml({v: "escalate"}).includes("rvnote-inline"));
 assert(!verdictHtml({v: "ok", n: "checked"}).includes("hasnote"));
+assert(!verdictHtml({v: "ok", n: "checked"}).includes("rvnote-inline"));
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert ".rv.hasnote:hover::after,.rv.hasnote:focus::after{display:block}" in html
+    assert ".rvnote-inline{display:-webkit-box;-webkit-line-clamp:2" in html
 
 
 def test_non_default_form_select_filters_use_active_filter_colors():
