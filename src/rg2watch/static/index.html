@@ -1782,12 +1782,12 @@ function heldReviewSummary(held, escalatedAmongFlagged) {
   else if (extra) text += " — " + num(extra) + " додатно";
   return text;
 }
-function exclusionSummary(excluded, held, decisionOnly, other) {
+function exclusionSummary(held, decisionOnly, other) {
   const parts = [];
   if (held) parts.push(num(held) + " ескалирано");
   if (decisionOnly) parts.push(num(decisionOnly) + " по RG-8/RG-9 ван ескалираних");
   if (other) parts.push(num(other) + " непотпуно или неусаглашено");
-  return "Није урачунато: " + num(excluded) + (parts.length ? " — " + parts.join(" · ") : "");
+  return "Од тога: " + (parts.length ? parts.join(" · ") : "0");
 }
 function ensureHeroSlots(count) {
   while (slots.length < count) {
@@ -2206,16 +2206,16 @@ function renderHero() {
     put("hv-forms", num(t.vote_forms));
     put("hv-formstot", " / " + num(selected));
     const excluded = selected - t.vote_forms;
-    put("hs-forms-primary", "Урачунато: " + num(t.vote_forms) + " · Није урачунато: " + num(excluded));
-    const formContext = mode === "all" ? [
-      "Обрађено: " + num(r.clean) + " без уочених проблема + " + num(r.excluded) + " за проверу = " + num(selected)]
-      : [num(cleanContributing) + " без уочених проблема"];
+    put("hs-forms-primary", "Није урачунато: " + num(excluded));
+    const processedSummary = "Обрађено: " + num(r.clean) + " без уочених проблема + " +
+      num(r.excluded) + " за проверу = " + num(selected);
+    const formContext = mode === "all" ? [] : [num(cleanContributing) + " без уочених проблема"];
     const annulled = raw.annulled || 0;
     const undetermined = raw.undetermined || 0;
     const decisions = mode === "all" ? raw.decision_excluded || 0 : 0;
     const overlap = mode === "all" ? raw.held_decision_excluded || 0 : 0;
     const otherExcluded = selected - t.vote_forms - held - decisions + overlap;
-    if (mode === "all") formContext.push(exclusionSummary(excluded, held, Math.max(0, decisions - overlap), Math.max(0, otherExcluded)),
+    if (mode === "all") formContext.push(exclusionSummary(held, Math.max(0, decisions - overlap), Math.max(0, otherExcluded)),
       "Детаљи статуса (бројеви се могу преклапати):");
     formContext.push(reviewSummary.text);
     if (held) formContext.push(heldReviewSummary(held, reviewSummary.escalate));
@@ -2225,6 +2225,7 @@ function renderHero() {
       serbianCount(undetermined, "бирачко место", "бирачка места", "бирачких места") + " (RG-8)");
     if (otherExcluded > 0) formContext.push("Није урачунато: " + num(otherExcluded) +
       " записника — подаци по листама нису потпуни или усаглашени");
+    if (mode === "all") formContext.push(processedSummary);
     put("hs-forms-context", formContext.join("\n"));
   }
   put("hv-valid", none ? "-" : dg ? dnum(t.valid) : num(t.valid));

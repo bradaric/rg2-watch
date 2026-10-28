@@ -176,7 +176,7 @@ def test_public_results_hold_escalated_form_out_of_totals():
     assert [row["included"] for row in data["stations"]] == [True, False]
     rendered = render_public_results(data)
     assert '<details class="forms-details">' in rendered
-    assert "Прикажи објашњење" in rendered and "Урачунато: " in rendered
+    assert "Прикажи објашњење" in rendered and "Није урачунато: " in rendered
 
 
 def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
@@ -263,10 +263,10 @@ Object.assign(DATA.overall,{counted:100,clean:80,held:10,flagged:20,annulled:3,u
   decision_excluded:8,held_decision_excluded:3,
   review:{ok:4,escalate:7,unsure:1,undecided:8}});
 DATA.overall.totals.vote_forms=80;render();
-assert.equal(els["forms-primary"].textContent,"Урачунато: 80 · Није урачунато: 20");
+assert.equal(els["forms-primary"].textContent,"Није урачунато: 20");
 assert.deepEqual(els["forms-sub"].textContent.split("\n"),[
+  "Од тога: 10 ескалирано · 5 по RG-8/RG-9 ван ескалираних · 5 непотпуно или неусаглашено",
   "Обрађено: 80 без уочених проблема + 20 за проверу = 100",
-  "Није урачунато: 20 — 10 ескалирано · 5 по RG-8/RG-9 ван ескалираних · 5 непотпуно или неусаглашено",
 ]);
 Object.assign(DATA.overall,{counted:original.counted,clean:original.clean,held:original.held,
   flagged:original.flagged,review:original.review,annulled:original.annulled,
