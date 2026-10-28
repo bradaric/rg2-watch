@@ -670,6 +670,16 @@ def test_operator_correction_section_uses_secondary_surface_background():
     assert ".ocbox{margin:var(--s2) 0;padding:var(--s2) var(--s3);background:var(--surface2);" in html
 
 
+def test_operator_correction_button_is_a_distinct_edit_action():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    correction_box = html[html.index("function correctionBox("):html.index("function reconciliationEl(")]
+
+    assert ".ocopen{background:var(--panel);border:1.5px solid var(--accent);color:var(--accent);font-weight:700}" in html
+    assert 'button.className = "ocopen"' in correction_box
+    assert 'mk("span", "✎", "ocopenicon")' in correction_box
+    assert 'icon.setAttribute("aria-hidden", "true")' in correction_box
+
+
 def test_correction_dialog_sums_list_votes_and_reports_difference_from_valid():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     start = html.index("function ocVoteSummary(")

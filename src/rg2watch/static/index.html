@@ -184,6 +184,7 @@ button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 .rvmsg{color:var(--hi);font-weight:700}
 .ocbox{margin:var(--s2) 0;padding:var(--s2) var(--s3);background:var(--surface2);border:1px solid var(--line);border-radius:var(--r)}
 .ocstatus{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s2)}
+.ocopen{background:var(--panel);border:1.5px solid var(--accent);color:var(--accent);font-weight:700}.ocopen:hover{background:var(--accent-bg);border-color:var(--accent)}.ocopenicon{margin-right:6px}
 .ocpill{display:inline-block;padding:0 8px;border:1.5px solid var(--accent);border-radius:999px;color:var(--accent);font-size:11px;line-height:17px;font-weight:750;text-transform:uppercase}
 .ocpill.suspended{border-color:var(--warn);color:var(--warn)}
 .ocpill.revoked{border-color:var(--mut);color:var(--mut)}
@@ -932,8 +933,12 @@ function correctionBox(v, editable) {
     if (v.oc.at) line.append(mk("span", when(v.oc.at), "mut"));
   } else line.append(mk("span", "none", "mut"));
   if (editable && HTTP && v.ast === "done" && v.correctable) {
-    const button = mk("button", v.oc ? "Open / revise" : "Verify / correct values");
+    const button = mk("button", v.oc ? "Open / revise" : "Verify / correct values"),
+      icon = mk("span", "✎", "ocopenicon");
     button.type = "button";
+    button.className = "ocopen";
+    icon.setAttribute("aria-hidden", "true");
+    button.prepend(icon);
     button.onclick = () => openCorrection(v);
     line.append(button);
   }
