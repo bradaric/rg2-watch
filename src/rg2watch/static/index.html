@@ -1452,7 +1452,8 @@ function documentStatusEl(r) {
     failed: "failed", retrying: "retrying", off: "off"}[r.ast] || r.ast)));
   const tallyLabel = {selected: "selected for tally", superseded: "superseded by repeat vote",
     quarantined: "excluded from tally selection", pending: "tally selection pending"}[r.tally_state];
-  if (tallyLabel) box.append(mk("br"), mk("span", tallyLabel));
+  const tallyClass = {selected: "good", superseded: "bad"}[r.tally_state];
+  if (tallyLabel) box.append(mk("br"), mk("span", tallyLabel, tallyClass));
   if (r.classification && r.classification.status !== "confirmed_rg2")
     box.append(mk("br"), mk("span", classificationLabel(r.classification), "warn"));
   else if (r.classification && r.classification.override)
