@@ -288,11 +288,12 @@ def test_form_filters_are_visually_grouped_by_workflow():
                 review.index(f'id="{control}"') for control in
                 ("ast", "an", "sev", "rulesbox", "nc", "ri", "rv"))
 
-    more = html[html.index('<div id="morefilters"'):html.index('<div id="onlyid"')]
+    more = html[html.index('<div id="morefilters"'):html.index('<div id="formshelp"')]
     assert [more.index(f'id="{control}"') for control in
-            ("rp", "rm", "fl", "c7", "dis", "loc", "legendbox", "esccsv", "colbox")] == sorted(
+            ("rp", "rm", "fl", "c7", "dis", "loc", "esccsv", "colbox")] == sorted(
                 more.index(f'id="{control}"') for control in
-                ("rp", "rm", "fl", "c7", "dis", "loc", "legendbox", "esccsv", "colbox"))
+                ("rp", "rm", "fl", "c7", "dis", "loc", "esccsv", "colbox"))
+    assert 'id="legendbox"' not in more
     assert 'id="auto"' not in more
     assert more.index('id="colbox"') > more.index('id="esccsv"')
     assert "#colbox{margin-left:auto}" in html
@@ -301,6 +302,9 @@ def test_form_filters_are_visually_grouped_by_workflow():
     preset = html[html.index('<div id="presetbar"'):html.index('<div id="filtergroups"')]
     assert preset.index('id="auto"') < preset.index('id="clearfilters"')
     assert "#presetutils{margin-left:auto;display:flex" in html
+    assert '<div id="formshelp"><details id="legendbox"><summary>rule codes</summary>' in html
+    assert html.index('id="formshelp"') < html.index('id="onlyid"')
+    assert "#formshelp{display:flex;justify-content:flex-end" in html
 
 
 def test_a5_is_not_presented_as_a_reconciliation_failure():

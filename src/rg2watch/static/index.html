@@ -66,6 +66,7 @@ button:hover,select:hover{border-color:var(--mut)}
 input[type=checkbox]{min-height:0;width:15px;height:15px;margin:0;accent-color:var(--accent);vertical-align:-2px}
 input[type=search]{width:15em}
 #ctl{margin-bottom:var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:visible}
+#formshelp{display:flex;justify-content:flex-end;margin:calc(-1 * var(--s1)) 0 var(--s2)}
 .presetbar,.filtergroup{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;padding:var(--s2) var(--s3)}
 .presetbar{background:var(--surface);border-bottom:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px 8px 0 0}
 .presetbar button{border-color:var(--accent);color:var(--accent);background:var(--panel);font-weight:700}
@@ -425,12 +426,12 @@ stroke-width:2.5;
 <label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by РГ-7</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
 <label><input type="checkbox" id="loc"> has local copy</label>
-<details id="legendbox"><summary>rule codes</summary><dl id="legend"></dl></details>
 <button id="esccsv" type="button">Escalated CSV</button>
 <details id="colbox"><summary>columns</summary><div id="cols"></div></details>
 </div>
 </div>
 </div>
+<div id="formshelp"><details id="legendbox"><summary>rule codes</summary><dl id="legend"></dl></details></div>
 <div id="onlyid" class="warnbox" hidden><span id="onlytxt"></span> <button id="onlyclear">show all forms</button></div>
 <div id="wrap"><table id="forms" class="display" style="width:100%"></table></div>
 </div>
