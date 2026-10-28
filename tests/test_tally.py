@@ -1623,6 +1623,10 @@ const formStatus = documentStatusEl({state: "current", ast: "done",
   rec: {annulled: {rik: "https://example.test/rg9.pdf"}}});
 assert(formStatus.children.some(x => x.textContent === "Поништено — RG-9"));
 assert.equal(formStatus.children.at(-1).textContent, "RG-9");
+const selectedStatus = documentStatusEl({state: "current", ast: "done", tally_state: "selected", rec: {}});
+assert.equal(selectedStatus.children.find(x => x.textContent === "selected for tally").className, "good");
+const supersededStatus = documentStatusEl({state: "current", ast: "done", tally_state: "superseded", rec: {}});
+assert.equal(supersededStatus.children.find(x => x.textContent === "superseded by repeat vote").className, "bad");
 T.station_results[0].annulled = null;
 T.overall.annulled = T.munis[0].annulled = 0;
 renderHero();
