@@ -49,6 +49,25 @@ def test_todo_is_findings_without_verdict_and_a_new_version_starts_unreviewed():
     assert [r["url"] for r in s.review_todo()] == [new.url]
 
 
+def test_a5_is_visible_but_only_other_findings_create_review_work(tmp_path):
+    s = store()
+    info = doc(BASE + "/extfile/a5-info.pdf", no="1")
+    reviewable = doc(BASE + "/extfile/a5-reviewable.pdf", no="2")
+    for d in (info, reviewable):
+        add(s, d)
+        s.add_finding(P, Finding("A5", "MEDIUM", d, "outside votes exceed confirmations"), d.url)
+    s.add_finding(P, Finding("V1", "HIGH", reviewable, "crossed out"), reviewable.url)
+
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs")
+    by_no = {r["no"]: r for r in rows_of(out)}
+
+    assert [f[0] for f in by_no["1"]["f"]] == ["A5"]
+    assert not by_no["1"]["rf"] and not by_no["1"]["todo"]
+    assert by_no["2"]["rf"] and by_no["2"]["todo"]
+    assert [r["url"] for r in s.review_todo()] == [reviewable.url]
+
+
 def test_reviews_table_created_on_an_old_db(tmp_path):
     path = tmp_path / "old.sqlite"
     Store(path).close()
@@ -195,7 +214,7 @@ def db_with_review(tmp_path):
 def test_cli_review_and_list(tmp_path, capsys):
     db = db_with_review(tmp_path)
     assert main(["review", "--db", str(db), "--list", "todo"]) == 0
-    assert "2 form(s)" in capsys.readouterr().out
+    assert "1 form(s)" in capsys.readouterr().out
     assert main(["review", "--db", str(db), URL, "escalate", "--note", "phone RIK"]) == 0
     assert main(["review", "--db", str(db), BASE + "/nope.pdf", "ok"]) == 1
     capsys.readouterr()
@@ -203,7 +222,7 @@ def test_cli_review_and_list(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "escalate" in out and "phone RIK" in out and "1 form(s)" in out
     assert main(["review", "--db", str(db), "--list", "todo"]) == 0
-    assert "1 form(s)" in capsys.readouterr().out
+    assert "0 form(s)" in capsys.readouterr().out
     assert main(["review", "--db", str(db)]) == 2
     with pytest.raises(SystemExit):
         main(["review", "--db", str(db), URL, "maybe"])

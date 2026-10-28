@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from rg2watch.models import DOC_TYPES, Doc, Election, Event, Finding, Scope, doc_key
 from rg2watch.case_locks import CaseLocks
+from rg2watch.rules import INFORMATIONAL_RULES
 
 if TYPE_CHECKING:
     from rg2watch.analyze import AnalysisResult
@@ -1240,15 +1241,18 @@ class Store:
                 f"JOIN documents d ON d.id=r.document_id {where} ORDER BY r.id DESC", args).fetchall()
 
     def review_todo(self, parent: str | None = None) -> list[sqlite3.Row]:
-        """"To review": active (current) documents with stored findings and no verdict on their
+        """"To review": active documents with a non-informational finding and no verdict on their
         URL, oldest first; removed forms and replaced versions are not included."""
         where, args = ("AND d.parent=?", (parent,)) if parent is not None else ("", ())
+        informational = tuple(sorted(INFORMATIONAL_RULES))
+        marks = ",".join("?" * len(informational))
         with self._lock:
             return self._db.execute(
                 "SELECT d.id, d.url, d.parent, d.municipality, d.station_no, d.first_seen_at "
                 "FROM documents d WHERE d.active=1 AND EXISTS (SELECT 1 FROM findings f "
-                "WHERE f.document_id=d.id) AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.url=d.url) "
-                f"{where} ORDER BY d.id", args).fetchall()
+                f"WHERE f.document_id=d.id AND f.rule NOT IN ({marks})) AND NOT EXISTS "
+                "(SELECT 1 FROM reviews r WHERE r.url=d.url) "
+                f"{where} ORDER BY d.id", (*informational, *args)).fetchall()
 
     def finding_rules(self, ids: Collection[int]) -> dict[int, list[str]]:
         """document id -> sorted rules that fired on it."""

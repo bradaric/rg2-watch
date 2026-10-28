@@ -12,7 +12,8 @@ from .config import Config
 from .models import DOC_TYPES, Doc
 from .operator_corrections import OperatorCorrections
 from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
-from .rules import RULE_INFO, change_text, decision_label, decision_sort_key, evaluate_report
+from .rules import (INFORMATIONAL_RULES, RULE_INFO, change_text, decision_label, decision_sort_key,
+                    evaluate_report)
 from .rounds import bind_repeat_round
 from .status import _rik_link, build_status, to_belgrade
 from .station_locations import station_coordinates, station_location
@@ -236,8 +237,9 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             **({"settlement": location["settlement"]} if location and location["settlement"] else {}))
         row["dis"] = _disagreement(row["ops"])
         row["r7"] = r7.get((par, main["station_key"], main["doc_type"]), []) if main["active"] else []
-        # "to review": the active current version has stored findings and no verdict on its URL
-        row["rf"] = bool(main["active"]) and bool(found.get(main["id"]))
+        # "to review": the active current version has a non-informational finding and no verdict
+        row["rf"] = bool(main["active"]) and any(
+            f["rule"] not in INFORMATIONAL_RULES for f in found.get(main["id"], ()))
         row["todo"] = row["rf"] and row["rv"] is None
         rows.append(row)
     docs_by_url = {d["url"]: d for d in docs}

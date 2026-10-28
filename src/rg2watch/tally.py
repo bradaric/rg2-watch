@@ -11,8 +11,9 @@ from .models import DOC_TYPES, Doc
 from .names import to_cyrillic
 from .operator_corrections import OperatorCorrections, apply_operator_snapshot
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
-from .rules import (RG7_FIELDS, _dash_zero, _list_zero, _ok, change_text, decision_label,
-                      decision_sort_key, evaluate_report, repeats, rg2_value, rg7_field, rg7_mismatch)
+from .rules import (INFORMATIONAL_RULES, RG7_FIELDS, _dash_zero, _list_zero, _ok, change_text,
+                    decision_label, decision_sort_key, evaluate_report, repeats, rg2_value,
+                    rg7_field, rg7_mismatch)
 from .rounds import bind_repeat_round
 from .status import _rik_link
 from .station_locations import station_location, station_location_source
@@ -21,6 +22,7 @@ from .store import Store, _doc
 log = logging.getLogger("rg2watch.tally")
 COUNTED = ("registered", "voted", "ballots_in_box", "invalid", "valid", "outside_voted")
 ARITHMETIC = ("A1", "A2", "A3", "A4", "A5")
+RECONCILIATION = tuple(rule for rule in ARITHMETIC if rule not in INFORMATIONAL_RULES)
 RG7_FIRST_ROUND = (19, 20, 21, 22)  # decisions correcting a first-round RG-2
 RG2_ROUND_RANK = {6: 0, 10: 1, 15: 2, 16: 3}
 RG2_ROUND_NAME = {6: "original", 10: "repeat_i", 15: "repeat_ii", 16: "repeat_iii"}
@@ -146,8 +148,8 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None,
         report = apply_operator_snapshot(report, operator_snapshot)
     n, lists, bad = _numbers(report)
     found = evaluate_report(report, doc, cfg)  # the rules re-applied to the stored report (no D-rules)
-    arith = sorted({f.rule for f in found if f.rule in ARITHMETIC})
-    arith_details = {f.rule: f.summary for f in found if f.rule in ARITHMETIC}
+    arith = sorted({f.rule for f in found if f.rule in RECONCILIATION})
+    arith_details = {f.rule: f.summary for f in found if f.rule in RECONCILIATION}
     raw_nums = {k: _dash_zero(v) for k, v in report["numbers"].items() if k != "list_votes"}
     rec_bad = any(not _ok(raw_nums[k]) for k in ("registered", "voted", "ballots_in_box", "invalid", "valid"))
     rec_bad = rec_bad or any(not _ok(_list_zero(x["field"])) for x in report["numbers"]["list_votes"])
@@ -159,7 +161,7 @@ def extract(report: dict, doc: Doc, cfg: Config, rg7: list[dict] | None = None,
     if applied or operator_snapshot is not None:
         orig = evaluate_report(original, doc, cfg)
         fn, fl, fb = _numbers(original)
-        filed = {"n": fn, "l": fl, "bad": fb, "arith": sorted({f.rule for f in orig if f.rule in ARITHMETIC}),
+        filed = {"n": fn, "l": fl, "bad": fb, "arith": sorted({f.rule for f in orig if f.rule in RECONCILIATION}),
                  "high": sorted({f.rule for f in orig if f.severity == "HIGH"})}
         if operator_snapshot is None:  # RG-7 does not erase physical alerts on the filed RG-2
             high = {r for r in high if r in ARITHMETIC} | {
