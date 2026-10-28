@@ -303,6 +303,16 @@ def test_form_filters_are_visually_grouped_by_workflow():
     assert "#presetutils{margin-left:auto;display:flex" in html
 
 
+def test_a5_is_not_presented_as_a_reconciliation_failure():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index('<select id="nc"')
+    number_check = html[start:html.index("</select>", start)]
+
+    assert all(f'<option value="A{n}">A{n}</option>' in number_check for n in range(1, 5))
+    assert '<option value="A5">' not in number_check
+    assert "A1-A4 checks pass for the currently counted values" in html
+
+
 def test_alert_action_links_stay_intact_on_their_own_mobile_row():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 

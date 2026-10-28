@@ -9,6 +9,7 @@ _SECTIONS = ("I", "II", "III", "IV", "V")
 _MAX_SUMMARY = 300
 _RESULT_FIELDS = ("voted", "ballots_in_box", "invalid", "valid")
 _OTHER_FIELDS = ("registered", "assisted", "outside_voted", "outside_confirmations")
+INFORMATIONAL_RULES = frozenset({"A5"})
 _LABELS = {
     "registered": "3", "voted": "10.1", "ballots_in_box": "10.2", "invalid": "10.3",
     "valid": "10.4", "assisted": "11", "outside_voted": "12", "outside_confirmations": "12.1",
@@ -37,7 +38,7 @@ RULE_INFO = {
     "A2": "Invalid plus valid ballots do not equal the ballots in the box (10.3 + 10.4 != 10.2)",
     "A3": "The list votes do not add up to the valid ballots (sum of lists != 10.4)",
     "A4": "More people voted than are registered (10.1 > 3)",
-    "A5": "More people voted outside the station than there are confirmations (12 > 12.1)",
+    "A5": "Informational: more people voted outside the station than there are confirmations (12 > 12.1)",
     "A6": "Very high turnout (95% or more, stations with over 50 registered)",
     "A7": "One list got 90% or more of the valid votes (stations with over 50 valid votes)",
     "A8": "Many voters were assisted (more than 5% of those who voted)",

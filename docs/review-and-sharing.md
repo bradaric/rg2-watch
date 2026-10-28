@@ -18,10 +18,11 @@ See [File layout and local server](reference.md#file-layout-and-local-server) fo
   saved state). The
   "+" opens older versions and the findings of every stored analysis model (second opinions from
   `analyze --parent`, current rules re-applied, no API); a HIGH that another model lacks is
-  highlighted. The visible **Numbers** column checks A1-A5 on the currently counted values (model
+  highlighted. The visible **Numbers** column checks A1-A4 on the currently counted values (model
   plus applicable RG-7/operator correction): green **Reconcile**, red failed rule codes, or muted
   **Unavailable** when required values/list rows cannot be checked. The separate "number check"
-  filter selects those current states, nonzero turnout gaps, or A1-A5 individually. A nonzero
+  filter selects those current states, nonzero turnout gaps, or A1-A4 individually. A5 remains a
+  visible, filterable informational finding but does not create review work or fail reconciliation. A nonzero
   `voted - valid - invalid` contribution is shown as **Gap ±N** in the Numbers column; sort that
   column to bring the largest gaps together. **Result inclusion** says whether list totals count with
   corrections and as filed, with the exact omission reason in its tooltip. Its filter mirrors the five
@@ -236,7 +237,7 @@ version does not hold the current version. Flagged forms are left out of the cle
 totals (`--clean` / the page switch "clean forms only (leave out flagged)" show only those; all other
 counted forms are shown by default) when the
 confidence is low, the page quality is poor or unreadable, a counted number is illegible, another
-stored model read a counted number differently, an arithmetic rule (A1-A5) fires, or the form has any
+stored model read a counted number differently, a reconciliation rule (A1-A4) fires, or the form has any
 HIGH-severity alert (any rule, e.g. "HIGH alert: V1, V9"; the rules are re-applied to the stored
 report, so document-level D-rule findings do not count; MEDIUM and LOW alerts such as P3 remarks or
 V4 signatures never flag); the reasons are listed, with a link to the form. List names are never read from the scans: set
@@ -399,8 +400,8 @@ data/review refreshes do not replace it or interrupt typing. An unsaved draft is
 The dialog starts with the current model-plus-RG-7 values and requires a complete snapshot:
 registered, voted, ballots in box, invalid, valid, outside voters, outside confirmations, and every
 expected list row. It also requires a reason. A save is rejected unless all values are non-negative
-whole numbers and A1-A5 reconcile: box <= voted, invalid + valid = box, list sum = valid, voted <=
-registered, and outside voters <= confirmations. Correction and review are separate actions: saving
+whole numbers and A1-A4 reconcile: box <= voted, invalid + valid = box, list sum = valid, and voted <=
+registered. A5 is informational and does not block a verified snapshot. Correction and review are separate actions: saving
 numbers does not set `ok`, `escalate`, or `unsure`.
 
 History is append-only. **Open / revise** stores another complete snapshot; **Revoke correction**
@@ -412,7 +413,7 @@ operator snapshot is suspended and is not counted until every value is reviewed 
 revision.
 
 An active snapshot is applied after RG-7, then the rules are rerun. Corrected V1/V12 marks and resolved
-A1-A5 arithmetic no longer exclude the form from clean-only totals. Original model readings and
+A1-A4 arithmetic no longer exclude the form from clean-only totals. Original model readings and
 findings remain visible for audit, and unrelated HIGH findings or HIGH rules produced by the corrected
 values can still keep the form flagged. The results selectors and CLI corrected view include both
 RG-7 and active operator-entered corrections; the as-filed view includes neither.

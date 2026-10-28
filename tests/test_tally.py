@@ -62,6 +62,19 @@ def test_clean_form_counts_and_totals_and_turnout():
     assert o["cl"] == o["all"] and t["excluded"] == [] and t["nlists"] == 2
 
 
+def test_a5_is_informational_and_does_not_fail_reconciliation_or_clean_tally():
+    s = store()
+    form(s, 12, report(outside_voted=nf(6), outside_confirmations=nf(5)))
+
+    result = tally(s, include_station_results=True)
+
+    assert (result["overall"]["counted"], result["overall"]["clean"], result["overall"]["excluded"]) == (1, 1, 0)
+    assert result["excluded"] == []
+    assert result["reconciliation"][0]["status"] == "ok"
+    assert result["reconciliation"][0]["rules"] == []
+    assert result["station_results"][0]["corrected"]["clean"] is True
+
+
 def test_tally_exposes_per_station_results_for_operator_drilldown():
     s = store()
     form(s, 12, clean_report())
