@@ -1317,6 +1317,8 @@ assert(els.herotitle.textContent.endsWith(" — са исправкама (RG-7 
 assert.equal(els["hv-forms"].textContent, "12");
 assert.equal(els["hv-formstot"].textContent, " / 15");
 assert.equal(els["hs-forms-primary"].textContent, "Није урачунато: 3");
+assert.equal(exclusionSummary(8, 7, 5),
+  "Од тога: 8 за поновљено гласање (RG-8/RG-9) · 7 ескалирано ван RG-8/RG-9 · 5 непотпуно или неусаглашено");
 assert.equal(els["hs-forms-reasons-summary"].textContent, "Зашто 3 није урачунато?");
 assert.equal(els["hs-forms-reasons-body"].textContent, "Од тога: 3 непотпуно или неусаглашено");
 assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [

@@ -1784,10 +1784,10 @@ function heldReviewSummary(held, escalatedAmongFlagged) {
   else if (extra) text += " — " + num(extra) + " додатно";
   return text;
 }
-function exclusionSummary(held, decisionOnly, other) {
+function exclusionSummary(decisions, escalatedOnly, other) {
   const parts = [];
-  if (held) parts.push(num(held) + " ескалирано");
-  if (decisionOnly) parts.push(num(decisionOnly) + " по RG-8/RG-9 ван ескалираних");
+  if (decisions) parts.push(num(decisions) + " за поновљено гласање (RG-8/RG-9)");
+  if (escalatedOnly) parts.push(num(escalatedOnly) + " ескалирано ван RG-8/RG-9");
   if (other) parts.push(num(other) + " непотпуно или неусаглашено");
   return "Од тога: " + (parts.length ? parts.join(" · ") : "0");
 }
@@ -2221,7 +2221,7 @@ function renderHero() {
     const decisions = mode === "all" ? raw.decision_excluded || 0 : 0;
     const overlap = mode === "all" ? raw.held_decision_excluded || 0 : 0;
     const otherExcluded = selected - t.vote_forms - held - decisions + overlap;
-    const reasons = exclusionSummary(held, Math.max(0, decisions - overlap), Math.max(0, otherExcluded));
+    const reasons = exclusionSummary(decisions, Math.max(0, held - overlap), Math.max(0, otherExcluded));
     $("hs-forms-reasons").hidden = excluded <= 0;
     $("hs-forms-details").hidden = false;
     put("hs-forms-reasons-summary", "Зашто " + num(excluded) + " није урачунато?");

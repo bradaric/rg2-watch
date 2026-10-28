@@ -265,7 +265,7 @@ Object.assign(DATA.overall,{counted:100,clean:80,held:10,flagged:20,annulled:3,u
 DATA.overall.totals.vote_forms=80;render();
 assert.equal(els["forms-primary"].textContent,"Није урачунато: 20");
 assert.deepEqual(els["forms-sub"].textContent.split("\n"),[
-  "Од тога: 10 ескалирано · 5 по RG-8/RG-9 ван ескалираних · 5 непотпуно или неусаглашено",
+  "Од тога: 8 за поновљено гласање (RG-8/RG-9) · 7 ескалирано ван RG-8/RG-9 · 5 непотпуно или неусаглашено",
   "Обрађено: 80 без уочених проблема + 20 за проверу = 100",
 ]);
 Object.assign(DATA.overall,{counted:original.counted,clean:original.clean,held:original.held,
