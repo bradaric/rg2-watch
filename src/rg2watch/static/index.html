@@ -1261,7 +1261,7 @@ function classificationBox(v, editable) {
 }
 function child(r) {
   const box = mk("div");
-  box.append(reviewBox(r), classificationBox(r, r.state !== "removed"), correctionBox(r, r.state !== "removed"));
+  box.append(correctionBox(r, r.state !== "removed"), reviewBox(r), classificationBox(r, r.state !== "removed"));
   for (const x of r.r7) {
     const d = mk("div", null, "sub");
     d.append(mk("strong", rg7Text(x)), " ", linksOf(x), x.f.length ? badges(x.f) : "");

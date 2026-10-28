@@ -656,6 +656,13 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert 'nc === "gap"' in html and '"Gap " + snum(rec.gap)' in html
 
 
+def test_expanded_form_puts_operator_correction_before_review_and_classification():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    child = html[html.index("function child(r)"):html.index("function setTab(")]
+
+    assert child.index("correctionBox(r") < child.index("reviewBox(r)") < child.index("classificationBox(r")
+
+
 def test_correction_dialog_sums_list_votes_and_reports_difference_from_valid():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     start = html.index("function ocVoteSummary(")
