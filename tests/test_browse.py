@@ -281,6 +281,18 @@ def test_form_filters_are_visually_grouped_by_workflow():
     assert "border-left:4px solid var(--accent)" in html
     assert "@media (max-width:700px)" in html and ".filtertitle{flex-basis:100%}" in html
 
+    review_start = html.index('<div id="reviewfilters"')
+    review = html[review_start:html.index('<div id="morefilters"', review_start)]
+    assert [review.index(f'id="{control}"') for control in
+            ("ast", "an", "sev", "rulesbox", "nc", "ri", "rv")] == sorted(
+                review.index(f'id="{control}"') for control in
+                ("ast", "an", "sev", "rulesbox", "nc", "ri", "rv"))
+
+    more = html[html.index('<div id="morefilters"'):html.index('<div id="onlyid"')]
+    assert more.index('id="colbox"') > more.index('id="esccsv"')
+    assert "#colbox{margin-left:auto}" in html
+    assert "#colbox #cols{left:auto;right:0}" in html
+
 
 def test_alert_action_links_stay_intact_on_their_own_mobile_row():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
