@@ -86,7 +86,7 @@ input[type=search]{width:15em}
 #rulesbox summary,#colbox summary{cursor:pointer;min-height:30px;display:flex;align-items:center;padding:0 var(--s3);border:1px solid var(--line2);border-radius:var(--r);background:var(--panel);list-style:none;white-space:nowrap}
 #rulesbox summary::-webkit-details-marker,#colbox summary::-webkit-details-marker{display:none}
 #rulesbox summary::after,#colbox summary::after{content:"";margin-left:var(--s2);border:4px solid transparent;border-top-color:currentColor;border-bottom:0}
-#rulesbox[open] summary,#colbox[open] summary{border-color:var(--accent);background:var(--accent-bg)}
+#rulesbox[open] summary,#colbox[open] summary,#rulesbox:has(input:checked) summary{border-color:var(--accent);background:var(--accent-bg)}
 #rules,#cols{position:absolute;z-index:5;top:100%;left:0;margin-top:var(--s1);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line2);border-radius:8px;max-height:18em;overflow:auto;display:grid;grid-template-columns:repeat(3,auto);gap:var(--s1) var(--s4);box-shadow:0 8px 24px rgba(0,0,0,.18)}
 #colbox #cols{left:auto;right:0}
 #legendbox{position:relative}

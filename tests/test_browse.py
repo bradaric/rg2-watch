@@ -318,6 +318,12 @@ def test_a5_is_not_presented_as_a_reconciliation_failure():
     assert "A1-A4 checks pass for the currently counted values" in html
 
 
+def test_rules_filter_highlights_checked_rules_even_when_closed():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '#rulesbox:has(input:checked) summary{border-color:var(--accent);background:var(--accent-bg)}' in html
+
+
 def test_alert_action_links_stay_intact_on_their_own_mobile_row():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
