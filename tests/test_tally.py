@@ -678,6 +678,9 @@ def test_hero_markup_labelled_and_safe():
     assert "createElementNS" not in html and "innerHTML" not in html.replace("never innerHTML", "")
     assert "Esc" in html and 'get("hero") === "1"' in html and 'ev.key === "Escape"' in html
     assert 'id="hs-forms-primary"' in html and 'id="hs-forms-context"' in html
+    assert '<details id="hs-forms-reasons"' in html and '<details id="hs-forms-details"' in html
+    assert '<details id="hs-forms-reasons" open' not in html
+    assert '<details id="hs-forms-details" open' not in html
     assert '<span id="hv-forms">-</span><span class="of" id="hv-formstot"></span>' in html
     for text in ("Општина", "Обухваћени записници", "Приказ података", "Цео екран",
                  "Излаз (Esc)", "Излазност", "Обрађена бирачка места", "Записници", "Важећи гласови"):
@@ -691,8 +694,8 @@ def test_hero_markup_labelled_and_safe():
     assert 'id="hs-valid-primary"' in html and 'id="hs-valid-context"' in html
     assert "#hs-valid-primary,#hs-valid-context{white-space:pre-line}" in html
     assert "#hs-valid-context{border-top:1px solid var(--line2);margin-top:.7em;padding-top:.7em;font-size:.9em}" in html
-    assert "#hs-forms-primary,#hs-forms-context{white-space:pre-line}" in html
-    assert "#hs-forms-context{border-top:1px solid var(--line2)" in html
+    assert "#hs-forms-primary,#hs-forms-reasons-body,#hs-forms-context{white-space:pre-line}" in html
+    assert "#hs-forms-reasons,#hs-forms-details{border-top:1px solid var(--line2)" in html
     assert '"За проверу: " + num(seen.size)' in html and 'serbianCount(seen.size, "записник"' in html
     assert 'put("hs-forms-primary", "Није урачунато: "' in html
     assert "Held by escalation" in html and "Изузето из резултата" in html
@@ -1314,9 +1317,9 @@ assert(els.herotitle.textContent.endsWith(" — са исправкама (RG-7 
 assert.equal(els["hv-forms"].textContent, "12");
 assert.equal(els["hv-formstot"].textContent, " / 15");
 assert.equal(els["hs-forms-primary"].textContent, "Није урачунато: 3");
+assert.equal(els["hs-forms-reasons-summary"].textContent, "Зашто 3 није урачунато?");
+assert.equal(els["hs-forms-reasons-body"].textContent, "Од тога: 3 непотпуно или неусаглашено");
 assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
-  "Од тога: 3 непотпуно или неусаглашено",
-  "Детаљи статуса (бројеви се могу преклапати):",
   "За проверу: 0 записника — 0 прихваћено",
   "Није урачунато: 3 записника — подаци по листама нису потпуни или усаглашени",
   "Обрађено: 10 без уочених проблема + 5 за проверу = 15",
@@ -1358,9 +1361,9 @@ renderHero();
 assert.equal(els.herotitle.textContent, "Све општине — Избори Ћирилица");
 assert.equal(els["hv-forms"].textContent, "4");
 assert.equal(els["hv-formstot"].textContent, " / 15");
+assert.equal(els["hs-forms-reasons-summary"].textContent, "Зашто 11 није урачунато?");
+assert.equal(els["hs-forms-reasons-body"].textContent, "Од тога: 11 непотпуно или неусаглашено");
 assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
-  "Од тога: 11 непотпуно или неусаглашено",
-  "Детаљи статуса (бројеви се могу преклапати):",
   "За проверу: 0 записника — 0 прихваћено",
   "Није урачунато: 11 записника — подаци по листама нису потпуни или усаглашени",
   "Обрађено: 8 без уочених проблема + 7 за проверу = 15",

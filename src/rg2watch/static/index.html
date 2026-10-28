@@ -247,9 +247,11 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 #hs-valid-primary,#hs-valid-context{white-space:pre-line}
 #hs-valid-context{border-top:1px solid var(--line2);margin-top:.7em;padding-top:.7em;font-size:.9em}
 #hs-valid-context:empty{display:none}
-#hs-forms-primary,#hs-forms-context{white-space:pre-line}
-#hs-forms-context{border-top:1px solid var(--line2);margin-top:.7em;padding-top:.7em;font-size:.9em}
-#hs-forms-context:empty{display:none}
+#hs-forms-primary,#hs-forms-reasons-body,#hs-forms-context{white-space:pre-line}
+#hs-forms-reasons,#hs-forms-details{border-top:1px solid var(--line2);margin-top:.7em;padding-top:.55em}
+#hs-forms-reasons[hidden],#hs-forms-details[hidden]{display:none}
+#hs-forms-reasons summary,#hs-forms-details summary{cursor:pointer;font-weight:700}
+#hs-forms-reasons-body,#hs-forms-context{padding-top:.45em;font-size:.9em}
 .tile .v{font-size:min(clamp(2.1rem,4.4vw,5.6rem),19cqi);font-weight:800;line-height:1.05;letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin:2px 0 var(--s1);white-space:nowrap}
 .tile .v .of{font-size:.45em;font-weight:700;color:var(--mut);letter-spacing:0}
 .prog{height:6px;background:var(--track);border-radius:3px;overflow:hidden;margin:var(--s1) 0 var(--s1)}
@@ -436,7 +438,7 @@ stroke-width:2.5;
 <div id="heronums">
 <div class="tile"><div class="k">Излазност</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
 <div class="tile"><div class="k">Обрађена бирачка места</div><div class="v"><span id="hv-st">-</span><span class="of" id="hv-sttot"></span></div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
-<div class="tile"><div class="k">Записници</div><div class="v"><span id="hv-forms">-</span><span class="of" id="hv-formstot"></span></div><div class="s" id="hs-forms"><div id="hs-forms-primary"></div><div id="hs-forms-context"></div></div></div>
+<div class="tile"><div class="k">Записници</div><div class="v"><span id="hv-forms">-</span><span class="of" id="hv-formstot"></span></div><div class="s" id="hs-forms"><div id="hs-forms-primary"></div><details id="hs-forms-reasons"><summary id="hs-forms-reasons-summary"></summary><div id="hs-forms-reasons-body"></div></details><details id="hs-forms-details"><summary>Детаљи статуса и обраде</summary><div id="hs-forms-context"></div></details></div></div>
 <div class="tile"><div class="k">Важећи гласови</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"><div id="hs-valid-primary"></div><div id="hs-valid-context"></div></div></div>
 </div>
 <div id="heronames" class="warnbox" hidden></div>
@@ -2193,11 +2195,15 @@ function renderHero() {
     put("hv-formstot", "");
     put("hs-forms-primary", "промене броја: без уочених проблема / за проверу");
     const held = raw.held || 0;
+    $("hs-forms-reasons").hidden = true;
+    $("hs-forms-details").hidden = !held;
     put("hs-forms-context", held ? heldReviewSummary(held, reviewSummary.escalate) : "");
   } else if (none) {
     put("hv-forms", "-");
     put("hv-formstot", "");
     put("hs-forms-primary", "");
+    $("hs-forms-reasons").hidden = true;
+    $("hs-forms-details").hidden = true;
     put("hs-forms-context", "");
   } else {
     const selected = mode === "cl" ? r.clean : r.counted;
@@ -2215,8 +2221,11 @@ function renderHero() {
     const decisions = mode === "all" ? raw.decision_excluded || 0 : 0;
     const overlap = mode === "all" ? raw.held_decision_excluded || 0 : 0;
     const otherExcluded = selected - t.vote_forms - held - decisions + overlap;
-    if (mode === "all") formContext.push(exclusionSummary(held, Math.max(0, decisions - overlap), Math.max(0, otherExcluded)),
-      "Детаљи статуса (бројеви се могу преклапати):");
+    const reasons = exclusionSummary(held, Math.max(0, decisions - overlap), Math.max(0, otherExcluded));
+    $("hs-forms-reasons").hidden = excluded <= 0;
+    $("hs-forms-details").hidden = false;
+    put("hs-forms-reasons-summary", "Зашто " + num(excluded) + " није урачунато?");
+    put("hs-forms-reasons-body", reasons);
     formContext.push(reviewSummary.text);
     if (held) formContext.push(heldReviewSummary(held, reviewSummary.escalate));
     if (annulled) formContext.push("Поништено: " + num(annulled) + " " +
