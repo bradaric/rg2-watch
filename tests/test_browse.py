@@ -52,7 +52,7 @@ def test_groups_versions_and_states(tmp_path):
     assert build_page(s, out, tmp_path / "pdfs") == 2
     by_no = {r["no"]: r for r in rows_of(out)}
     assert by_no["1"]["state"] == "replaced" and by_no["1"]["up"] == "2026-10-19T21:00"
-    assert by_no["1"]["doc_type"] == 6 and by_no["1"]["doc_type_label"] == "RG-2"
+    assert by_no["1"]["doc_type"] == 6 and by_no["1"]["doc_type_label"] == "РГ-2"
     assert [v["rik"] for v in by_no["1"]["v"]] == [old.url]
     assert by_no["2"]["state"] == "removed"
 
@@ -127,7 +127,7 @@ def test_selected_repeat_rg2_offers_operator_corrections(tmp_path):
     assert by_type[6]["tally_state"] == "superseded"
     assert by_type[10]["correctable"] is True
     assert by_type[10]["tally_state"] == "selected"
-    assert by_type[10]["doc_type_label"] == "RG-2-R"
+    assert by_type[10]["doc_type_label"] == "РГ-2-R"
     assert by_type[6]["rec"]["result"] == {
         "corrected": {"included": None, "reason": "superseded by repeat vote"},
         "filed": {"included": None, "reason": "superseded by repeat vote"},
@@ -157,8 +157,8 @@ def test_browse_exposes_quarantined_content_classification(tmp_path):
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "function classificationBox(" in html
     assert 'fetch("classification"' in html
-    assert "confirm as RG-2" in html and "revoke RG-2 confirmation" in html
-    assert "mark as mislabeled RG-7" in html
+    assert "confirm as РГ-2" in html and "revoke РГ-2 confirmation" in html
+    assert "mark as mislabeled РГ-7" in html
 
 
 def test_successful_legacy_analysis_displays_as_rg2_without_reanalysis(tmp_path):
@@ -233,9 +233,9 @@ def test_document_type_and_decision_status_filters_are_in_their_workflow_section
     review = html[html.index('id="reviewfilters"'):html.index('id="morefilters"')]
     assert 'document type <select id="dt">' in scope
     assert 'decision status <select id="an">' in review
-    assert '<option value="undetermined">cannot be determined (RG-8)</option>' in review
-    assert '<option value="annulled">annulled by RG-9</option>' in review
-    assert '<option value="not">no RG-8/RG-9 decision</option>' in review
+    assert '<option value="undetermined">cannot be determined (РГ-8)</option>' in review
+    assert '<option value="annulled">annulled by РГ-9</option>' in review
+    assert '<option value="not">no РГ-8/РГ-9 decision</option>' in review
     assert 'id="ud"' not in review
     assert '"e", "dt", "mod"' in html and '"ri", "an", "ast"' in html
     assert '(!sel("dt") || String(r.doc_type) === sel("dt"))' in html
@@ -401,8 +401,8 @@ const assert = require("assert");
 const esc = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 ''' + render + r'''
 const shown = stationCellHtml({muni: "Иностранство", no: "79", name: "Амбасада", settlement: "ПАРИЗ · ФРАНЦУСКА"});
-assert.equal(shown, "Иностранство<br>BM 79 - Амбасада<span class=\"stationplace\">ПАРИЗ · ФРАНЦУСКА</span>");
-assert.equal(stationCellHtml({muni: "Unknown", no: "1", name: "School"}), "Unknown<br>BM 1 - School");
+assert.equal(shown, "Иностранство<br>БМ 79 - Амбасада<span class=\"stationplace\">ПАРИЗ · ФРАНЦУСКА</span>");
+assert.equal(stationCellHtml({muni: "Unknown", no: "1", name: "School"}), "Unknown<br>БМ 1 - School");
 assert(stationCellHtml({muni: "M", no: "1", name: "N", settlement: "<Paris>"}).includes("&lt;Paris&gt;"));
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
@@ -474,7 +474,7 @@ def test_operator_page_supports_shareable_form_deep_links():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert 'const formId = p.get("form")' in html
-    assert 'showForm(form.id, form.muni + " BM " + form.no, false);' in html
+    assert 'showForm(form.id, form.muni + " БМ " + form.no, false);' in html
     assert 'if (onlyId != null && activeTab() === "forms") p.set("form", String(onlyId));' in html
 
 
@@ -1107,7 +1107,7 @@ def test_alert_links_are_built_from_url_in_status_and_data():
     html = (STATIC / "index.html").read_text()
     assert "alertForm(x[7])" in html and 'link("PDF", loc)' in html and "showForm(r.id" in html
     assert "v ? v.pdf : x[8]" in html and "v ? v.rik : x[9]" in html
-    assert 'showForm(r.id, r.muni + " BM " + r.no)' in html
+    assert 'showForm(r.id, r.muni + " БМ " + r.no)' in html
 
 
 def test_browse_leaves_a_live_watchers_status_alone(tmp_path):

@@ -618,7 +618,7 @@ def test_page_csv_is_formula_safe_and_labelled():
                   "Corrected-only eligible", "Filed-only eligible"):
         assert label in html
     assert "invalid counts are limited to forms with reconciled valid/list totals" in html
-    assert 'SOURCE_ROUND_LABEL = {original: "original RG-2"' in html
+    assert 'SOURCE_ROUND_LABEL = {original: "оригинални РГ-2"' in html
 
 
 def test_cli_tally_prints_all_then_clean(tmp_path, capsys):
@@ -688,8 +688,8 @@ def test_hero_markup_labelled_and_safe():
     assert "Режим презентације" not in html
     assert "помоћу АИ" not in html
     assert "само записници без уочених проблема (без оних за проверу)" in html
-    assert "са исправкама (RG-7 / ручни унос)" in html
-    assert "оригинални подаци (RG-2)" in html
+    assert "са исправкама (РГ-7 / ручни унос)" in html
+    assert "оригинални подаци (РГ-2)" in html
     assert "разлика (са исправкама − оригинални)" in html
     assert 'id="hs-valid-primary"' in html and 'id="hs-valid-context"' in html
     assert "#hs-valid-primary,#hs-valid-context{white-space:pre-line}" in html
@@ -1249,7 +1249,7 @@ assert.equal(vrow(r).all.valid, 100);
 let csv = tallyCsv();
 assert.equal(csvValue(csv, "Reconciled valid"), "100");
 assert.equal(csvValue(csv, "Held by escalation"), "0");
-assert.equal(csvValue(csv, "Поништено (RG-9)"), "0");
+assert.equal(csvValue(csv, "Поништено (РГ-9)"), "0");
 assert.equal(csvValue(csv, "1 · Листа А votes"), "60");
 assert.equal(csvValue(csv, "Unreconciled turnout gap (signed)"), "0");
 renderHero();
@@ -1313,12 +1313,12 @@ setData(r);
 els.tview.value = "corrected";
 els.tmode.value = "all";
 renderHero();
-assert(els.herotitle.textContent.endsWith(" — са исправкама (RG-7 / ручни унос)"));
+assert(els.herotitle.textContent.endsWith(" — са исправкама (РГ-7 / ручни унос)"));
 assert.equal(els["hv-forms"].textContent, "12");
 assert.equal(els["hv-formstot"].textContent, " / 15");
 assert.equal(els["hs-forms-primary"].textContent, "Није урачунато: 3");
 assert.equal(exclusionSummary(8, 7, 5),
-  "Од тога: 8 за поновљено гласање (RG-8/RG-9) · 7 ескалирано ван RG-8/RG-9 · 5 непотпуно или неусаглашено");
+  "Од тога: 8 за поновљено гласање (РГ-8/РГ-9) · 7 ескалирано ван РГ-8/РГ-9 · 5 непотпуно или неусаглашено");
 assert.equal(els["hs-forms-reasons-summary"].textContent, "Зашто 3 није урачунато?");
 assert.equal(els["hs-forms-reasons-body"].textContent, "Од тога: 3 непотпуно или неусаглашено");
 assert.deepEqual(els["hs-forms-context"].textContent.split("\n"), [
@@ -1343,7 +1343,7 @@ assert.deepEqual(els["hs-valid-context"].textContent.split("\n"), [
 ]);
 assert(els.herofoot.children[0].includes("НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а. Стање у "));
 assert(els.herofoot.children[0].includes("20:00"));
-for (const absent of ["opaque-model-v1", "Сви обрађени записници.", "Са исправкама RG-7.", "(време у Србији)", "можда застарели", "АИ"])
+for (const absent of ["opaque-model-v1", "Сви обрађени записници.", "Са исправкама РГ-7.", "(време у Србији)", "можда застарели", "АИ"])
   assert(!els.herofoot.children[0].includes(absent));
 els.tmode.value = "cl";
 renderHero();
@@ -1460,7 +1460,7 @@ for (const p of [r.pair.all, r.pair.cl]) {
 setData(r);
 els.tmode.value = "all";
 renderHero();
-assert(els.herotitle.textContent.endsWith(" — РАЗЛИКА (са исправкама RG-7 / ручни унос − оригинални RG-2)"));
+assert(els.herotitle.textContent.endsWith(" — РАЗЛИКА (са исправкама РГ-7 / ручни унос − оригинални РГ-2)"));
 assert.equal(els["hv-formstot"].textContent, "");
 assert.equal(els["hs-forms-primary"].textContent, "промене броја: без уочених проблема / за проверу");
 assert.equal(els["hs-forms-context"].textContent, "");
@@ -1535,7 +1535,7 @@ renderHero();
 assert.equal(els.hmuni.options.find(o => o.value === "Ћуприја").textContent, "Ћуприја");
 assert(els.herotitle.textContent.startsWith("Ћуприја"));
 T.station_location_source = {source: "https://bm.itblokada.org/", revision: "test", retrieved: "2026-10-27"};
-T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ", settlement: "СЕЊЕ", address: "СЕЊЕ, ЦЕНТАР 1",
+T.station_results = [{id: 9, m: "Ћуприја", no: "12", name: "ОШ", settlement: "СЕЊЕ", address: "СЕЊЕ, ЦЕНТАР 1", source_round: "original",
   corrected: {clean: true, included: true, reason: null, registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [400, 380]},
   filed: {clean: true, included: false, reason: "list votes mismatch", registered: 1000, voted: 800, ballots_in_box: 800, invalid: 20, valid: 780, lists: [390, 390]}}];
 D.rows = [{id: 9, u: "u9", rv: {v: "escalate", n: "Проверити потписе"}, pdf: "a".repeat(64), rik: "https://example.test/rg2.pdf"}];
@@ -1548,6 +1548,13 @@ els.stationresults.open = true;
 els.stationresults.listeners.toggle();
 let stationCard = els.stationlist.children[0];
 assert(stationCard.children[0].children[0].textContent.startsWith("БМ 12 · СЕЊЕ — ОШ"));
+assert(!stationCard.children[0].children[0].textContent.includes("оригинални РГ-2"));
+const sourceInfo = stationCard.children[0].children[0].children.find(x => x.className === "stationround");
+assert.equal(sourceInfo.textContent, "ⓘ");
+assert.equal(sourceInfo.dataset.round, "Извор записника: оригинални РГ-2");
+assert.equal(sourceInfo.tabIndex, 0);
+assert.equal(stationRoundInfo("repeat_ii").dataset.round,
+  "Извор записника: поновљено гласање II (РГ-2)");
 stationCard.open = true; stationCard.ontoggle();
 assert(!stationCard.children[1].children.some(x => x.className === "stationlocation"));
 stationCard.open = false; stationCard.ontoggle();
@@ -1609,20 +1616,20 @@ assert.equal(stationActions.menu.hidden, true);
 T.station_results[0].annulled = {rik: "https://example.test/rg9.pdf"};
 T.overall.annulled = T.munis[0].annulled = 1;
 renderHero();
-assert(els["hs-forms-context"].textContent.includes("Поништено: 1 бирачко место (RG-9)"));
+assert(els["hs-forms-context"].textContent.includes("Поништено: 1 бирачко место (РГ-9)"));
 stationCard = els.stationlist.children[0];
 stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
 assert.equal(stationStatusEl.children[0].textContent, "Поништено");
 stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
-assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "RG-9", "прикажи"]);
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "РГ-9", "прикажи"]);
 assert.equal(els["stationfilter-annulled"].textContent, "Поништено 1");
 setStationFilter("annulled");
 assert.equal(els.stationlist.children.length, 1);
 setStationFilter("all");
 const formStatus = documentStatusEl({state: "current", ast: "done",
   rec: {annulled: {rik: "https://example.test/rg9.pdf"}}});
-assert(formStatus.children.some(x => x.textContent === "Поништено — RG-9"));
-assert.equal(formStatus.children.at(-1).textContent, "RG-9");
+assert(formStatus.children.some(x => x.textContent === "Поништено — РГ-9"));
+assert.equal(formStatus.children.at(-1).textContent, "РГ-9");
 const selectedStatus = documentStatusEl({state: "current", ast: "done", tally_state: "selected", rec: {}});
 assert.equal(selectedStatus.children.find(x => x.textContent === "selected for tally").className, "good");
 const supersededStatus = documentStatusEl({state: "current", ast: "done", tally_state: "superseded", rec: {}});
@@ -1634,20 +1641,20 @@ T.station_results[0].undetermined = {rik: "https://example.test/rg8.pdf"};
 T.overall.undetermined = T.munis[0].undetermined = 1;
 T.overall.decision_excluded = T.munis[0].decision_excluded = 1;
 renderHero();
-assert(els["hs-forms-context"].textContent.includes("Резултати се не могу утврдити: 1 бирачко место (RG-8)"));
+assert(els["hs-forms-context"].textContent.includes("Резултати се не могу утврдити: 1 бирачко место (РГ-8)"));
 stationCard = els.stationlist.children[0];
 stationStatusEl = stationCard.children[0].children.find(x => x.className.startsWith("stationstatus"));
 assert.equal(stationStatusEl.children[0].textContent, "Неутврђено");
-assert.equal(stationStatusEl.children[0].title, "Резултати се не могу утврдити (RG-8)");
+assert.equal(stationStatusEl.children[0].title, "Резултати се не могу утврдити (РГ-8)");
 stationActions = (stationStatusEl.children || []).find(x => x.className === "stationactions");
-assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "RG-8", "прикажи"]);
+assert.deepEqual(stationActions.menu.children.map(x => x.textContent), ["PDF", "RIK", "РГ-8", "прикажи"]);
 assert.equal(els["stationfilter-undetermined"].textContent, "Не могу се утврдити 1");
 setStationFilter("undetermined");
 assert.equal(els.stationlist.children.length, 1);
 const rg8FormStatus = documentStatusEl({state: "current", ast: "done",
   rec: {annulled: null, undetermined: {rik: "https://example.test/rg8.pdf"}}});
-assert(rg8FormStatus.children.some(x => x.textContent === "Резултати се не могу утврдити — RG-8"));
-assert.equal(rg8FormStatus.children.at(-1).textContent, "RG-8");
+assert(rg8FormStatus.children.some(x => x.textContent === "Резултати се не могу утврдити — РГ-8"));
+assert.equal(rg8FormStatus.children.at(-1).textContent, "РГ-8");
 T.station_results[0].undetermined = null;
 T.overall.undetermined = T.munis[0].undetermined = 0;
 T.overall.decision_excluded = T.munis[0].decision_excluded = 0;

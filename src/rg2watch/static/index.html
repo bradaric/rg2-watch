@@ -293,6 +293,7 @@ table.dataTable>tbody>tr.child .warnbox{margin:var(--s1) 0 var(--s2) var(--s5)}
 .station summary::-webkit-details-marker{display:none}.station summary::before{content:"▸";color:var(--accent);font-weight:800}
 .station[open] summary::before{content:"▾"}.stationname{font-weight:750;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .stationname.hasmap{position:relative;padding-right:28px;min-height:24px;line-height:24px}.stationmap{position:absolute;right:0;top:0;display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;font-size:14px;text-decoration:none;border-radius:4px}.stationmap:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.stationround{display:inline-flex;margin-left:6px;color:var(--accent);font-size:.9em;cursor:help;vertical-align:baseline}.stationround:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:50%}
 .stationmetric,.stationshare,.stationmargin{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .stationwinner{display:flex;align-items:center;justify-content:center;font-weight:700}.stationwinner .no{flex:none;min-width:1.8em;padding:1px 5px;border-radius:4px;background:var(--fg);color:var(--panel);text-align:center}
 .stationshare{display:grid;gap:2px}.minibar{display:grid;grid-template-columns:1.2em minmax(2.5rem,1fr) 3.2em;gap:3px;align-items:center;height:8px;font-size:9px;line-height:8px}.minino{color:var(--mut);text-align:right}.minitrack{height:4px;background:var(--track);border-radius:2px;overflow:hidden}.minifill{display:block;height:100%;background:var(--bar);border-radius:2px}.minipct{text-align:right}
@@ -407,7 +408,7 @@ stroke-width:2.5;
 <div id="reviewfilters" class="filtergroup" role="group" aria-labelledby="reviewtitle">
 <span id="reviewtitle" class="filtertitle">Review filters</span>
 <label>analysis status <select id="ast"><option value="">any</option><option value="pending">pending</option><option value="done">done</option><option value="failed">failed</option><option value="off">off</option></select></label>
-<label>decision status <select id="an"><option value="">any</option><option value="undetermined">cannot be determined (RG-8)</option><option value="annulled">annulled by RG-9</option><option value="not">no RG-8/RG-9 decision</option></select></label>
+<label>decision status <select id="an"><option value="">any</option><option value="undetermined">cannot be determined (РГ-8)</option><option value="annulled">annulled by РГ-9</option><option value="not">no РГ-8/РГ-9 decision</option></select></label>
 <label>min severity <select id="sev"><option value="0">any</option><option value="1">LOW</option><option value="2">MEDIUM</option><option value="3">HIGH</option></select></label>
 <details id="rulesbox"><summary id="rulessum">rules: any</summary><div id="rules"></div></details>
 <label>number check <select id="nc"><option value="">any</option><option value="ok">reconcile</option><option value="fail">any failure</option><option value="gap">turnout gap</option><option value="A1">A1</option><option value="A2">A2</option><option value="A3">A3</option><option value="A4">A4</option><option value="A5">A5</option><option value="unavailable">unavailable</option></select></label>
@@ -419,7 +420,7 @@ stroke-width:2.5;
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
 <label><input type="checkbox" id="fl"> with findings</label>
-<label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by RG-7</label>
+<label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by РГ-7</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
 <label><input type="checkbox" id="loc"> has local copy</label>
 <details id="legendbox"><summary>rule codes</summary><dl id="legend"></dl></details>
@@ -435,7 +436,7 @@ stroke-width:2.5;
 <section id="hero">
 <div id="herobar"><select id="hmuni" aria-label="Општина"></select>
 <select id="hmode" aria-label="Обухваћени записници"><option value="cl">само записници без уочених проблема (без оних за проверу)</option><option value="all" selected>сви обрађени записници</option></select>
-<select id="hview" aria-label="Приказ података"><option value="corrected" selected>са исправкама (RG-7 / ручни унос)</option><option value="filed">оригинални подаци (RG-2)</option><option value="diff">разлика (са исправкама − оригинални)</option></select>
+<select id="hview" aria-label="Приказ података"><option value="corrected" selected>са исправкама (РГ-7 / ручни унос)</option><option value="filed">оригинални подаци (РГ-2)</option><option value="diff">разлика (са исправкама − оригинални)</option></select>
 <button id="herobtn">Цео екран</button></div>
 <div id="herohead"><span class="kicker">НЕЗВАНИЧНО</span><div id="herotitle"></div></div>
 <div id="heronums">
@@ -458,14 +459,14 @@ stroke-width:2.5;
 <p id="tscope" class="warnbox" hidden></p>
 <details id="tdetails" class="resultgroup"><summary>Detailed totals <span id="tdetailcount"></span></summary><div class="resultgroupbody">
 <div id="tctl"><label>totals over <select id="tmode"><option value="cl">clean forms only (leave out flagged)</option><option value="all" selected>all counted forms</option></select></label>
-<label>numbers: <select id="tview"><option value="corrected" selected>with RG-7 / operator corrections</option><option value="filed">as filed on RG-2 forms</option><option value="diff">difference (corrected − as filed)</option></select></label>
+<label>numbers: <select id="tview"><option value="corrected" selected>with РГ-7 / operator corrections</option><option value="filed">as filed on РГ-2 forms</option><option value="diff">difference (corrected − as filed)</option></select></label>
 <button id="csv">Download CSV</button></div>
 <h3>Overall</h3><div id="toverall"></div>
 <h3>Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
 </div></details>
 <details id="taudit" class="resultgroup"><summary>Result audit trail <span id="tauditcount"></span></summary><div class="resultgroupbody">
 <h3>Flagged forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
-<h3 id="tcorhead" hidden>Corrections counted (RG-7 / operator-entered)</h3><ul id="tcor"></ul>
+<h3 id="tcorhead" hidden>Corrections counted (РГ-7 / operator-entered)</h3><ul id="tcor"></ul>
 <h3 id="tnoteshead" hidden>Notes (not flagged)</h3><ul id="tnotes"></ul>
 </div></details>
 </div>
@@ -577,14 +578,14 @@ function renderAlerts() {
     const tr = mk("tr"), sv = mk("td"), rc = mk("td");
     rc.append(ruleEl(x[2]));
     sv.append(mk("span", x[1], "b " + (SEV.includes(x[1]) ? x[1] : "")));
-    tr.append(mk("td", when(x[0]), "mut"), sv, rc, mk("td", x[3] + (x[4] ? " BM " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
+    tr.append(mk("td", when(x[0]), "mut"), sv, rc, mk("td", x[3] + (x[4] ? " БМ " + x[4] : "")), mk("td", x[5]), mk("td", x[6] ? "sent" : "", "mut"));
     const hit = alertForm(x[7]), v = hit && hit[1], lk = mk("td", null, "lk");
     const loc = localHref(v ? v.pdf : x[8]), rik = rikHref(v ? v.rik : x[9]);
     if (loc) lk.append(link("PDF", loc));
     if (rik) lk.append(link("RIK", rik));
     if (hit) {
       const r = hit[0];
-      const b = mk("button", "show", "chip"); b.onclick = () => showForm(r.id, r.muni + " BM " + r.no); lk.append(b);
+      const b = mk("button", "show", "chip"); b.onclick = () => showForm(r.id, r.muni + " БМ " + r.no); lk.append(b);
     }
     tr.append(lk);
     t.append(tr);
@@ -622,9 +623,9 @@ function renderStatus() {
       ["municipalities", w.only ? w.only.join(", ") : "all"]]));
   }
   cards.push(card("Documents", [
-    ["RG-2 seen", d.rg2_seen + " of " + (d.stations || "?") + " stations" + (d.rg2_rik != null ? " (RIK lists " + d.rg2_rik + ")" : "")],
+    ["РГ-2 seen", d.rg2_seen + " of " + (d.stations || "?") + " stations" + (d.rg2_rik != null ? " (RIK lists " + d.rg2_rik + ")" : "")],
     ["new, last 10 / 60 min", d.new10 + " / " + d.new60], ["replaced", d.replaced], ["removed", d.removed],
-    ["RG-7 decisions", d.rg7 ? "read " + d.rg7.read + " / pending " + d.rg7.pending : "-"],
+    ["РГ-7 decisions", d.rg7 ? "read " + d.rg7.read + " / pending " + d.rg7.pending : "-"],
     ["rare types", Object.entries(d.rare).map(([k, v]) => k + ": " + v).join(", ") || "none"]]));
   const p = a.paused;
   const ar = a.arithmetic;
@@ -1064,7 +1065,7 @@ function renderCorrectionEditor(state) {
   const meta = mk("p", "Exact document version: " + ocUrl, "ocmeta");
   const status = mk("p", null, state.status === "suspended" ? "ocwarn" : "mut");
   status.textContent = state.status === "suspended"
-    ? "Suspended: the analysis or RG-7 source changed. Review every value and save a new revision to reconfirm."
+    ? "Suspended: the analysis or РГ-7 source changed. Review every value and save a new revision to reconfirm."
     : "Status: " + state.status + ". Review verdicts remain separate.";
   if (draft && draft.source_token !== state.source_token) {
     status.textContent += " This recovered draft was started against an older source and must be reviewed.";
@@ -1210,7 +1211,7 @@ function download(name, text) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 function rg7Text(x) {  // x.ch: read by the watch model; x.by: read by other models only
-  return "RG-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : x.by.length ? "read by " + x.by.join(", ") + " (not the watch model)" : "not read yet");
+  return "РГ-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : x.by.length ? "read by " + x.by.join(", ") + " (not the watch model)" : "not read yet");
 }
 function rg7Badges(r) {
   const td = document.createDocumentFragment();
@@ -1223,10 +1224,10 @@ function rg7Badges(r) {
   return td;
 }
 function classificationLabel(c) {
-  return {quarantined_rg7: "quarantined: mislabeled RG-7",
-    quarantined_other: "quarantined: not an RG-2", pending: "classification pending",
-    confirmed_rg2: c.legacy ? "legacy analysis treated as RG-2" :
-      c.override ? "operator confirmed as RG-2" : "content confirmed as RG-2"}[c.status] || "classification pending";
+  return {quarantined_rg7: "quarantined: mislabeled РГ-7",
+    quarantined_other: "quarantined: not an РГ-2", pending: "classification pending",
+    confirmed_rg2: c.legacy ? "legacy analysis treated as РГ-2" :
+      c.override ? "operator confirmed as РГ-2" : "content confirmed as РГ-2"}[c.status] || "classification pending";
 }
 function classificationBox(v, editable) {
   const c = v.classification;
@@ -1236,13 +1237,13 @@ function classificationBox(v, editable) {
   box.append(label, c.evidence ? ": " + c.evidence : "");
   if (!editable) return box;
   const action = c.override_action ? "revoke" : canQuarantine ? "quarantine_rg7" : "confirm_rg2";
-  const button = mk("button", c.override_action === "quarantine_rg7" ? "revoke RG-7 quarantine" :
-    c.override_action === "confirm_rg2" ? "revoke RG-2 confirmation" :
-    canQuarantine ? "mark as mislabeled RG-7" : "confirm as RG-2");
+  const button = mk("button", c.override_action === "quarantine_rg7" ? "revoke РГ-7 quarantine" :
+    c.override_action === "confirm_rg2" ? "revoke РГ-2 confirmation" :
+    canQuarantine ? "mark as mislabeled РГ-7" : "confirm as РГ-2");
   button.type = "button";
   button.onclick = () => {
-    const question = action === "confirm_rg2" ? "Confirm this exact document as RG-2? This may change unofficial totals." :
-      action === "quarantine_rg7" ? "Mark this exact document as a mislabeled RG-7 and exclude it from RG-2 selection?" :
+    const question = action === "confirm_rg2" ? "Confirm this exact document as РГ-2? This may change unofficial totals." :
+      action === "quarantine_rg7" ? "Mark this exact document as a mislabeled РГ-7 and exclude it from РГ-2 selection?" :
       "Revoke this exact document classification override?";
     if (!confirm(question)) return;
     button.disabled = true;
@@ -1340,7 +1341,7 @@ function keep(r) {
     && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
 }
 function stationCellHtml(r) {
-  const main = esc(r.muni) + "<br>" + esc((r.no ? "BM " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""));
+  const main = esc(r.muni) + "<br>" + esc((r.no ? "БМ " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""));
   return main + (r.settlement ? '<span class="stationplace">' + esc(r.settlement) + "</span>" : "");
 }
 function initTable() {
@@ -1445,8 +1446,15 @@ function applyData(data) {
 
 // ---- results (unofficial tally) -----------------------------------------------------------
 const nf = new Intl.NumberFormat("en-GB");
-const SOURCE_ROUND_LABEL = {original: "original RG-2", repeat_i: "repeat vote I",
-  repeat_ii: "repeat vote II", repeat_iii: "repeat vote III"};
+const SOURCE_ROUND_LABEL = {original: "оригинални РГ-2", repeat_i: "поновљено гласање I (РГ-2)",
+  repeat_ii: "поновљено гласање II (РГ-2)", repeat_iii: "поновљено гласање III (РГ-2)"};
+function stationRoundInfo(round) {
+  const label = SOURCE_ROUND_LABEL[round];
+  if (!label) return null;
+  const text = "Извор записника: " + label, info = mk("span", "ⓘ", "stationround");
+  info.dataset.round = text; info.title = text; info.ariaLabel = text; info.tabIndex = 0;
+  return info;
+}
 const num = v => v == null ? "-" : nf.format(v);
 const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
 function documentStatusEl(r) {
@@ -1462,14 +1470,14 @@ function documentStatusEl(r) {
   else if (r.classification && r.classification.override)
     box.append(mk("br"), mk("span", classificationLabel(r.classification), "good"));
   if (r.rec.annulled) {
-    box.append(mk("br"), mk("span", "Поништено — RG-9", "bad"));
+    box.append(mk("br"), mk("span", "Поништено — РГ-9", "bad"));
     const href = rikHref(r.rec.annulled.rik);
-    if (href) box.append(" ", link("RG-9", href));
+    if (href) box.append(" ", link("РГ-9", href));
   }
   if (r.rec.undetermined) {
-    box.append(mk("br"), mk("span", "Резултати се не могу утврдити — RG-8", "bad"));
+    box.append(mk("br"), mk("span", "Резултати се не могу утврдити — РГ-8", "bad"));
     const href = rikHref(r.rec.undetermined.rik);
-    if (href) box.append(" ", link("RG-8", href));
+    if (href) box.append(" ", link("РГ-8", href));
   }
   for (const warning of r.rec.decision_warnings || []) {
     box.append(mk("br"), mk("span", warning.label, "warn"));
@@ -1489,8 +1497,8 @@ function resultValue(el, votes, share, diff) {
 }
 const ratio = (a, b) => b ? a / b : null;
 const NV = () => $("tview").value;  // numbers: corrected | filed | diff
-const NV_LABEL = {corrected: "With RG-7 and operator-entered corrections.", filed: "As filed on the RG-2 forms (RG-7 and operator corrections not applied).",
-  diff: "Difference: with RG-7/operator corrections minus as filed, over comparable terms. Forms with terms only in corrected/filed view are shown separately; unmatched terms are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)."};
+const NV_LABEL = {corrected: "With РГ-7 and operator-entered corrections.", filed: "As filed on the РГ-2 forms (РГ-7 and operator corrections not applied).",
+  diff: "Difference: with РГ-7/operator corrections minus as filed, over comparable terms. Forms with terms only in corrected/filed view are shown separately; unmatched terms are left out (readability, clean-selection, or vote-reconciliation eligibility may have changed)."};
 const dnum = v => v == null ? "-" : v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + nf.format(Math.abs(v));
 const snum = v => v == null ? "-" : v === 0 ? "0" : (v > 0 ? "+" : "\u2212") + nf.format(Math.abs(v));
 const dpp = x => { if (x == null) return "-"; const v = Math.round(x * 1000) / 10; return v === 0 ? "\u00b7" : (v > 0 ? "+" : "\u2212") + Math.abs(v).toFixed(1); };
@@ -1523,8 +1531,8 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come
     ["Municipality", r => r.m, s => s, r => r.m],
     ["Stations", r => r.stations, num], ["Counted", r => r.counted, num], ["Clean", r => r.clean, n],
     ["Flagged", r => r.excluded, n], ["Held by escalation", r => r.held || 0, num],
-    ["Не могу се утврдити (RG-8)", r => r.undetermined || 0, num],
-    ["Поништено (RG-9)", r => r.annulled || 0, num],
+    ["Не могу се утврдити (РГ-8)", r => r.undetermined || 0, num],
+    ["Поништено (РГ-9)", r => r.annulled || 0, num],
     ["Coverage", r => ratio(r.counted, r.stations), pc, r => ratio(r.counted, r.stations) == null ? "" : (100 * r.counted / r.stations).toFixed(1)],
     ["Registered", r => t(r).registered, n], ["Voted", r => t(r).voted, n],
     ["Turnout" + (dg ? " (pp)" : ""), r => t(r).turnout, p, r => t(r).turnout == null ? "" : (100 * t(r).turnout).toFixed(1)],
@@ -1565,7 +1573,7 @@ function tallyCsv() {
   // header is row 1 (pandas/Excel read it cleanly); the unofficial note is a last column, first data row
   const note = "Unofficial - numbers read by " + T.model + " from the scanned forms; " +
     (mode === "cl" ? "clean forms only (leave out flagged)" : "all counted forms") +
-    "; escalated, RG-8 undetermined and RG-9 annulled forms are held from totals; numbers: " + NV_LABEL[NV()] +
+    "; escalated, РГ-8 undetermined and РГ-9 annulled forms are held from totals; numbers: " + NV_LABEL[NV()] +
     " Reported invalid counts are limited to forms with reconciled valid/list totals." +
     (NV() === "diff" ? " Paired cohort columns are unsigned actual sizes; turnout and shares are differences in percentage points." : "");
   if (T.scope === "municipal") {  // long format: one row per (municipality, list), shared totals repeated
@@ -1660,7 +1668,7 @@ function renderTally() {
         ...cols.map((c, i) => ({title: esc(c.t), type: i ? "num" : "string", className: i ? "dt-right" : "",
         render: {_: (d, t, r) => { const v = c.v(vrow(r)); return v == null ? -1 : v; }, display: (d, t, r) => esc(c.f(c.v(vrow(r))))}}))]});
   }
-  const flagged = NV() === "filed" ? T.excluded_filed : T.excluded;  // judged on the RG-2 alone when as filed
+  const flagged = NV() === "filed" ? T.excluded_filed : T.excluded;  // judged on the РГ-2 alone when as filed
   if (teTable) {
     teTable.clear().rows.add(flagged).draw(false);
   } else {
@@ -1671,26 +1679,26 @@ function renderTally() {
         {data: "why", title: "Why flagged", render: {_: d => d.join("; "), display: () => ""},
          createdCell: (td, d) => td.append(ruleText(d.join("; ")))},
         {data: null, title: "", orderable: false, defaultContent: "", createdCell: (td, d, r) => {
-          const b = mk("button", "show form"); b.onclick = () => showForm(r.id, r.m + " BM " + r.no); td.append(b); }}]});
+          const b = mk("button", "show form"); b.onclick = () => showForm(r.id, r.m + " БМ " + r.no); td.append(b); }}]});
   }
-  $("tnotes").replaceChildren(...T.notes.map(n => mk("li", n.m + " BM " + n.no + ": " + n.note)));
+  $("tnotes").replaceChildren(...T.notes.map(n => mk("li", n.m + " БМ " + n.no + ": " + n.note)));
   $("tnoteshead").hidden = !T.notes.length;
   const rg7Items = T.corrected.map(c => {
-    const li = mk("li", c.m + " BM " + c.no + ": "), row = D.rows.find(r => r.id === c.id);
+    const li = mk("li", c.m + " БМ " + c.no + ": "), row = D.rows.find(r => r.id === c.id);
     c.rg7.forEach((d, i) => {
-      li.append((i ? "; " : "") + "RG-7 " + d.d + ": " + d.ch.join(", "));
+      li.append((i ? "; " : "") + "РГ-7 " + d.d + ": " + d.ch.join(", "));
       const x = row && d.u ? row.r7.find(y => y.u === d.u) : null;
       if (x) { const lk = linksOf(x); lk.className = "lk"; li.append(lk); }
     });
-    const b = mk("button", "show", "chip"); b.onclick = () => showForm(c.id, c.m + " BM " + c.no);
+    const b = mk("button", "show", "chip"); b.onclick = () => showForm(c.id, c.m + " БМ " + c.no);
     const sp = mk("span", null, "lk");
     sp.append(b);
     li.append(sp);
     return li;
   });
   const operatorItems = T.operator_corrected.map(c => {
-    const li = mk("li", c.m + " BM " + c.no + ": operator correction — " + c.reason + " (" + when(c.at) + ")");
-    const b = mk("button", "show", "chip"); b.onclick = () => showForm(c.id, c.m + " BM " + c.no);
+    const li = mk("li", c.m + " БМ " + c.no + ": operator correction — " + c.reason + " (" + when(c.at) + ")");
+    const b = mk("button", "show", "chip"); b.onclick = () => showForm(c.id, c.m + " БМ " + c.no);
     const sp = mk("span", null, "lk"); sp.append(b); li.append(sp);
     return li;
   });
@@ -1790,8 +1798,8 @@ function heldReviewSummary(held, escalatedAmongFlagged) {
 }
 function exclusionSummary(decisions, escalatedOnly, other) {
   const parts = [];
-  if (decisions) parts.push(num(decisions) + " за поновљено гласање (RG-8/RG-9)");
-  if (escalatedOnly) parts.push(num(escalatedOnly) + " ескалирано ван RG-8/RG-9");
+  if (decisions) parts.push(num(decisions) + " за поновљено гласање (РГ-8/РГ-9)");
+  if (escalatedOnly) parts.push(num(escalatedOnly) + " ескалирано ван РГ-8/РГ-9");
   if (other) parts.push(num(other) + " непотпуно или неусаглашено");
   return "Од тога: " + (parts.length ? parts.join(" · ") : "0");
 }
@@ -1937,9 +1945,9 @@ function stationActionMenu(station, source = stationSource(station.id)) {
   if (pdf) { const item = link("PDF", pdf); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
   if (rik) { const item = link("RIK", rik); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
   const rg9 = rikHref(station.annulled && station.annulled.rik);
-  if (rg9) { const item = link("RG-9", rg9); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
+  if (rg9) { const item = link("РГ-9", rg9); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
   const rg8 = rikHref(station.undetermined && station.undetermined.rik);
-  if (rg8) { const item = link("RG-8", rg8); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
+  if (rg8) { const item = link("РГ-8", rg8); item.className = "stationmenuitem"; item.role = "menuitem"; item.onclick = ev => { ev.stopPropagation(); closeStationActions(); }; menu.append(item); }
   const show = link("прикажи", "#form=" + encodeURIComponent(station.id));
   show.className = "stationmenuitem"; show.role = "menuitem";
   show.onclick = ev => { ev.stopPropagation(); closeStationActions(); };
@@ -2116,7 +2124,7 @@ function renderStationResults() {
       winner = mk("span", null, "stationwinner"), winnerNo = outcome.no == null ? outcome.name === "Нерешено" ? "=" : "—" : String(outcome.no);
     winner.append(mk("span", winnerNo, "no"));
     winner.title = outcome.name;
-    const undeterminedTitle = "Резултати се не могу утврдити (RG-8)",
+    const undeterminedTitle = "Резултати се не могу утврдити (РГ-8)",
       status = station.annulled ? "Поништено" : station.undetermined ? "Неутврђено"
       : viewName === "diff" ? "Поређење" : chosen.included ? "Урачунат" : "Није урачунат",
       statusEl = mk("span", null, "stationstatus" + (station.annulled || station.undetermined ? " out" : viewName === "diff" ? "" : chosen.included ? " in" : " out"));
@@ -2140,9 +2148,9 @@ function renderStationResults() {
     }
     statusEl.append(stationActionMenu(station, source));
     const name = mk("span", (allScope ? municipalityName + " · " : "") + "БМ " + station.no +
-      (station.settlement ? " · " + station.settlement : "") + (station.name ? " — " + station.name : "") +
-      (SOURCE_ROUND_LABEL[station.source_round] ? " · " + SOURCE_ROUND_LABEL[station.source_round] : ""), "stationname"),
-      mapLink = stationMapLink(station);
+      (station.settlement ? " · " + station.settlement : "") + (station.name ? " — " + station.name : ""), "stationname"),
+      roundInfo = stationRoundInfo(station.source_round), mapLink = stationMapLink(station);
+    if (roundInfo) name.append(roundInfo);
     if (mapLink) { name.className += " hasmap"; name.append(mapLink); }
     summary.append(name,
       mk("span", turnout == null ? "—" : viewName === "diff" ? dpp(turnout) + " п. п." : pc(turnout), "stationmetric stationturnout"),
@@ -2185,7 +2193,7 @@ function renderHero() {
   const warn = [T.scope_note, muniScope ? r.names_note : T.names_note].filter(Boolean);
   $("heronames").hidden = !warn.length;
   $("heronames").textContent = warn.length ? "Упозорење: " + warn.map(heroWarning).join(". ") : "";
-  const titleSuffix = NV() === "corrected" ? " — са исправкама (RG-7 / ручни унос)" : dg ? " — РАЗЛИКА (са исправкама RG-7 / ручни унос − оригинални RG-2)" : "";
+  const titleSuffix = NV() === "corrected" ? " — са исправкама (РГ-7 / ручни унос)" : dg ? " — РАЗЛИКА (са исправкама РГ-7 / ручни унос − оригинални РГ-2)" : "";
   put("herotitle", none ? "" : (allMunis ? "Све општине" : heroMuniName(raw)) + " — " + shortTitle(T.title) + titleSuffix);
   put("hv-turn", none ? "-" : dg ? dpp(t.turnout) : pc(t.turnout));
   put("hs-turn", none ? "" : dg ? "разлика у излазности, процентни поени" : num(t.voted) + " од " + num(t.registered) + " уписаних");
@@ -2233,9 +2241,9 @@ function renderHero() {
     formContext.push(reviewSummary.text);
     if (held) formContext.push(heldReviewSummary(held, reviewSummary.escalate));
     if (annulled) formContext.push("Поништено: " + num(annulled) + " " +
-      serbianCount(annulled, "бирачко место", "бирачка места", "бирачких места") + " (RG-9)");
+      serbianCount(annulled, "бирачко место", "бирачка места", "бирачких места") + " (РГ-9)");
     if (undetermined) formContext.push("Резултати се не могу утврдити: " + num(undetermined) + " " +
-      serbianCount(undetermined, "бирачко место", "бирачка места", "бирачких места") + " (RG-8)");
+      serbianCount(undetermined, "бирачко место", "бирачка места", "бирачких места") + " (РГ-8)");
     if (otherExcluded > 0) formContext.push("Није урачунато: " + num(otherExcluded) +
       " записника — подаци по листама нису потпуни или усаглашени");
     if (mode === "all") formContext.push(processedSummary);
@@ -2415,7 +2423,7 @@ function readHash() {
   const nv = p.get("nv");
   $("tview").value = ["corrected", "filed", "diff"].includes(nv) ? nv : "corrected";
   const formId = p.get("form"), form = D.rows.find(row => String(row.id) === formId);
-  if (form) showForm(form.id, form.muni + " BM " + form.no, false);
+  if (form) showForm(form.id, form.muni + " БМ " + form.no, false);
   else { onlyId = null; $("onlyid").hidden = true; setTab(p.get("tab"), false); }
 }
 function writeHash() {

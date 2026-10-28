@@ -265,7 +265,7 @@ Object.assign(DATA.overall,{counted:100,clean:80,held:10,flagged:20,annulled:3,u
 DATA.overall.totals.vote_forms=80;render();
 assert.equal(els["forms-primary"].textContent,"Није урачунато: 20");
 assert.deepEqual(els["forms-sub"].textContent.split("\n"),[
-  "Од тога: 8 за поновљено гласање (RG-8/RG-9) · 7 ескалирано ван RG-8/RG-9 · 5 непотпуно или неусаглашено",
+  "Од тога: 8 за поновљено гласање (РГ-8/РГ-9) · 7 ескалирано ван РГ-8/РГ-9 · 5 непотпуно или неусаглашено",
   "Обрађено: 80 без уочених проблема + 20 за проверу = 100",
 ]);
 Object.assign(DATA.overall,{counted:original.counted,clean:original.clean,held:original.held,
@@ -384,7 +384,7 @@ DATA.overall.annulled=0;
 DATA.stations.at(-1).annulled=false;renderStationResults();
 DATA.stations.at(-1).undetermined=true;renderStationResults();
 assert.equal(els.stationlist.children[0].children[0].children.at(-1).textContent,"Неутврђено");
-assert.equal(els.stationlist.children[0].children[0].children.at(-1).title,"Резултати се не могу утврдити (RG-8)");
+assert.equal(els.stationlist.children[0].children[0].children.at(-1).title,"Резултати се не могу утврдити (РГ-8)");
 assert.equal(els["station-filter-undetermined"].textContent,"Не могу се утврдити 1");
 DATA.overall.undetermined=1;DATA.overall.decision_excluded=1;render();
 setStationFilter("undetermined");
