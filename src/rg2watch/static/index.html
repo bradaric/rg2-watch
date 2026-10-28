@@ -66,7 +66,6 @@ button:hover,select:hover{border-color:var(--mut)}
 input[type=checkbox]{min-height:0;width:15px;height:15px;margin:0;accent-color:var(--accent);vertical-align:-2px}
 input[type=search]{width:15em}
 #ctl{margin-bottom:var(--s3);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:visible}
-#formshelp{display:flex;justify-content:flex-end;margin:calc(-1 * var(--s1)) 0 var(--s2)}
 .presetbar,.filtergroup{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;padding:var(--s2) var(--s3)}
 .presetbar{background:var(--surface);border-bottom:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px 8px 0 0}
 .presetbar button{border-color:var(--accent);color:var(--accent);background:var(--panel);font-weight:700}
@@ -431,7 +430,7 @@ stroke-width:2.5;
 </div>
 </div>
 </div>
-<div id="formshelp"><details id="legendbox"><summary>rule codes</summary><dl id="legend"></dl></details></div>
+<details id="legendbox" hidden><summary>rule codes</summary><dl id="legend"></dl></details>
 <div id="onlyid" class="warnbox" hidden><span id="onlytxt"></span> <button id="onlyclear">show all forms</button></div>
 <div id="wrap"><table id="forms" class="display" style="width:100%"></table></div>
 </div>
@@ -1357,7 +1356,7 @@ function initTable() {
   table = new DataTable("#forms", {
     data: rows, deferRender: true, pageLength: 100, lengthMenu: [50, 100, 250, 500],
     order: [[6, "desc"], [4, "desc"]], stateSave: true, stateDuration: 0,
-    layout: {topStart: "pageLength", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
+    layout: {topStart: "pageLength", topEnd: () => { const legend = $("legendbox"); legend.hidden = false; return legend; }, bottomStart: "info", bottomEnd: "paging"},
     stateSaveParams: (s, d) => { d.rg = readCtl(); d.rgColumns = 3; },
     stateLoadParams: (s, d) => {
       if (d.rgColumns !== 3) delete d.columns;  // reset once: Result inclusion added; Models hidden
