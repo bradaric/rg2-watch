@@ -309,7 +309,7 @@ def _deliver_env(post):
     store.apply_events("p", store.start_sweep("p", "t"),
                        [__import__("rg2watch.models", fromlist=["Event"]).Event("added", d)])
     store.add_finding("p", Finding("D1", "HIGH", d, "new"), d.url)
-    cfg = Config(ntfy_topic="t", ntfy_url="http://ntfy.test")
+    cfg = Config(ntfy_topic="t", ntfy_url="http://ntfy.test", ntfy_findings=True)
     http = httpx.Client(transport=httpx.MockTransport(post))
     notifier = Notifier(cfg, http, io.StringIO())
     _, deliver = _handlers(store, notifier, "p")

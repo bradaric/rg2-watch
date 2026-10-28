@@ -36,12 +36,14 @@ only_municipalities = []
 # ntfy server and topic (topic can also come from env RG2W_NTFY_TOPIC, which wins)
 ntfy_url = "https://ntfy.sh"
 # ntfy_topic = "my-topic"
+# Push stored HIGH findings; false sends only operational alerts (RIK reachability, pauses, spend cap)
+ntfy_findings = false
 # Push MEDIUM findings as digests; false keeps them in the terminal/page without ntfy
 ntfy_medium = true
 # Seconds between MEDIUM-severity digests
 medium_digest_s = 600
-# HIGH findings are pushed one by one, at most high_push_max per high_push_window_s seconds; the
-# rest roll into one "[HIGH] N findings" digest (same compact format), sent when the window allows.
+# When ntfy_findings is true, HIGH findings are pushed one by one, at most high_push_max per
+# high_push_window_s seconds; the rest roll into one "[HIGH] N findings" digest.
 # Status alerts (RIK unreachable, analysis paused, spend cap) are never held back by that backlog.
 high_push_max = 10
 high_push_window_s = 300

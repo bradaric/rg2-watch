@@ -176,7 +176,7 @@ class Notifier:
 
     def _send(self, findings_with_ids: list[tuple[int, Finding]], flush: bool = False) -> list[int]:
         delivered: list[int] = []
-        push = bool(self.cfg.ntfy_topic)
+        push = bool(self.cfg.ntfy_topic and self.cfg.ntfy_findings)
         self._flush_status()
         for fid, f in findings_with_ids:
             self._print(fid, f)

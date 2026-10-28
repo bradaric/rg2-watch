@@ -19,9 +19,9 @@ class Clock:
         return self.t
 
 
-def make(handler, topic="t", clock=None, ntfy_medium=True):
+def make(handler, topic="t", clock=None, ntfy_medium=True, ntfy_findings=True):
     cfg = Config(ntfy_topic=topic, ntfy_url="http://ntfy.test", medium_digest_s=600,
-                 ntfy_medium=ntfy_medium)
+                 ntfy_medium=ntfy_medium, ntfy_findings=ntfy_findings)
     http = httpx.Client(transport=httpx.MockTransport(handler))
     out = io.StringIO()
     return Notifier(cfg, http, out, clock or Clock()), out
@@ -72,6 +72,16 @@ def test_medium_ntfy_can_be_disabled_without_suppressing_local_output():
     assert n.send([], flush=True) == []
     assert reqs == []
     assert "[MEDIUM] D1" in out.getvalue()
+
+
+def test_findings_ntfy_disabled_marks_high_and_medium_handled_without_pushes():
+    reqs = []
+    n, out = make(lambda r: reqs.append(r) or httpx.Response(200), ntfy_findings=False)
+
+    assert n.send([(1, fin()), (2, fin("MEDIUM", "D1"))]) == [1, 2]
+    assert n.send([], flush=True) == []
+    assert reqs == []
+    assert "[HIGH] D2" in out.getvalue() and "[MEDIUM] D1" in out.getvalue()
 
 
 def test_low_printed_not_pushed():
@@ -219,6 +229,16 @@ def test_status_alert_printed_and_pushed_without_store():
     assert "[rg2-watch] RIK unreachable/blocking since 21:05" in out.getvalue()
     assert len(reqs) == 1 and reqs[0].headers["Priority"] == "high"
     assert reqs[0].headers["Title"] == "[rg2-watch] RIK unreachable/blocking since 21:05"
+
+
+def test_status_alert_is_pushed_when_finding_pushes_are_disabled():
+    reqs = []
+    n, _ = make(lambda r: reqs.append(r) or httpx.Response(200), ntfy_findings=False)
+
+    n.status("[rg2-watch] spend cap reached")
+
+    assert len(reqs) == 1
+    assert reqs[0].headers["Title"] == "[rg2-watch] spend cap reached"
 
 
 def test_status_alert_retried_after_backoff():
