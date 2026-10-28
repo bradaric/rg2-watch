@@ -437,6 +437,7 @@ def test_operator_page_has_separate_official_rik_results_tab():
     assert 'id="officialview"' in html and "Official RIK data" in html
     assert "official-results.json" in html and "function renderOfficialResults(" in html
     assert "РИК" in html and "НЕЗВАНИЧНО" in html
+    assert "#officialtable{width:100%;border-collapse:collapse;background:var(--panel);border:0;box-shadow:none}" in html
 
 
 def test_operator_page_preserves_active_tab_in_url_hash():

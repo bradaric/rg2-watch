@@ -174,7 +174,9 @@ def test_public_results_hold_escalated_form_out_of_totals():
     assert data["overall"]["totals"]["registered"] == 1000
     assert data["overall"]["totals"]["valid"] == 780
     assert [row["included"] for row in data["stations"]] == [True, False]
-    assert "Изузето из резултата" in render_public_results(data)
+    rendered = render_public_results(data)
+    assert '<details class="forms-details">' in rendered
+    assert "Прикажи објашњење" in rendered and "Није урачунато: " in rendered
 
 
 def test_rendered_export_is_one_self_contained_script_safe_page(tmp_path):
@@ -254,17 +256,22 @@ assert.equal(els.chart.children[9].children[0].textContent,"Листа 1");
 assert(!els.chart.children.some(x=>x.children[0].textContent.startsWith("Остале")));
 assert.equal(els.footer.textContent,"НЕЗВАНИЧНО — Скенирани записници обрађени помоћу вештачке интелигенције; ово нису резултати РИК-а.");
 const original={counted:DATA.overall.counted,clean:DATA.overall.clean,held:DATA.overall.held,
-  flagged:DATA.overall.flagged,review:DATA.overall.review,vote_forms:DATA.overall.totals.vote_forms};
-Object.assign(DATA.overall,{counted:996,clean:843,held:13,flagged:151,
-  review:{ok:26,escalate:11,unsure:0,undecided:114}});
-DATA.overall.totals.vote_forms=983;render();
+  flagged:DATA.overall.flagged,review:DATA.overall.review,annulled:DATA.overall.annulled,
+  undetermined:DATA.overall.undetermined,decision_excluded:DATA.overall.decision_excluded,
+  held_decision_excluded:DATA.overall.held_decision_excluded,vote_forms:DATA.overall.totals.vote_forms};
+Object.assign(DATA.overall,{counted:100,clean:80,held:10,flagged:20,annulled:3,undetermined:5,
+  decision_excluded:8,held_decision_excluded:3,
+  review:{ok:4,escalate:7,unsure:1,undecided:8}});
+DATA.overall.totals.vote_forms=80;render();
+assert.equal(els["forms-primary"].textContent,"Није урачунато: 20");
 assert.deepEqual(els["forms-sub"].textContent.split("\n"),[
-  "843 без уочених проблема",
-  "За проверу: 151 записник — 26 прихваћено · 11 ескалирано · 114 без одлуке",
-  "Изузето из резултата: 13 ескалираних записника — 11 из скупа за проверу · 2 додатно",
+  "Од тога: 8 за поновљено гласање (RG-8/RG-9) · 7 ескалирано ван RG-8/RG-9 · 5 непотпуно или неусаглашено",
+  "Обрађено: 80 без уочених проблема + 20 за проверу = 100",
 ]);
 Object.assign(DATA.overall,{counted:original.counted,clean:original.clean,held:original.held,
-  flagged:original.flagged,review:original.review});
+  flagged:original.flagged,review:original.review,annulled:original.annulled,
+  undetermined:original.undetermined,decision_excluded:original.decision_excluded,
+  held_decision_excluded:original.held_decision_excluded});
 DATA.overall.totals.vote_forms=original.vote_forms;render();
 DATA.scope_note="unknown election type - set tally_scope";render();
 assert(els.warning.textContent.includes("Непозната врста избора"));
@@ -370,7 +377,6 @@ DATA.stations.at(-1).annulled=true;renderStationResults();
 assert.equal(els.stationlist.children[0].children[0].children.at(-1).textContent,"Поништено");
 assert.equal(els["station-filter-annulled"].textContent,"Поништено 1");
 DATA.overall.annulled=1;render();
-assert(els["forms-sub"].textContent.includes("Поништено: 1 бирачко место (RG-9)"));
 setStationFilter("annulled");
 assert.equal(els.stationlist.children.length,1);
 setStationFilter("out");
@@ -381,7 +387,6 @@ assert.equal(els.stationlist.children[0].children[0].children.at(-1).textContent
 assert.equal(els.stationlist.children[0].children[0].children.at(-1).title,"Резултати се не могу утврдити (RG-8)");
 assert.equal(els["station-filter-undetermined"].textContent,"Не могу се утврдити 1");
 DATA.overall.undetermined=1;DATA.overall.decision_excluded=1;render();
-assert(els["forms-sub"].textContent.includes("Резултати се не могу утврдити: 1 бирачко место (RG-8)"));
 setStationFilter("undetermined");
 assert.equal(els.stationlist.children.length,1);
 setStationFilter("out");

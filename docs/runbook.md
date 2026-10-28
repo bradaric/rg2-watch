@@ -105,16 +105,11 @@ change the file or environment variable.
    busy; `rg2watch serve` prints it too when not watching): a live status panel, then every RG-2 with its alerts, second opinions, filters and
    PDF links. The table refreshes every 2 minutes and the panel every 10 s, without a reload.
 4. What arrives on the phone:
-   - HIGH, immediately (at most 10 individual pushes per 5 minutes; beyond that one "[HIGH] N
-     findings" digest when the window allows, same compact format; status alerts such as RIK
-     blind, analysis paused or spend cap are never held back by that backlog; more than 20
-     replaced documents in one sweep give ONE "mass replacement" alert and a digest, not 20
-     pushes; `high_push_max`, `high_push_window_s`, `mass_replace_threshold`): corrected numbers, more ballots than voters, very high outside voting (15%+),
-     RG-8/RG-9 published, an RG-2 replaced or removed, the watcher itself blind or blocked.
-   - MEDIUM, every 10 minutes as one digest (`ntfy_medium = false` disables these pushes while
-     retaining findings in the terminal and page): missing signatures, outside voting 10-15%,
-     committee remarks, unreadable fields, arithmetic mismatches.
-   - LOW: terminal and page only.
+   - By default, operational alerts only: RIK unreachable/recovered, analysis paused, spend cap,
+     and one mass-replacement alert when a sweep replaces more than 20 documents.
+   - HIGH, MEDIUM and LOW findings remain in the terminal, database and page without phone pushes.
+   - Set `ntfy_findings = true` to opt into HIGH pushes. MEDIUM findings are then sent every 10
+     minutes as one digest when `ntfy_medium = true`; LOW remains terminal/page only.
 5. For each alert: open the PDF link and check it yourself. Alerts are leads, not conclusions.
 
 Stop a terminal-run watcher with Ctrl-C (waits up to 80 s for analyses in flight). Restarting the
@@ -263,14 +258,16 @@ free second opinion afterwards (caught the small rotated scan both missed).
 
 ## Watcher behavior and recovery details
 
-HIGH findings (RG-8/RG-9 published, RG-2 replaced, with the old URL as "was: ...") are pushed
-immediately, MEDIUM in digests, LOW only printed. Individual HIGH pushes are capped at
-`high_push_max` (10) per `high_push_window_s` (300 s); the rest roll into one "[HIGH] N findings"
-digest (same compact format) sent when the window allows, so a busy night cannot trip ntfy's rate
-limits. Status alerts (RIK unreachable, analysis paused, spend cap) are separate, go first and are
-never held back by the finding backlog. If one sweep replaces more than `mass_replace_threshold`
-(20) documents, ONE "[rg2-watch] mass replacement: N documents replaced in one sweep (RIK
-re-upload?)" alert is pushed and those D2 findings go to the digest.
+By default (`ntfy_findings = false`), stored HIGH, MEDIUM and LOW findings are printed and marked
+handled without ntfy pushes; they remain in the database and page and do not become a future push
+backlog. Operational status alerts (RIK unreachable/recovered, analysis paused, spend cap) still
+push. If one sweep replaces more than `mass_replace_threshold` (20) documents, its single
+"[rg2-watch] mass replacement" operational alert also pushes.
+
+Set `ntfy_findings = true` to opt into finding pushes. HIGH findings then push immediately and
+MEDIUM findings use digests when `ntfy_medium = true`; LOW remains local only. Individual HIGH
+pushes are capped at `high_push_max` (10) per `high_push_window_s` (300 s), with the rest rolled
+into one digest. Operational alerts remain separate and go first.
 Alerts are delivered, and RIK reachability checked, by their own thread every 5 s, so a slow
 RIK tick (10 minutes at a throttled rate) never holds them back.
 With `watch --no-ntfy`, watcher status messages and findings still print locally and the status

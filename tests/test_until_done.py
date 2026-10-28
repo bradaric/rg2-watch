@@ -137,7 +137,7 @@ def test_no_ntfy_cli_prints_and_consumes_pending_and_new_findings(
         rehearsal, monkeypatch, capsys, topic_source):
     argv, db = rehearsal
     cfg_path = db.parent / "rg2watch.toml"
-    extra = 'ntfy_url = "http://ntfy.test"\n'
+    extra = 'ntfy_url = "http://ntfy.test"\nntfy_findings = true\n'
     if topic_source == "toml":
         extra += 'ntfy_topic = "configured-test-topic"\n'
     else:
@@ -373,7 +373,8 @@ def test_flush_pushes_medium_digest_immediately():
     posts = []
     http = httpx.Client(transport=httpx.MockTransport(
         lambda r: (posts.append(r.headers["Title"]), httpx.Response(200))[1]))
-    n = Notifier(Config(ntfy_topic="t", ntfy_url="http://ntfy.test", medium_digest_s=600), http,
+    n = Notifier(Config(ntfy_topic="t", ntfy_url="http://ntfy.test", medium_digest_s=600,
+                        ntfy_findings=True), http,
                  out=io.StringIO())
     f = Finding("A1", "MEDIUM", Doc("M", "1", "S", "l", 6, "http://x/1.pdf", "2026-10-19T20:00"), "s")
     assert n.send([(1, f)]) == []
