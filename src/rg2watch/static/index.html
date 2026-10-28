@@ -70,7 +70,9 @@ input[type=search]{width:15em}
 .presetbar{background:var(--surface);border-bottom:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px 8px 0 0}
 .presetbar button{border-color:var(--accent);color:var(--accent);background:var(--panel);font-weight:700}
 .presetbar button:hover{background:var(--accent-bg)}
-#clearfilters{margin-left:auto;border-color:var(--line2);color:var(--mut);font-weight:600}
+#presetutils{margin-left:auto;display:flex;align-items:center;gap:var(--s2)}
+#presetutils label{white-space:nowrap;display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:0 10px;border:1px solid var(--line2);border-radius:15px;cursor:pointer}
+#clearfilters{border-color:var(--line2);color:var(--mut);font-weight:600}
 .filtergroup+.filtergroup{border-top:1px solid var(--line)}
 .filtertitle{flex:0 0 8.5rem;color:var(--mut);font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase}
 .filtergroup>label{white-space:nowrap;display:inline-flex;align-items:center;gap:6px;color:var(--mut)}
@@ -394,7 +396,7 @@ stroke-width:2.5;
 <span id="presettitle" class="filtertitle">Common workflows</span>
 <button type="button" data-preset="review-filed">Review excluded as filed</button>
 <button type="button" data-preset="review-v13">Review V13</button>
-<button id="clearfilters" type="button">Clear all filters</button>
+<div id="presetutils"><label><input type="checkbox" id="auto" checked> auto-refresh</label><button id="clearfilters" type="button">Clear all filters</button></div>
 </div>
 <div id="filtergroups">
 <div id="scopefilters" class="filtergroup" role="group" aria-labelledby="scopetitle">
@@ -414,14 +416,13 @@ stroke-width:2.5;
 </div>
 <div id="morefilters" class="filtergroup" role="group" aria-labelledby="moretitle">
 <span id="moretitle" class="filtertitle">More</span>
-<label><input type="checkbox" id="fl"> with findings</label>
 <label><input type="checkbox" id="rp"> replaced</label>
 <label><input type="checkbox" id="rm"> removed</label>
+<label><input type="checkbox" id="fl"> with findings</label>
 <label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by RG-7</label>
-<label><input type="checkbox" id="loc"> has local copy</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
+<label><input type="checkbox" id="loc"> has local copy</label>
 <details id="legendbox"><summary>rule codes</summary><dl id="legend"></dl></details>
-<label><input type="checkbox" id="auto" checked> auto-refresh</label>
 <button id="esccsv" type="button">Escalated CSV</button>
 <details id="colbox"><summary>columns</summary><div id="cols"></div></details>
 </div>
