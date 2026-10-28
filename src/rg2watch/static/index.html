@@ -399,6 +399,7 @@ stroke-width:2.5;
 <span id="presettitle" class="filtertitle">Common workflows</span>
 <button type="button" data-preset="review-filed">Review excluded as filed</button>
 <button type="button" data-preset="review-v13">Review V13</button>
+<label>Review batch <select id="reviewbatch"><option value="">Choose a batch…</option><option value="review-numbers">Altered numbers</option><option value="review-integrity">Signatures &amp; scan integrity</option><option value="review-procedure">Procedural findings</option><option value="review-stats">Statistical flags</option></select></label>
 <div id="presetutils"><label><input type="checkbox" id="auto" checked> auto-refresh</label><button id="clearfilters" type="button">Clear all filters</button></div>
 </div>
 <div id="filtergroups">
@@ -671,6 +672,10 @@ const FILTERS = ["q", "m", "e", "dt", "mod", "sev", "rv", "nc", "ri", "an", "ast
 const FILTER_PRESETS = {
   "review-filed": {rv: "todo", ri: "excluded-filed", ast: "done", an: "not"},
   "review-v13": {rv: "todo", ast: "done", rules: ["V13"]},
+  "review-numbers": {rv: "todo", ast: "done", rules: ["V1", "V12"]},
+  "review-integrity": {rv: "todo", ast: "done", rules: ["V3", "V4", "V5", "V6", "V7", "V9", "V13"]},
+  "review-procedure": {rv: "todo", ast: "done", rules: ["P1", "P2", "P3"]},
+  "review-stats": {rv: "todo", ast: "done", rules: ["A6", "A7", "A8", "A9"], nc: "ok", ri: "counted-both"},
 };
 function presetControls(name, scope) { return {...scope, ...FILTER_PRESETS[name]}; }
 
@@ -2462,6 +2467,13 @@ $("rules").addEventListener("input", () => { rulesSummary(); redraw(); });
 for (const button of document.querySelectorAll("[data-preset]")) button.addEventListener("click", () => {
   const name = button.dataset.preset;
   setCtl(presetControls(name, {e: sel("e"), m: sel("m"), auto: $("auto").checked}));
+  redraw();
+});
+$("reviewbatch").addEventListener("change", () => {
+  const name = $("reviewbatch").value;
+  if (!name) return;
+  setCtl(presetControls(name, {e: sel("e"), m: sel("m"), auto: $("auto").checked}));
+  $("reviewbatch").value = ""; // action menu, not another persistent filter
   redraw();
 });
 $("clearfilters").addEventListener("click", () => {

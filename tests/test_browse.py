@@ -267,6 +267,56 @@ assert.deepEqual(presetControls("review-v13", {{e: "779676", m: "Alpha", auto: f
     assert 'setCtl({auto: $("auto").checked});' in html
 
 
+def test_review_batch_dropdown_applies_only_agreed_filters():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("const FILTERS =")
+    presets = html[start:html.index("// rule codes", start)]
+    controls = html[html.index("function setCtl(o)"):html.index("function readHash()")]
+    handler = html[html.index('$("reviewbatch").addEventListener'):html.index('$("clearfilters").addEventListener')]
+    script = r'''
+const assert = require("assert");
+''' + presets + controls + r'''
+const expected = {
+  "review-numbers": {rules: ["V1", "V12"]},
+  "review-integrity": {rules: ["V3", "V4", "V5", "V6", "V7", "V9", "V13"]},
+  "review-procedure": {rules: ["P1", "P2", "P3"]},
+  "review-stats": {rules: ["A6", "A7", "A8", "A9"], nc: "ok", ri: "counted-both"},
+};
+const boxes = [...new Set(Object.values(expected).flatMap(x => x.rules))].map(value => ({value, checked: false}));
+const els = Object.fromEntries(FILTERS.map(k => [k, {type: ["fl", "rp", "rm", "c7", "loc", "dis", "auto"].includes(k) ? "checkbox" : "select", value: "", checked: false}]));
+let callback, draws = 0;
+els.rules = {querySelectorAll: () => boxes};
+els.reviewbatch = {value: "", addEventListener: (event, fn) => {assert.equal(event, "change"); callback = fn;}};
+const $ = id => els[id], sel = id => els[id].value;
+function rulesSummary() {}
+function redraw() {draws++;}
+''' + handler + r'''
+for (const [name, extra] of Object.entries(expected)) {
+  assert.deepEqual(presetControls(name, {e: "779676", m: "Alpha", auto: false}),
+    {e: "779676", m: "Alpha", auto: false, rv: "todo", ast: "done", ...extra});
+  setCtl({e: "779676", m: "Alpha", auto: false, q: "stale search", sev: "3", an: "annulled", dt: "6", fl: true, dis: true});
+  els.reviewbatch.value = name;
+  callback();
+  assert.equal(els.e.value, "779676"); assert.equal(els.m.value, "Alpha"); assert.equal(els.auto.checked, false);
+  assert.equal(els.rv.value, "todo"); assert.equal(els.ast.value, "done");
+  for (const key of ["q", "an", "dt", "mod"]) assert.equal(els[key].value, "");
+  assert.equal(els.sev.value, "0"); assert.equal(els.fl.checked, false); assert.equal(els.dis.checked, false);
+  assert.equal(els.nc.value, extra.nc || ""); assert.equal(els.ri.value, extra.ri || "");
+  assert.deepEqual(boxes.filter(x => x.checked).map(x => x.value), extra.rules);
+  assert.equal(els.reviewbatch.value, "");
+}
+assert.equal(draws, 4);
+callback(); assert.equal(draws, 4); // placeholder is not a filter action
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    preset = html[html.index('<div id="presetbar"'):html.index('<div id="filtergroups"')]
+    assert '<label>Review batch <select id="reviewbatch">' in preset
+    for name in ("numbers", "integrity", "procedure", "stats"):
+        assert f'<option value="review-{name}">' in preset
+    assert '$("e").hidden = parents.length < 2;' in html
+
+
 def test_form_filters_are_visually_grouped_by_workflow():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
