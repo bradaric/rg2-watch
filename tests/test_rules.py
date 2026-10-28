@@ -149,7 +149,6 @@ CASES = [
     ("P2", lambda r: r["yesno"]["interruption"].update(answer="DA"), "MEDIUM"),
     ("P3", lambda r: r["yesno"]["committee_remarks"].update(answer="DA"), "MEDIUM"),
     ("P3", lambda r: r.update(remarks_text_present=True), "MEDIUM"),
-    ("P4", lambda r: r["times"].update(close_time="19:30"), "MEDIUM"),
     ("P4", lambda r: r["times"].update(completed_at="19 00"), "MEDIUM"),
     ("A1", lambda r: r["numbers"]["ballots_in_box"].update(value=836), "HIGH"),
     ("A2", lambda r: r["numbers"]["invalid"].update(value=25), "MEDIUM"),
@@ -391,6 +390,12 @@ def test_v8_silent_for_empty_outside_voted():
 def test_p4_completed_before_close(close, done, fires):
     f = rules(mutated(lambda r: r["times"].update(close_time=close, completed_at=done)))
     assert ("P4" in f) == fires
+
+
+@pytest.mark.parametrize("close", ["19:30", "00:59", "10:00"])
+def test_p4_does_not_assume_a_fixed_poll_closing_time(close):
+    f = rules(mutated(lambda r: r["times"].update(close_time=close, completed_at=None)))
+    assert "P4" not in f
 
 
 @pytest.mark.parametrize("text,expected", [

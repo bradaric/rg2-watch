@@ -32,7 +32,7 @@ RULE_INFO = {
     "P1": "The control sheet was not found or not signed (item 9 or 9.1 = NE)",
     "P2": "Voting was interrupted (item 7 = DA)",
     "P3": "The committee recorded remarks (item 14 = DA) or wrote text in item 15",
-    "P4": "Times do not add up: polls closed before 20:00, or the minutes were completed before closing",
+    "P4": "Times do not add up: the minutes were completed before the polls closed",
     "A1": "More ballots in the box than people who voted (10.2 > 10.1)",
     "A2": "Invalid plus valid ballots do not equal the ballots in the box (10.3 + 10.4 != 10.2)",
     "A3": "The list votes do not add up to the valid ballots (sum of lists != 10.4)",
@@ -220,8 +220,6 @@ def evaluate_report(report: dict, doc: Doc, cfg: Config) -> list[Finding]:
         add("P3", "MEDIUM", p3)
     close, done = _parse_time(times["close_time"]), _parse_time(times["completed_at"])
     p4 = []
-    if close is not None and close < 20 * 60:
-        p4.append(f"8 close_time {times['close_time']} before 20:00")
     if close is not None and done is not None and _AFTER_MIDNIGHT <= done < close:
         p4.append(f"completed_at {times['completed_at']} before close_time {times['close_time']}")
     if p4:
