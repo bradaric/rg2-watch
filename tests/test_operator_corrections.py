@@ -663,6 +663,13 @@ def test_expanded_form_puts_operator_correction_before_review_and_classification
     assert child.index("correctionBox(r") < child.index("reviewBox(r)") < child.index("classificationBox(r")
 
 
+def test_operator_correction_section_uses_secondary_surface_background():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert ".ocbox{" in html
+    assert ".ocbox{margin:var(--s2) 0;padding:var(--s2) var(--s3);background:var(--surface2);" in html
+
+
 def test_correction_dialog_sums_list_votes_and_reports_difference_from_valid():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     start = html.index("function ocVoteSummary(")
