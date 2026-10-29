@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+from types import SimpleNamespace
 
 import rg2watch.cli as cli
 from rg2watch.pipeline import PROMPT_VERSION
@@ -1162,6 +1163,24 @@ def test_start_web_falls_back_to_next_free_port(tmp_path):
 def test_start_web_none_when_all_busy(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "start_server", lambda *a: None)
     assert cli._start_web(tmp_path, tmp_path, 9000, Store(":memory:")) is None
+
+
+def test_start_web_shares_expected_rows_cache_between_correction_apis(tmp_path, monkeypatch):
+    caches = []
+
+    class CorrectionAPI:
+        def __init__(self, *args, expected_rows_cache=None, **kwargs):
+            caches.append(expected_rows_cache)
+
+    server = SimpleNamespace(server_port=9000)
+    monkeypatch.setattr(cli, "OperatorCorrections", CorrectionAPI)
+    monkeypatch.setattr(cli, "Type13Corrections", CorrectionAPI)
+    monkeypatch.setattr(cli, "_publication_api", lambda *args: None)
+    monkeypatch.setattr(cli, "start_server", lambda *args, **kwargs: server)
+
+    assert cli._start_web(tmp_path, tmp_path, 9000, Store(":memory:"), Config()) is server
+    assert caches[0] is not None
+    assert caches[1] is caches[0]
 
 
 def test_status_prints_page_url_only_while_running(tmp_path):

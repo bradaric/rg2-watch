@@ -94,7 +94,8 @@ class OperatorCorrections:
     def _expected_rows(self, source) -> list[int]:
         from .tally import scope_of
         scope = scope_of(self.store, self.cfg, source["parent"])[0]
-        key = (source["parent"], None if scope == "national" else source["municipality"])
+        revision = self.store.expected_rows_revision(source["parent"], self.model)
+        key = (source["parent"], None if scope == "national" else source["municipality"], revision)
         if self.expected_rows_cache is not None and key in self.expected_rows_cache:
             return list(self.expected_rows_cache[key])
         selected = self.store.selected_rg2_urls(source["parent"], self.model, PROMPT_VERSION)

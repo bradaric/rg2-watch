@@ -428,6 +428,20 @@ class Store:
                 "ORDER BY x.prompt_version IS ? DESC,x.id DESC LIMIT 1)",
                 (url, model, model, prompt_version)).fetchone()
 
+    def expected_rows_revision(self, parent: str, model: str) -> tuple[int, int, int]:
+        """Cheap election revision for safely caching the ballot row shape."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT "
+                "COALESCE((SELECT MAX(a.id) FROM analyses a JOIN documents d ON d.id=a.document_id "
+                f"WHERE d.parent=? AND d.doc_type IN ({_ANALYSED}) AND a.model=? "
+                "AND a.prompt_version LIKE 'v%' AND a.status='done' AND a.result_json IS NOT NULL),0),"
+                "COALESCE((SELECT MAX(id) FROM events WHERE parent=?),0),"
+                "COALESCE((SELECT MAX(o.id) FROM classification_overrides o JOIN documents d "
+                "ON d.id=o.document_id WHERE d.parent=?),0)",
+                (parent, model, parent, parent)).fetchone()
+        return tuple(row)
+
     def type13_source(self, url: str, model: str, prompt_version: str) -> sqlite3.Row | None:
         """Type-13 document plus its latest successful analysis for this model and prompt."""
         with self._lock:

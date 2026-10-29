@@ -405,6 +405,35 @@ def test_normal_correction_state_reloads_expected_rows_after_ballot_shape_change
     assert service.state(URL)["expected_rows"] == [1, 2, 3]
 
 
+def test_expected_rows_cache_reuses_scan_and_invalidates_after_analysis_change():
+    s = analysed_store()
+    calls = 0
+    original = s.browse_analyses
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    s.browse_analyses = counted
+    service = OperatorCorrections(
+        s, Config(model=MODEL), MODEL, expected_rows_cache={})
+
+    assert service.state(URL)["expected_rows"] == [1, 2]
+    assert service.state(URL)["expected_rows"] == [1, 2]
+    assert calls == 1
+
+    report = clean_report()
+    report["numbers"]["list_votes"].append({"row": 3, "field": {"value": 0}})
+    other = doc(BASE + "/extfile/three-row-cached-ballot.pdf", no="2")
+    add(s, other)
+    s.save_analysis(other.url, AnalysisResult(report, 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    assert service.state(URL)["expected_rows"] == [1, 2, 3]
+    assert calls == 2
+
+
 def test_editor_prefills_empty_list_vote_as_zero():
     report = clean_report()
     report["numbers"]["list_votes"][1]["field"].update(
