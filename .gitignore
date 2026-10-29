@@ -4,6 +4,7 @@ public-results/
 __pycache__/
 *.pyc
 .pytest_cache/
+.wrangler/
 rg2watch.toml
 .env
 .superpowers/
