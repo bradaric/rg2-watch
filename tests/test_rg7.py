@@ -535,7 +535,7 @@ def test_pipeline_analyses_rg7_with_its_own_prompt_version_and_rules(tmp_path):
 
 def test_pipeline_rg2_unchanged_and_other_types_not_analysed(tmp_path):
     e = Env(tmp_path, rg7_reply(NEGOTIN))
-    e.publish(pdoc("b.pdf", dt=8))  # RG-8 stays out
+    e.publish(pdoc("b.pdf", dt=7))  # legacy RG-7 type stays out of this pipeline
     assert e.drain() == 0
 
 

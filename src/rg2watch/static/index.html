@@ -1553,6 +1553,12 @@ function stationRoundInfo(round) {
 }
 const num = v => v == null ? "-" : nf.format(v);
 const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
+function decisionTargetText(x) {
+  if (!x || !x.target_round) return "";
+  const label = {original: "original voting", repeat: "repeat voting",
+    uncertain: "round uncertain"}[x.target_round] || x.target_round;
+  return " · target: " + label + (x.target_evidence ? " (" + x.target_evidence + ")" : "");
+}
 function documentStatusEl(r) {
   const box = mk("span");
   box.append(mk("span", r.state), mk("br"), mk("span", "analysis " + ({done: "complete", pending: "pending",
@@ -1569,11 +1575,15 @@ function documentStatusEl(r) {
     box.append(mk("br"), mk("span", "Поништено — РГ-9", "bad"));
     const href = rikHref(r.rec.annulled.rik);
     if (href) box.append(" ", link("РГ-9", href));
+    const target = decisionTargetText(r.rec.annulled);
+    if (target) box.append(target);
   }
   if (r.rec.undetermined) {
     box.append(mk("br"), mk("span", "Резултати се не могу утврдити — РГ-8", "bad"));
     const href = rikHref(r.rec.undetermined.rik);
     if (href) box.append(" ", link("РГ-8", href));
+    const target = decisionTargetText(r.rec.undetermined);
+    if (target) box.append(target);
   }
   for (const warning of r.rec.decision_warnings || []) {
     box.append(mk("br"), mk("span", warning.label, "warn"));

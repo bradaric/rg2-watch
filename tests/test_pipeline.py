@@ -500,9 +500,9 @@ def test_deferred_404_is_not_retried_after_removal_or_replacement(tmp_path):
     assert e.status(new.url) == ("done", 1)
 
 
-def test_non_rg2_not_analysed(tmp_path):
+def test_unhandled_document_type_not_analysed(tmp_path):
     e = Env(tmp_path, resp(clean_report()))
-    e.publish(doc("a.pdf", dt=9), doc("b.pdf", dt=7, no="2"))
+    e.publish(doc("a.pdf", dt=7))
     assert e.drain() == 0
     assert e.ai.calls == 0 and e.pdf_requests() == []
     assert e.status(doc("a.pdf").url) == ("skipped", 0)

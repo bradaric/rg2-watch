@@ -21,9 +21,10 @@ MAX_ANALYSIS_ATTEMPTS = 3
 BROWSE_CHUNK = 2000
 STATUS_RARE = (7, 8, 9, 13, 14, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)  # correction/RG-7/8/9 families, Primedba
 RG7_TYPES = (19, 20, 21, 22, 23, 24, 25, 26)  # RG-7-1..4 correction decisions (+ repeat vote)
+DECISION_TYPES = (8, 9, 27, 28)  # RG-8/RG-9 decisions, original and repeat-vote slots
 TYPE13_TYPES = (13,)
 _ANALYSED = ",".join(map(str, ANALYSED_TYPES))
-_QUEUED = ",".join(map(str, ANALYSED_TYPES + RG7_TYPES + TYPE13_TYPES))  # everything the analysis queue handles
+_QUEUED = ",".join(map(str, ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES))  # analysis queue types
 VERDICTS = ("ok", "escalate", "unsure")  # operator review of one document version (URL)
 NOTE_MAX = 500
 
@@ -346,6 +347,20 @@ class Store:
                 f"SELECT * FROM documents WHERE parent=? AND active=1 AND doc_type IN "
                 f"({','.join('?' * len(types))}) ORDER BY id", (parent, *types)).fetchall()
 
+    def decision_round_reports(self, parent: str, model: str,
+                               prompt_version: str) -> list[tuple[sqlite3.Row, dict | None]]:
+        """Active RG-8/RG-9 documents and their current round-classification report, if any."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT d.*,a.result_json decision_result_json FROM documents d "
+                "LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
+                "AND x.model=? AND x.prompt_version=? AND x.status='done' "
+                "AND x.result_json IS NOT NULL ORDER BY x.id DESC LIMIT 1) "
+                f"WHERE d.parent=? AND d.active=1 AND d.doc_type IN ({','.join(map(str, DECISION_TYPES))}) "
+                "ORDER BY d.id", (model, prompt_version, parent)).fetchall()
+        return [(row, json.loads(row["decision_result_json"]) if row["decision_result_json"] else None)
+                for row in rows]
+
     def active_type13(self, parent: str | None = None) -> list[sqlite3.Row]:
         with self._lock:
             return self._db.execute(
@@ -594,7 +609,7 @@ class Store:
                         "ON CONFLICT(url) DO UPDATE SET active=1",
                         (parent, d.municipality, d.station_no, d.station_name, d.station_key,
                          d.doc_type, d.label, d.url, d.uploaded_at, now,
-                          "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES + TYPE13_TYPES else "skipped"))
+                          "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES else "skipped"))
                 row = self._db.execute("SELECT id FROM documents WHERE url=?", (d.url,)).fetchone()
                 self._db.execute(
                     "INSERT INTO events(sweep_id, parent, kind, document_id, station_key, "
@@ -810,6 +825,22 @@ class Store:
             "('done', 'failed') AND analysis_next_at IS NULL AND EXISTS "
             "(SELECT 1 FROM analyses w WHERE w.document_id=documents.id AND w.prompt_version<>? AND "
             "(w.status='done' OR w.prompt_version NOT LIKE 't%')))) "
+            "AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.document_id=documents.id "
+            "AND a.status IN ('done', 'failed') AND a.prompt_version=?)" + where,
+            (parent, prompt_version, prompt_version, *extra)).rowcount
+
+    def requeue_decision_rounds(self, parent: str, municipalities: Collection[str] | None = None,
+                                prompt_version: str = "d1") -> int:
+        """Queue active RG-8/RG-9 decisions without this round-classification analysis."""
+        where, extra = _in_municipalities(municipalities)
+        return self._write(
+            "UPDATE documents SET analysis_status='new', analysis_attempts=0, analysis_next_at=NULL, "
+            "analysis_error=NULL WHERE parent=? AND active=1 "
+            f"AND doc_type IN ({','.join(map(str, DECISION_TYPES))}) "
+            "AND (analysis_status IS NULL OR analysis_status='skipped' OR (analysis_status IN "
+            "('done', 'failed') AND analysis_next_at IS NULL AND EXISTS "
+            "(SELECT 1 FROM analyses w WHERE w.document_id=documents.id AND w.prompt_version<>? AND "
+            "(w.status='done' OR w.prompt_version NOT LIKE 'd%')))) "
             "AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.document_id=documents.id "
             "AND a.status IN ('done', 'failed') AND a.prompt_version=?)" + where,
             (parent, prompt_version, prompt_version, *extra)).rowcount
