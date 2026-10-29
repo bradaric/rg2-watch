@@ -183,6 +183,7 @@ td .rv+.rv-older{margin-top:var(--s1)}
 button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 .rvmsg{color:var(--hi);font-weight:700}
 .ocbox{margin:var(--s2) 0;padding:var(--s2) var(--s3);background:var(--surface2);border:1px solid var(--line);border-radius:var(--r)}
+.t13box{margin:var(--s2) 0;padding:var(--s2) var(--s3);background:var(--surface);border:1px solid var(--line2);border-radius:var(--r)}.t13box .mut{margin-left:var(--s1)}.t13actions{display:flex;flex-wrap:wrap;gap:var(--s1);margin-top:var(--s2)}
 .ocstatus{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s2)}
 .ocopen{background:var(--panel);border:1.5px solid var(--accent);color:var(--accent);font-weight:700}.ocopen:hover{background:var(--accent-bg);border-color:var(--accent)}.ocopenicon{margin-right:6px}
 .ocpill{display:inline-block;padding:0 8px;border:1.5px solid var(--accent);border-radius:999px;color:var(--accent);font-size:11px;line-height:17px;font-weight:750;text-transform:uppercase}
@@ -921,8 +922,8 @@ function loadReviews() {
 const OC_FIELDS = [["registered", "Registered"], ["voted", "Voted"],
   ["ballots_in_box", "Ballots in box"], ["invalid", "Invalid"], ["valid", "Valid"],
   ["outside_voted", "Outside voted"], ["outside_confirmations", "Outside confirmations"]];
-let ocState = null, ocUrl = null, ocAutoReason = "";
-const ocDraftKey = url => "rg2watch:operator-correction:" + D.db + ":" + url;
+let ocState = null, ocUrl = null, ocTargetUrl = null, ocEndpoint = "correction", ocAutoReason = "";
+const ocDraftKey = url => "rg2watch:operator-correction:" + D.db + ":" + ocEndpoint + ":" + url;
 function ocFetch(path, options) {
   return fetch(path, {cache: "no-store", ...options}).then(res => res.json().catch(() => ({})).then(data => {
     if (!res.ok) throw new Error(data.error || "HTTP " + res.status);
@@ -936,6 +937,9 @@ function correctionBox(v, editable) {
     line.append(mk("span", v.oc.status, "ocpill " + v.oc.status));
     if (v.oc.reason) line.append(mk("span", v.oc.reason, "mut"));
     if (v.oc.at) line.append(mk("span", when(v.oc.at), "mut"));
+    if (v.oc.resolved_rules && v.oc.resolved_rules.length) {
+      line.append(mk("span", "resolved: " + v.oc.resolved_rules.join(", "), "good"));
+    }
   } else line.append(mk("span", "none", "mut"));
   if (editable && HTTP && v.ast === "done" && v.correctable) {
     const button = mk("button", v.oc ? "Open / revise" : "Verify / correct values"),
@@ -948,6 +952,10 @@ function correctionBox(v, editable) {
     line.append(button);
   }
   box.append(line);
+  if (v.resolved && v.resolved.length) {
+    const resolved = mk("div", "Resolved by correction: ", "sub good");
+    resolved.append(badges(v.resolved)); box.append(resolved);
+  }
   return box;
 }
 function reconciliationEl(rec) {
@@ -991,7 +999,7 @@ function ocStoredDraft(url) {
 }
 function ocStartingSnapshot(state) {
   const old = [...state.history].reverse().find(x => x.action === "correction");
-  return state.active_snapshot || (state.status === "suspended" && old ? old.snapshot : null) || state.snapshot;
+  return state.proposal || state.active_snapshot || (state.status === "suspended" && old ? old.snapshot : null) || state.snapshot;
 }
 function ocReadSnapshot() {
   const values = {};
@@ -1074,7 +1082,7 @@ function renderCorrectionEditor(state) {
   ocState = state;
   const body = $("ocbody"), draft = ocStoredDraft(ocUrl), start = draft && draft.snapshot || ocStartingSnapshot(state);
   const reasonValue = draft ? draft.reason || "" : "";
-  const meta = mk("p", "Exact document version: " + ocUrl, "ocmeta");
+  const meta = mk("p", state.type13_source ? "Type-13 source: " + state.type13_source + " · Target RG-2: " + ocTargetUrl : "Exact document version: " + ocUrl, "ocmeta");
   const status = mk("p", null, state.status === "suspended" ? "ocwarn" : "mut");
   status.textContent = state.status === "suspended"
     ? "Suspended: the analysis or РГ-7 source changed. Review every value and save a new revision to reconfirm."
@@ -1105,7 +1113,7 @@ function renderCorrectionEditor(state) {
   const actions = mk("div", null, "ocactions"), save = mk("button", "Verify / correct values", "ocsave");
   save.id = "ocsave"; save.type = "button"; save.onclick = () => submitCorrection("correction");
   const revoke = mk("button", "Revoke correction"); revoke.type = "button";
-  revoke.hidden = !["active", "suspended"].includes(state.status); revoke.onclick = () => submitCorrection("revoke");
+  revoke.hidden = !!state.type13_source || !["active", "suspended"].includes(state.status); revoke.onclick = () => submitCorrection("revoke");
   const msg = mk("span", "", "ocerror"); msg.id = "ocmsg";
   actions.append(save, revoke, msg);
   const history = document.createElement("details"); history.className = "ochistory";
@@ -1125,11 +1133,22 @@ function renderCorrectionEditor(state) {
   if (ocAutoReason) reason.setSelectionRange(0, 0);
 }
 function openCorrection(v) {
-  ocUrl = v.u;
+  ocUrl = ocTargetUrl = v.u; ocEndpoint = "correction";
   $("ocbody").replaceChildren(mk("p", "Loading correction data…", "mut"));
   $("ocdlg").showModal();
   ocFetch("correction?url=" + encodeURIComponent(v.u)).then(renderCorrectionEditor,
     e => $("ocbody").replaceChildren(mk("p", "Correction unavailable: " + e.message, "ocerror")));
+}
+function openType13Correction(x) {
+  ocUrl = x.u; ocTargetUrl = null; ocEndpoint = "type13";
+  $("ocbody").replaceChildren(mk("p", "Loading type-13 correction data…", "mut"));
+  $("ocdlg").showModal();
+  ocFetch("type13?url=" + encodeURIComponent(x.u)).then(state => {
+    if (!state.can_edit) throw new Error("No unambiguous active RG-2 target is available");
+    ocTargetUrl = state.target_url;
+    renderCorrectionEditor({...state.target_state, proposal: state.proposal,
+      source_token: state.source_token, type13_source: state.source_url});
+  }).catch(e => $("ocbody").replaceChildren(mk("p", "Correction unavailable: " + e.message, "ocerror")));
 }
 function updateCorrectionSummary(url, state) {
   for (const r of rows) for (const v of [r, ...r.v]) if (v.u === url) {
@@ -1184,17 +1203,19 @@ function waitForCorrectionData(url, state, attempt = 0) {
       if (attempt >= 60) console.error("refreshing corrected totals failed", e);
     });
 }
+function refreshType13Data() { dataBuilt = null; loadData(); }
 function submitCorrection(action) {
   const reason = $("ocreason").value, request = {url: ocUrl, action, reason, source_token: ocState.source_token};
   if (action === "correction") request.snapshot = ocReadSnapshot();
   for (const b of $("ocbody").querySelectorAll("button")) b.disabled = true;
   $("ocmsg").textContent = "Saving…"; $("ocmsg").className = "mut";
-  ocFetch("correction", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
+  ocFetch(ocEndpoint, {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
     body: JSON.stringify(request)}).then(state => {
       try { sessionStorage.removeItem(ocDraftKey(ocUrl)); } catch (_) {}
       updateCorrectionSummary(ocUrl, state);
       $("ocdlg").close();
-      waitForCorrectionData(ocUrl, state);
+      if (ocEndpoint === "type13") refreshType13Data();
+      else waitForCorrectionData(ocUrl, state);
     }, e => {
       for (const b of $("ocbody").querySelectorAll("button")) b.disabled = false;
       saveCorrectionDraft();
@@ -1202,6 +1223,44 @@ function submitCorrection(action) {
     });
 }
 $("occlose").onclick = () => $("ocdlg").close();
+
+function resolveType13(x, action) {
+  const label = {other_decision: "Mark as other correction", uncertain: "Mark uncertain",
+    revoke: "Revoke correction"}[action];
+  const reason = prompt(label + " — reason:");
+  if (!reason || !reason.trim()) return;
+  ocFetch("type13", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
+    body: JSON.stringify({url: x.u, action, reason, source_token: x.source_token})})
+    .then(() => { dataBuilt = null; loadData(); }, e => alert("Type-13 resolution was not saved: " + e.message));
+}
+
+function type13Box(x) {
+  const box = mk("div", null, "t13box"), line = mk("div");
+  line.append(mk("strong", "Исправка решења"), mk("span", x.classification, "ocpill " +
+    (x.resolution ? "active" : "none")), " ", linksOf(x));
+  if (x.evidence) line.append(mk("span", x.evidence, "mut"));
+  if (x.resolution) line.append(mk("span", "resolved: " + x.resolution, "mut"));
+  box.append(line);
+  if (HTTP) {
+    const actions = mk("div", null, "t13actions");
+    if (x.can_edit) {
+      const edit = mk("button", x.can_approve ? "Review correction" : "Enter manually");
+      edit.type = "button"; edit.onclick = () => openType13Correction(x); actions.append(edit);
+    }
+    if (x.resolution !== "rg2_correction") {
+      for (const [action, label] of [["other_decision", "Mark as other correction"], ["uncertain", "Mark uncertain"]]) {
+        const button = mk("button", label); button.type = "button";
+        button.onclick = () => resolveType13(x, action); actions.append(button);
+      }
+    }
+    if (x.resolution === "rg2_correction") {
+      const revoke = mk("button", "Revoke correction"); revoke.type = "button";
+      revoke.onclick = () => resolveType13(x, "revoke"); actions.append(revoke);
+    }
+    box.append(actions);
+  }
+  return box;
+}
 
 function escalatedCsv() {  // one line per escalated version, current or older
   const head = ["Municipality", "BM", "Station", "Document", "Version", "RIK link", "Findings", "Note", "Verdict time (RS)"];
@@ -1274,6 +1333,7 @@ function classificationBox(v, editable) {
 function child(r) {
   const box = mk("div");
   box.append(correctionBox(r, r.state !== "removed"), reviewBox(r), classificationBox(r, r.state !== "removed"));
+  for (const x of r.t13 || []) box.append(type13Box(x));
   for (const x of r.r7) {
     const d = mk("div", null, "sub");
     d.append(mk("strong", rg7Text(x)), " ", linksOf(x), x.f.length ? badges(x.f) : "");

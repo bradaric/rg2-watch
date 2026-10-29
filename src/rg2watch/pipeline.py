@@ -21,12 +21,13 @@ from .notify import Notifier
 from .render import RenderError, render_tiles
 from .rik_client import RikBlocked, RikClient, RikError, RikNotFound, RikUnavailable
 from .rules import decision_sort_key, evaluate_report, evaluate_rg7
-from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, RG7_TYPES, Store, _doc
+from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, RG7_TYPES, TYPE13_TYPES, Store, _doc
 
 log = logging.getLogger("rg2watch.pipeline")
 
 PROMPT_VERSION = "v10"
 RG7_PROMPT_VERSION = "r2"
+TYPE13_PROMPT_VERSION = "t1"
 # RG-7 types 19-22 correct a first-round RG-2 (type 6), 23-26 a repeat-vote one
 RG2_OF_RG7 = {**dict.fromkeys((19, 20, 21, 22), (6,)), **dict.fromkeys((23, 24, 25, 26), (10, 15, 16))}
 RETRY_STEP_S = 60
@@ -113,7 +114,8 @@ class AnalysisPipeline:
         """Queue added/replaced RG-2 documents (the store dedupes by URL) and wake the workers."""
         queued = False
         for ev in events:
-            if ev.kind in ("added", "replaced") and ev.doc.doc_type in (*ANALYSED_TYPES, *RG7_TYPES):
+            if ev.kind in ("added", "replaced") and ev.doc.doc_type in (
+                    *ANALYSED_TYPES, *RG7_TYPES, *TYPE13_TYPES):
                 queued |= self.store.queue_analysis(ev.doc.url)
         if queued:
             self._wake.set()
@@ -126,6 +128,10 @@ class AnalysisPipeline:
         n7 = self.store.requeue_rg7(self.parent, self.municipalities, RG7_PROMPT_VERSION)
         if n7:
             log.info("%d RG-7 decision(s) without an %s analysis queued", n7, RG7_PROMPT_VERSION)
+        n13 = self.store.requeue_type13(self.parent, self.municipalities, TYPE13_PROMPT_VERSION)
+        if n13:
+            log.info("%d type-13 correction(s) without a %s analysis queued", n13,
+                     TYPE13_PROMPT_VERSION)
         for doc in self.store.requeue_running(self.parent, self.municipalities):
             self._emit([Finding("X2", "LOW", doc, f"analysis failed after {MAX_ANALYSIS_ATTEMPTS} "
                                 "attempts: interrupted every time (crash or shutdown)")])
@@ -307,11 +313,14 @@ class AnalysisPipeline:
             return None
 
         rg7 = doc.doc_type in RG7_TYPES
-        if not rg7 and doc.doc_type not in ANALYSED_TYPES:  # an RG-7 never takes the RG-2 path
+        type13 = doc.doc_type in TYPE13_TYPES
+        if not rg7 and not type13 and doc.doc_type not in ANALYSED_TYPES:  # follow-ups never take the RG-2 path
             self._permanent(doc, "X1", f"unexpected document type {doc.doc_type}",
                             ValueError("not an analysable type"))
             return None
-        kind, version = ("rg7", RG7_PROMPT_VERSION) if rg7 else ("rg2", PROMPT_VERSION)
+        kind, version = (("rg7", RG7_PROMPT_VERSION) if rg7 else
+                         ("type13", TYPE13_PROMPT_VERSION) if type13 else
+                         ("rg2", PROMPT_VERSION))
         if self._stop.is_set():  # shutting down: do not start a billed call
             self.store.mark_analysis(doc.url, "new", refund=True)
             return None
@@ -367,13 +376,15 @@ class AnalysisPipeline:
                 rg2 = self.store.station_rg2_report(self.parent, doc.station_key, RG2_OF_RG7[doc.doc_type],
                                                     stored_model(self.cfg.model), PROMPT_VERSION)
                 found = evaluate_rg7(result.report, doc, self.cfg, rg2, self._prior_decisions(doc))
+            elif type13:
+                found = []
             else:
                 found = evaluate_report(result.report, doc, self.cfg)
         except Exception as exc:  # malformed report: retrying would bill again
             log.exception("rules failed for %s", doc.url)
             self._permanent(doc, "X1", f"analysis output could not be evaluated: {_short(exc)}", exc)
             return "api"
-        if not rg7:  # a failure here never touches the RG-2's own outcome
+        if not rg7 and not type13:  # a failure here never touches the RG-2's own outcome
             try:
                 found += self._rg7_rechecks(doc, result.report)
             except Exception:

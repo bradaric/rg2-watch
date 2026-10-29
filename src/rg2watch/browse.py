@@ -10,7 +10,7 @@ from pathlib import Path
 from .analyze import ARITHMETIC_PROMPT_VERSION, stored_model
 from .config import Config
 from .models import DOC_TYPES, Doc
-from .operator_corrections import OperatorCorrections
+from .operator_corrections import OperatorCorrections, Type13Corrections
 from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
 from .rules import (INFORMATIONAL_RULES, RULE_INFO, change_text, decision_label, decision_sort_key,
                     evaluate_report)
@@ -169,6 +169,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                 state = service.state(item["url"])
                 corrections[item["url"]] = {
                     k: state[k] for k in ("status", "reason", "at", "revision")}
+                if state["resolved_rules"]:
+                    corrections[item["url"]]["resolved_rules"] = state["resolved_rules"]
             except Exception:
                 log.warning("operator correction state of %s could not be read", item["url"], exc_info=True)
     r7: dict[tuple, list[dict]] = {}  # (election, station_key, RG-2 type) -> its RG-7 decisions
@@ -310,6 +312,43 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         row["rec"]["decision_notices"] = decision_notices.get(row["id"], [])
         row["rec"]["annulled"] = annulled.get(row["id"])
         row["rec"]["undetermined"] = undetermined.get(row["id"])
+        resolved_rules = set((row.get("oc") or {}).get("resolved_rules", []))
+        row["resolved"] = [finding for finding in row["f"] if finding[0] in resolved_rules]
+        row["f"] = [finding for finding in row["f"] if finding[0] not in resolved_rules]
+        row["sev"] = max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0)
+        row["rf"] = row["state"] != "removed" and any(
+            finding[0] not in INFORMATIONAL_RULES for finding in row["f"])
+        row["todo"] = row["rf"] and row["rv"] is None
+        row["t13"] = []
+    type13 = Type13Corrections(store, cfg, model, expected_rows_cache=expected_rows_cache)
+    rows_by_url = {row["u"]: row for row in rows}
+    rows_by_station: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        source_doc = docs_by_url.get(row["u"])
+        if source_doc is not None and source_doc["station_key"] is not None:
+            rows_by_station.setdefault((row["el"], source_doc["station_key"]), []).append(row)
+    for source in store.active_type13(parent):
+        try:
+            state = type13.state(source["url"])
+        except Exception:
+            log.warning("type-13 state of %s could not be read", source["url"], exc_info=True)
+            continue
+        target = rows_by_url.get(state["target_url"])
+        if target is None:
+            candidates = rows_by_station.get((source["parent"], source["station_key"]), [])
+            target = max(candidates, key=lambda row: (row["up"] or "", row["id"]), default=None)
+        if target is None:
+            continue
+        base = elections[source["parent"]].base_url if source["parent"] in elections else None
+        source_version = _version(source, {}, {}, cache_dir, base)
+        target["t13"].append({
+            "u": source["url"], "rik": _rik_link(source["url"], base),
+            "up": source["uploaded_at"], "pdf": source_version["pdf"],
+            "classification": state["classification"],
+            "evidence": state["evidence"], "confidence": state["confidence"],
+            "resolution": state["resolution"], "can_approve": state["can_approve"],
+            "can_edit": state["can_edit"], "source_token": state["source_token"],
+        })
     return {"db": store.name, "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
             "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally,
             "rules": RULE_INFO}

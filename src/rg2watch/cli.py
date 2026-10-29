@@ -29,7 +29,7 @@ from .models import Doc, Event, Finding
 from .names import MunicipalityError, resolve_municipalities
 from .notify import Notifier
 from .official_results import OfficialResultsClient, write_official_results
-from .operator_corrections import OperatorCorrections
+from .operator_corrections import OperatorCorrections, Type13Corrections
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from .public_results import write_public_results
 from .render import RenderError, render_tiles
@@ -331,8 +331,10 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
             store, page_dir / "index.html", cache_dir, cfg=cfg,
             interval=cfg.browse_interval_s, with_status=False))
         correction_api = OperatorCorrections(store, cfg, stored_model(cfg.model), on_change=refresh)
+        type13_api = Type13Corrections(store, cfg, stored_model(cfg.model), on_change=refresh)
     else:
         correction_api = None
+        type13_api = None
 
     def classification_api(url: str, action: str):
         row = store.add_classification_override(url, action)
@@ -342,7 +344,7 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
 
     for p in range(port, min(port + PORT_TRIES, 65536)):
         server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
-                               correction_api, classification_api)
+                               correction_api, classification_api, type13_api)
         if server is not None:
             if p != port:
                 log.warning("port %d busy, using %d", port, p)
