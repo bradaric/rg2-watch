@@ -7,3 +7,25 @@ def bind_repeat_round(at: datetime | None, starts: dict[int, datetime]) -> int |
         return None
     preceding = [(start, kind) for kind, start in starts.items() if start < at]
     return max(preceding)[1] if preceding else None
+
+
+RG7_FIRST_TYPES = (19, 20, 21, 22)
+RG7_REPEAT_TYPES = (23, 24, 25, 26)
+
+
+def rg7_group(doc_type: int, report: dict | None) -> str | None:
+    if doc_type in RG7_FIRST_TYPES:
+        return "original"
+    if doc_type in RG7_REPEAT_TYPES:
+        return "original" if report and report.get("target_round") == "original" else "repeat"
+    return None
+
+
+def rg7_applies(doc_type: int, report: dict | None, rg2_type: int,
+                at: datetime | None, repeat_starts: dict[int, datetime]) -> bool:
+    """Whether an RG-7 applies to an RG-2 round, allowing a visibly original decision
+    to override a mistaken repeat-vote RIK category."""
+    if rg7_group(doc_type, report) == "original":
+        return rg2_type == 6
+    return (doc_type in RG7_REPEAT_TYPES and rg2_type in (10, 15, 16)
+            and bind_repeat_round(at, repeat_starts) == rg2_type)

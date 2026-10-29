@@ -778,7 +778,7 @@ class Store:
                 "skipped": ast.get("skipped", 0), "findings": sev}
 
     def requeue_rg7(self, parent: str, municipalities: Collection[str] | None = None,
-                    prompt_version: str = "r2") -> int:
+                    prompt_version: str = "r3") -> int:
         """Queue active RG-7 decisions without a successful `prompt_version` analysis that are
         never analysed (NULL/skipped: recorded before RG-7 analysis existed or before analysis was
         enabled), or marked done/failed after a successful analysis with another prompt (an older RG-7

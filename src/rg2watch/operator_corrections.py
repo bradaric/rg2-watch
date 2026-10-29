@@ -7,7 +7,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, TYPE13_PROMPT_VERSION
-from .rounds import bind_repeat_round
+from .rounds import bind_repeat_round, rg7_applies
 from .rules import _list_zero, decision_sort_key, evaluate_report
 from .store import CorrectionRevisionConflict, _doc
 
@@ -158,16 +158,12 @@ class OperatorCorrections:
                 if at := uploaded(d["uploaded_at"]):
                     round_starts[d["doc_type"]] = min(round_starts.get(d["doc_type"], at), at)
 
-        def applies(d) -> bool:
-            if row["doc_type"] == 6:
-                return d["doc_type"] in (19, 20, 21, 22)
-            if d["doc_type"] not in (23, 24, 25, 26):
-                return False
-            at = uploaded(d["uploaded_at"])
-            return bind_repeat_round(at, round_starts) == row["doc_type"]
+        def applies(d, rep) -> bool:
+            return rg7_applies(d["doc_type"], rep, row["doc_type"],
+                               uploaded(d["uploaded_at"]), round_starts)
 
         for d, rep in rg7:
-            if not applies(d):
+            if not applies(d, rep):
                 continue
             source_rg7.append([d["id"], d["url"], rep])
             if rep is not None:

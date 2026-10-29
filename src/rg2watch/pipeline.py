@@ -21,12 +21,13 @@ from .notify import Notifier
 from .render import RenderError, render_tiles
 from .rik_client import RikBlocked, RikClient, RikError, RikNotFound, RikUnavailable
 from .rules import decision_sort_key, evaluate_report, evaluate_rg7
+from .rounds import rg7_group
 from .store import ANALYSED_TYPES, MAX_ANALYSIS_ATTEMPTS, RG7_TYPES, TYPE13_TYPES, Store, _doc
 
 log = logging.getLogger("rg2watch.pipeline")
 
 PROMPT_VERSION = "v10"
-RG7_PROMPT_VERSION = "r2"
+RG7_PROMPT_VERSION = "r3"
 TYPE13_PROMPT_VERSION = "t1"
 # RG-7 types 19-22 correct a first-round RG-2 (type 6), 23-26 a repeat-vote one
 RG2_OF_RG7 = {**dict.fromkeys((19, 20, 21, 22), (6,)), **dict.fromkeys((23, 24, 25, 26), (10, 15, 16))}
@@ -373,9 +374,12 @@ class AnalysisPipeline:
                 if gone:
                     log.warning("removed %d RG-2 finding(s) from RG-7 %s (analysed with the wrong prompt)",
                                 gone, doc.url)
-                rg2 = self.store.station_rg2_report(self.parent, doc.station_key, RG2_OF_RG7[doc.doc_type],
-                                                    stored_model(self.cfg.model), PROMPT_VERSION)
-                found = evaluate_rg7(result.report, doc, self.cfg, rg2, self._prior_decisions(doc))
+                target_types = ((6,) if rg7_group(doc.doc_type, result.report) == "original"
+                                else RG2_OF_RG7[doc.doc_type])
+                rg2 = self.store.station_rg2_report(self.parent, doc.station_key, target_types,
+                                                     stored_model(self.cfg.model), PROMPT_VERSION)
+                found = evaluate_rg7(result.report, doc, self.cfg, rg2,
+                                     self._prior_decisions(doc, result.report))
             elif type13:
                 found = []
             else:
@@ -490,19 +494,21 @@ class AnalysisPipeline:
             if r["doc_type"] in types]
         return sorted(rows, key=lambda x: decision_sort_key(x[0]["uploaded_at"], x[0]["id"], x[1]))
 
-    def _prior_decisions(self, doc: Doc) -> list[dict]:
+    def _prior_decisions(self, doc: Doc, report: dict) -> list[dict]:
         """Reports of the station's decisions that come before this RG-7 (same RG-2 group)."""
-        types = tuple(t for t in RG7_TYPES if RG2_OF_RG7[t] == RG2_OF_RG7[doc.doc_type])
-        reps = self._station_decisions(doc, types)
+        group = rg7_group(doc.doc_type, report)
+        reps = [(row, rep) for row, rep in self._station_decisions(doc, RG7_TYPES)
+                if rg7_group(row["doc_type"], rep) == group]
         i = next((i for i, (r, _) in enumerate(reps) if r["url"] == doc.url), len(reps))
         return [rep for _, rep in reps[:i]]
 
     def _rg7_rechecks(self, doc: Doc, rg2_report: dict) -> list[Finding]:
         """R2 for the station's RG-7 decisions analysed before this RG-2 was (the findings table
         keeps one R2 per decision, so a pair already flagged at RG-7 time is not alerted twice)."""
-        types = tuple(t for t in RG7_TYPES if doc.doc_type in RG2_OF_RG7[t])
+        group = "original" if doc.doc_type == 6 else "repeat"
         out: list[Finding] = []
-        reps = self._station_decisions(doc, types)
+        reps = [(row, rep) for row, rep in self._station_decisions(doc, RG7_TYPES)
+                if rg7_group(row["doc_type"], rep) == group]
         for i, (row, rep) in enumerate(reps):
             out += [f for f in evaluate_rg7(rep, _doc(row), self.cfg, rg2_report, [p for _, p in reps[:i]])
                     if f.rule == "R2"]

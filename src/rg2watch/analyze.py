@@ -161,6 +161,8 @@ RG7_FIELDS = ("registered", "voted", "ballots_in_box", "invalid", "valid", "list
 _RG7_FIELD = {"type": "string", "enum": list(RG7_FIELDS)}
 _RG7_WHAT = {"field": _RG7_FIELD, "row": _NULLABLE_INT, "label": {"type": "string"}, "item": {"type": "string"}}
 RG7_SCHEMA: dict = _obj({
+    "target_round": {"type": "string", "enum": ["original", "repeat", "uncertain"]},
+    "target_evidence": {"type": "string"},
     "decision_date": _NULLABLE_STR,
     "station_no": _NULLABLE_STR,
     "changes": {"type": "array", "items": _obj({**_RG7_WHAT, "old": _NULLABLE_INT, "new": _NULLABLE_INT})},
@@ -172,6 +174,8 @@ RG7_SCHEMA: dict = _obj({
 RG7_PROMPT = """You are reading a scanned Serbian typed commission decision (Решење о исправљању записника о раду бирачког одбора, form RG-7). It corrects numbers in a polling station's minutes (form RG-2). The images are its pages in order. Layouts vary.
 
 Report:
+- target_round: "original" when the decision corrects the original voting minutes, "repeat" when it corrects minutes from repeat voting (поновно гласање), or "uncertain" when the visible text does not establish which. A standard RG-7 with no repeat-voting wording is "original"; "repeat" requires visible repeat-voting wording. Classify from the document text, not from its RIK filename, listing category or form suffix.
+- target_evidence: one short phrase quoting or describing the visible wording that establishes the round, or why it is uncertain.
 - decision_date: the date of the decision as written (e.g. 14.10.2026), or null.
 - station_no: the polling station number (бирачко место), digits only, or null.
 - changes: one entry per corrected number: old (the number the decision says is wrong) and new (the number it says is right), and WHAT is corrected:
@@ -245,6 +249,9 @@ def _normalise_rg7(raw: dict) -> dict:
     out = {**raw, "changes": [], "table": [], "reason": _text(raw["reason"], 200),
            "decision_date": None if raw["decision_date"] is None else _text(raw["decision_date"], 40),
            "station_no": None if raw["station_no"] is None else _text(raw["station_no"], 20)}
+    if "target_round" in raw:
+        out["target_round"] = raw["target_round"]
+        out["target_evidence"] = _text(raw.get("target_evidence") or "", 300)
     for key, vals in (("changes", ("old", "new")), ("table", ("value",))):
         seen: set[str] = set()
         for e in raw[key]:

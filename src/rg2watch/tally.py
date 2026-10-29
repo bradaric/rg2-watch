@@ -14,7 +14,7 @@ from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from .rules import (INFORMATIONAL_RULES, RG7_FIELDS, _dash_zero, _list_zero, _ok, change_text,
                     decision_label, decision_sort_key, evaluate_report, repeats, rg2_value,
                     rg7_field, rg7_mismatch)
-from .rounds import bind_repeat_round
+from .rounds import bind_repeat_round, rg7_applies, rg7_group
 from .status import _rik_link
 from .station_locations import station_location, station_location_source
 from .store import Store, _doc
@@ -23,7 +23,6 @@ log = logging.getLogger("rg2watch.tally")
 COUNTED = ("registered", "voted", "ballots_in_box", "invalid", "valid", "outside_voted")
 ARITHMETIC = ("A1", "A2", "A3", "A4", "A5")
 RECONCILIATION = tuple(rule for rule in ARITHMETIC if rule not in INFORMATIONAL_RULES)
-RG7_FIRST_ROUND = (19, 20, 21, 22)  # decisions correcting a first-round RG-2
 RG2_ROUND_RANK = {6: 0, 10: 1, 15: 2, 16: 3}
 RG2_ROUND_NAME = {6: "original", 10: "repeat_i", 15: "repeat_ii", 16: "repeat_iii"}
 
@@ -469,15 +468,15 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION, analysed_only=False):
         station_key = row["station_key"]
         selected_type = selected_types.get(station_key)
-        if (row["doc_type"] in (23, 24, 25, 26) and selected_type in (10, 15, 16)
+        repeat_target = rg7_group(row["doc_type"], rep) == "repeat"
+        if (repeat_target and selected_type in (10, 15, 16)
                 and bound_repeat_type(row) is None):
             ambiguous_repeat_decisions.append(row)
-        if (row["doc_type"] in (23, 24, 25, 26) and selected_type in (10, 15, 16)
+        if (repeat_target and selected_type in (10, 15, 16)
                 and bound_repeat_type(row) is not None and bound_repeat_type(row) != selected_type):
             superseded_repeat_decisions.append(row)
-        applies = (row["doc_type"] in RG7_FIRST_ROUND and selected_type == 6) or (
-            row["doc_type"] in (23, 24, 25, 26) and selected_type in (10, 15, 16)
-            and bound_repeat_type(row) == selected_type)
+        applies = rg7_applies(row["doc_type"], rep, selected_type, uploaded(row),
+                              round_starts.get(station_key, {}))
         if applies and station_key is not None and rep is not None:
             corr.setdefault(row["station_key"], []).append(
                 ({"d": decision_label(row["uploaded_at"], rep), "rep": rep, "u": row["url"]},

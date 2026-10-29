@@ -11,10 +11,10 @@ from .analyze import ARITHMETIC_PROMPT_VERSION, stored_model
 from .config import Config
 from .models import DOC_TYPES, Doc
 from .operator_corrections import OperatorCorrections, Type13Corrections
-from .pipeline import PROMPT_VERSION, RG2_OF_RG7, RG7_PROMPT_VERSION
+from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from .rules import (INFORMATIONAL_RULES, RULE_INFO, change_text, decision_label, decision_sort_key,
                     evaluate_report)
-from .rounds import bind_repeat_round
+from .rounds import rg7_applies
 from .status import _rik_link, build_status, to_belgrade
 from .station_locations import station_coordinates, station_location
 from .store import Store, _doc
@@ -204,15 +204,15 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         base = elections[d["parent"]].base_url if d["parent"] in elections else None
         x = _version(d, {}, {}, cache_dir, base, corrections=corrections, analysed_at=analysed_at)
         x.update(d=decision_label(d["uploaded_at"], rep),
-                 ch=[change_text(c) for c in rep["changes"]] if rep else None,
-                 by=[m for m in readers.get(d["id"], []) if m != model],  # read by other models only
-                 f=sorted(r7_found.get(d["id"], []), key=lambda f: -SEV_RANK.get(f[1], 0)))
-        types = RG2_OF_RG7.get(d["doc_type"], ())
-        if d["doc_type"] in (23, 24, 25, 26):
-            at = uploaded(d["uploaded_at"])
-            starts = round_starts.get((d["parent"], d["station_key"]), {})
-            bound = bind_repeat_round(at, starts)
-            types = (bound,) if bound is not None else ()
+                  ch=[change_text(c) for c in rep["changes"]] if rep else None,
+                  by=[m for m in readers.get(d["id"], []) if m != model],  # read by other models only
+                  f=sorted(r7_found.get(d["id"], []), key=lambda f: -SEV_RANK.get(f[1], 0)),
+                  target_round=rep.get("target_round") if rep else None,
+                  target_evidence=rep.get("target_evidence", "") if rep else "")
+        at = uploaded(d["uploaded_at"])
+        starts = round_starts.get((d["parent"], d["station_key"]), {})
+        types = tuple(t for t in (6, 10, 15, 16)
+                      if rg7_applies(d["doc_type"], rep, t, at, starts))
         for t in types:
             r7.setdefault((d["parent"], d["station_key"], t), []).append(x)
     groups: dict[tuple, list] = {}

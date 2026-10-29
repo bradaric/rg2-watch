@@ -1283,8 +1283,13 @@ function download(name, text) {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+function rg7TargetText(x) {
+  const label = {original: "target: original voting", repeat: "target: repeat voting",
+    uncertain: "target round uncertain"}[x.target_round];
+  return label ? " · " + label + (x.target_evidence ? " (" + x.target_evidence + ")" : "") : "";
+}
 function rg7Text(x) {  // x.ch: read by the watch model; x.by: read by other models only
-  return "РГ-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : x.by.length ? "read by " + x.by.join(", ") + " (not the watch model)" : "not read yet");
+  return "РГ-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : x.by.length ? "read by " + x.by.join(", ") + " (not the watch model)" : "not read yet") + rg7TargetText(x);
 }
 function rg7Badges(r) {
   const td = document.createDocumentFragment();
