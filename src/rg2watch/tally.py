@@ -10,11 +10,11 @@ from .config import Config
 from .models import DOC_TYPES, Doc
 from .names import to_cyrillic
 from .operator_corrections import OperatorCorrections, apply_operator_snapshot
-from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
+from .pipeline import DECISION_PROMPT_VERSION, PROMPT_VERSION, RG7_PROMPT_VERSION
 from .rules import (INFORMATIONAL_RULES, RG7_FIELDS, _dash_zero, _list_zero, _ok, change_text,
                     decision_label, decision_sort_key, evaluate_report, repeats, rg2_value,
                     rg7_field, rg7_mismatch)
-from .rounds import bind_repeat_round
+from .rounds import bind_repeat_round, decision_applies, decision_group, rg7_applies, rg7_group
 from .status import _rik_link
 from .station_locations import station_location, station_location_source
 from .store import Store, _doc
@@ -23,7 +23,6 @@ log = logging.getLogger("rg2watch.tally")
 COUNTED = ("registered", "voted", "ballots_in_box", "invalid", "valid", "outside_voted")
 ARITHMETIC = ("A1", "A2", "A3", "A4", "A5")
 RECONCILIATION = tuple(rule for rule in ARITHMETIC if rule not in INFORMATIONAL_RULES)
-RG7_FIRST_ROUND = (19, 20, 21, 22)  # decisions correcting a first-round RG-2
 RG2_ROUND_RANK = {6: 0, 10: 1, 15: 2, 16: 3}
 RG2_ROUND_NAME = {6: "original", 10: "repeat_i", 15: "repeat_ii", 16: "repeat_iii"}
 
@@ -431,53 +430,57 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             starts = round_starts.setdefault(d["station_key"], {})
             starts[d["doc_type"]] = min(starts.get(d["doc_type"], at), at)
 
-    decision_docs = store.active_decisions(parent, (8, 9, 27, 28))
+    decision_reports = store.decision_round_reports(parent, model, DECISION_PROMPT_VERSION)
+    decision_docs = []
+    reports_by_decision = {}
+    for source, report in decision_reports:
+        decision = dict(source)
+        decision["target_round"] = report.get("target_round") if report else None
+        decision["target_evidence"] = report.get("target_evidence", "") if report else ""
+        decision_docs.append(decision)
+        reports_by_decision[decision["id"]] = report
 
     def bound_repeat_type(decision) -> int | None:
         at = uploaded(decision)
         starts = round_starts.get(decision["station_key"], {})
         return bind_repeat_round(at, starts)
 
-    def decision_for(station_key: str, selected_type: int, decision_type: int):
+    def decision_for(station_key: str, selected_type: int, decision_types: tuple[int, int]):
         candidates = [d for d in decision_docs if d["station_key"] == station_key
-                      and d["doc_type"] == decision_type]
-        if selected_type == 6:
-            return max(candidates, key=lambda d: (d["uploaded_at"] or "", d["id"]), default=None)
-        bound = [decision for decision in candidates
-                 if bound_repeat_type(decision) == selected_type]
-        return max(bound, key=lambda d: (d["uploaded_at"] or "", d["id"]), default=None)
+                      and d["doc_type"] in decision_types
+                      and decision_applies(d["doc_type"], reports_by_decision[d["id"]], selected_type,
+                                           uploaded(d), round_starts.get(station_key, {}))]
+        return max(candidates, key=lambda d: (d["uploaded_at"] or "", d["id"]), default=None)
 
-    annulled = {d["station_key"]: decision_for(d["station_key"], d["doc_type"],
-                                                9 if d["doc_type"] == 6 else 28)
+    annulled = {d["station_key"]: decision_for(d["station_key"], d["doc_type"], (9, 28))
                 for d in mains if d["station_key"] is not None}
     annulled = {k: v for k, v in annulled.items() if v is not None}
-    undetermined = {d["station_key"]: decision_for(d["station_key"], d["doc_type"],
-                                                    8 if d["doc_type"] == 6 else 27)
+    undetermined = {d["station_key"]: decision_for(d["station_key"], d["doc_type"], (8, 27))
                     for d in mains if d["station_key"] is not None}
     undetermined = {k: v for k, v in undetermined.items() if v is not None}
     corr: dict[str, list[dict]] = {}  # station_key -> RG-7 decisions in decision order
     selected_types = {d["station_key"]: d["doc_type"] for d in mains if d["station_key"] is not None}
     ambiguous_repeat_decisions = [d for d in decision_docs
-                                  if d["doc_type"] in (27, 28)
+                                  if decision_group(d["doc_type"], reports_by_decision[d["id"]]) == "repeat"
                                   and selected_types.get(d["station_key"]) in (10, 15, 16)
                                   and bound_repeat_type(d) is None]
     superseded_repeat_decisions = [d for d in decision_docs
-                                   if d["doc_type"] in (27, 28)
+                                   if decision_group(d["doc_type"], reports_by_decision[d["id"]]) == "repeat"
                                    and selected_types.get(d["station_key"]) in (10, 15, 16)
                                    and bound_repeat_type(d) is not None
                                    and bound_repeat_type(d) != selected_types[d["station_key"]]]
     for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION, analysed_only=False):
         station_key = row["station_key"]
         selected_type = selected_types.get(station_key)
-        if (row["doc_type"] in (23, 24, 25, 26) and selected_type in (10, 15, 16)
+        repeat_target = rg7_group(row["doc_type"], rep) == "repeat"
+        if (repeat_target and selected_type in (10, 15, 16)
                 and bound_repeat_type(row) is None):
             ambiguous_repeat_decisions.append(row)
-        if (row["doc_type"] in (23, 24, 25, 26) and selected_type in (10, 15, 16)
+        if (repeat_target and selected_type in (10, 15, 16)
                 and bound_repeat_type(row) is not None and bound_repeat_type(row) != selected_type):
             superseded_repeat_decisions.append(row)
-        applies = (row["doc_type"] in RG7_FIRST_ROUND and selected_type == 6) or (
-            row["doc_type"] in (23, 24, 25, 26) and selected_type in (10, 15, 16)
-            and bound_repeat_type(row) == selected_type)
+        applies = rg7_applies(row["doc_type"], rep, selected_type, uploaded(row),
+                              round_starts.get(station_key, {}))
         if applies and station_key is not None and rep is not None:
             corr.setdefault(row["station_key"], []).append(
                 ({"d": decision_label(row["uploaded_at"], rep), "rep": rep, "u": row["url"]},
@@ -596,12 +599,19 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         return info[key]
 
     notes = []
+
+    def decision_result(decision) -> dict | None:
+        if decision is None:
+            return None
+        out = {"rik": _rik_link(decision["url"], e.base_url if e else None)}
+        if decision.get("target_round"):
+            out.update(target_round=decision["target_round"],
+                       target_evidence=decision.get("target_evidence", ""))
+        return out
+
     for f in forms:
-        f["annulment"] = ({"rik": _rik_link(f["annulled"]["url"], e.base_url if e else None)}
-                            if f["annulled"] is not None else None)
-        f["undetermined_result"] = (
-            {"rik": _rik_link(f["undetermined"]["url"], e.base_url if e else None)}
-            if f["undetermined"] is not None else None)
+        f["annulment"] = decision_result(f["annulled"])
+        f["undetermined_result"] = decision_result(f["undetermined"])
         f["rows"] = rows_of[f["muni"]]
         dis, note = disagreements(f["ex"], f["others"], model)
         f["why"] = reasons(f["ex"], dis, f["rows"])

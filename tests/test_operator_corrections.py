@@ -405,6 +405,35 @@ def test_normal_correction_state_reloads_expected_rows_after_ballot_shape_change
     assert service.state(URL)["expected_rows"] == [1, 2, 3]
 
 
+def test_expected_rows_cache_reuses_scan_and_invalidates_after_analysis_change():
+    s = analysed_store()
+    calls = 0
+    original = s.browse_analyses
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    s.browse_analyses = counted
+    service = OperatorCorrections(
+        s, Config(model=MODEL), MODEL, expected_rows_cache={})
+
+    assert service.state(URL)["expected_rows"] == [1, 2]
+    assert service.state(URL)["expected_rows"] == [1, 2]
+    assert calls == 1
+
+    report = clean_report()
+    report["numbers"]["list_votes"].append({"row": 3, "field": {"value": 0}})
+    other = doc(BASE + "/extfile/three-row-cached-ballot.pdf", no="2")
+    add(s, other)
+    s.save_analysis(other.url, AnalysisResult(report, 0, 0, 0.0, MODEL, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    assert service.state(URL)["expected_rows"] == [1, 2, 3]
+    assert calls == 2
+
+
 def test_editor_prefills_empty_list_vote_as_zero():
     report = clean_report()
     report["numbers"]["list_votes"][1]["field"].update(
@@ -643,7 +672,7 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "applyCorrectionData(data, url)" in wait
     assert "applyData(data)" not in wait
     apply = html[html.index("function applyCorrectionData("):html.index("function waitForCorrectionData(")]
-    assert "row.data(fresh).draw(false)" in apply
+    assert "row.remove();" in apply and "table.row.add(fresh)" in apply
     assert "table.clear()" not in apply
     assert "v.oc.revision === state.revision" in html
     assert '$("ocdlg").close();' in success
@@ -654,6 +683,47 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "rec-ok" in html and "rec-fail" in html and "rec-unavailable" in html
     assert 'data: "rec", title: "Numbers"' in html and "r.rec.rules.includes(nc)" in html
     assert 'nc === "gap"' in html and '"Gap " + snum(rec.gap)' in html
+
+
+def test_correction_refresh_recreates_row_cells_built_by_created_cell():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    refresh = html[html.index("function correctionRowFromData("):html.index("function retryCorrectionData(")]
+    script = r'''
+const assert = require("assert");
+let dataCalls = 0, removes = 0, adds = 0, draws = 0, childShows = 0;
+const oldChild = () => ({show() { childShows++; }});
+oldChild.isShown = () => true;
+const oldRow = {
+  child: oldChild,
+  data() { dataCalls++; return this; },
+  draw() { draws++; return this; },
+  remove() { removes++; return this; },
+};
+const replacementChild = () => ({show() { childShows++; }});
+const replacement = {child: replacementChild};
+const table = {
+  row: {add(value) { adds++; assert.equal(value.id, 1); return replacement; }},
+  draw(hold) { assert.equal(hold, false); draws++; },
+};
+let rows = [{id: 1}], D = null, T = null;
+const prep = value => value;
+const rowOf = () => oldRow;
+const child = value => value;
+const renderTally = () => {};
+const els = {built: {textContent: ""}};
+const $ = id => els[id];
+const epoch = () => "now";
+''' + refresh + r'''
+const fresh = {id: 1, v: [], u: "u", rec: {}, marker: "fresh"};
+assert.equal(applyCorrectionData({rows: [fresh], tally: {}, built: "2026-10-29T00:00:00Z"}, "u"), true);
+assert.equal(dataCalls, 0, "row.data() clears cells whose display renderer is intentionally empty");
+assert.equal(removes, 1);
+assert.equal(adds, 1);
+assert.equal(draws, 1);
+assert.equal(childShows, 1, "an expanded row remains expanded");
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_expanded_form_puts_operator_correction_before_review_and_classification():

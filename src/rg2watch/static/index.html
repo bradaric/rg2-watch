@@ -86,7 +86,7 @@ input[type=search]{width:15em}
 #rulesbox summary,#colbox summary{cursor:pointer;min-height:30px;display:flex;align-items:center;padding:0 var(--s3);border:1px solid var(--line2);border-radius:var(--r);background:var(--panel);list-style:none;white-space:nowrap}
 #rulesbox summary::-webkit-details-marker,#colbox summary::-webkit-details-marker{display:none}
 #rulesbox summary::after,#colbox summary::after{content:"";margin-left:var(--s2);border:4px solid transparent;border-top-color:currentColor;border-bottom:0}
-#rulesbox[open] summary,#colbox[open] summary{border-color:var(--accent);background:var(--accent-bg)}
+#rulesbox[open] summary,#colbox[open] summary,#rulesbox:has(input:checked) summary{border-color:var(--accent);background:var(--accent-bg)}
 #rules,#cols{position:absolute;z-index:5;top:100%;left:0;margin-top:var(--s1);padding:var(--s2) var(--s3);background:var(--panel);border:1px solid var(--line2);border-radius:8px;max-height:18em;overflow:auto;display:grid;grid-template-columns:repeat(3,auto);gap:var(--s1) var(--s4);box-shadow:0 8px 24px rgba(0,0,0,.18)}
 #colbox #cols{left:auto;right:0}
 #legendbox{position:relative}
@@ -183,6 +183,7 @@ td .rv+.rv-older{margin-top:var(--s1)}
 button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 .rvmsg{color:var(--hi);font-weight:700}
 .ocbox{margin:var(--s2) 0;padding:var(--s2) var(--s3);background:var(--surface2);border:1px solid var(--line);border-radius:var(--r)}
+.t13box{margin:var(--s2) 0;padding:var(--s2) var(--s3);background:var(--surface);border:1px solid var(--line2);border-radius:var(--r)}.t13box .mut{margin-left:var(--s1)}.t13actions{display:flex;flex-wrap:wrap;gap:var(--s1);margin-top:var(--s2)}
 .ocstatus{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s2)}
 .ocopen{background:var(--panel);border:1.5px solid var(--accent);color:var(--accent);font-weight:700}.ocopen:hover{background:var(--accent-bg);border-color:var(--accent)}.ocopenicon{margin-right:6px}
 .ocpill{display:inline-block;padding:0 8px;border:1.5px solid var(--accent);border-radius:999px;color:var(--accent);font-size:11px;line-height:17px;font-weight:750;text-transform:uppercase}
@@ -399,6 +400,7 @@ stroke-width:2.5;
 <span id="presettitle" class="filtertitle">Common workflows</span>
 <button type="button" data-preset="review-filed">Review excluded as filed</button>
 <button type="button" data-preset="review-v13">Review V13</button>
+<label>Review batch <select id="reviewbatch"><option value="">Choose a batch…</option><option value="review-numbers">Altered numbers</option><option value="review-integrity">Signatures &amp; scan integrity</option><option value="review-procedure">Procedural findings</option><option value="review-stats">Statistical flags</option></select></label>
 <div id="presetutils"><label><input type="checkbox" id="auto" checked> auto-refresh</label><button id="clearfilters" type="button">Clear all filters</button></div>
 </div>
 <div id="filtergroups">
@@ -425,12 +427,12 @@ stroke-width:2.5;
 <label title="decisions read by the watch model only"><input type="checkbox" id="c7"> corrected by РГ-7</label>
 <label><input type="checkbox" id="dis"> models disagree</label>
 <label><input type="checkbox" id="loc"> has local copy</label>
-<details id="legendbox"><summary>rule codes</summary><dl id="legend"></dl></details>
 <button id="esccsv" type="button">Escalated CSV</button>
 <details id="colbox"><summary>columns</summary><div id="cols"></div></details>
 </div>
 </div>
 </div>
+<details id="legendbox" hidden><summary>rule codes</summary><dl id="legend"></dl></details>
 <div id="onlyid" class="warnbox" hidden><span id="onlytxt"></span> <button id="onlyclear">show all forms</button></div>
 <div id="wrap"><table id="forms" class="display" style="width:100%"></table></div>
 </div>
@@ -671,6 +673,10 @@ const FILTERS = ["q", "m", "e", "dt", "mod", "sev", "rv", "nc", "ri", "an", "ast
 const FILTER_PRESETS = {
   "review-filed": {rv: "todo", ri: "excluded-filed", ast: "done", an: "not"},
   "review-v13": {rv: "todo", ast: "done", rules: ["V13"]},
+  "review-numbers": {rv: "todo", ast: "done", rules: ["V1", "V12"]},
+  "review-integrity": {rv: "todo", ast: "done", rules: ["V3", "V4", "V5", "V6", "V7", "V9", "V13"]},
+  "review-procedure": {rv: "todo", ast: "done", rules: ["P1", "P2", "P3"]},
+  "review-stats": {rv: "todo", ast: "done", rules: ["A6", "A7", "A8", "A9"], nc: "ok", ri: "counted-both"},
 };
 function presetControls(name, scope) { return {...scope, ...FILTER_PRESETS[name]}; }
 
@@ -916,8 +922,8 @@ function loadReviews() {
 const OC_FIELDS = [["registered", "Registered"], ["voted", "Voted"],
   ["ballots_in_box", "Ballots in box"], ["invalid", "Invalid"], ["valid", "Valid"],
   ["outside_voted", "Outside voted"], ["outside_confirmations", "Outside confirmations"]];
-let ocState = null, ocUrl = null, ocAutoReason = "";
-const ocDraftKey = url => "rg2watch:operator-correction:" + D.db + ":" + url;
+let ocState = null, ocUrl = null, ocTargetUrl = null, ocEndpoint = "correction", ocAutoReason = "";
+const ocDraftKey = url => "rg2watch:operator-correction:" + D.db + ":" + ocEndpoint + ":" + url;
 function ocFetch(path, options) {
   return fetch(path, {cache: "no-store", ...options}).then(res => res.json().catch(() => ({})).then(data => {
     if (!res.ok) throw new Error(data.error || "HTTP " + res.status);
@@ -931,6 +937,9 @@ function correctionBox(v, editable) {
     line.append(mk("span", v.oc.status, "ocpill " + v.oc.status));
     if (v.oc.reason) line.append(mk("span", v.oc.reason, "mut"));
     if (v.oc.at) line.append(mk("span", when(v.oc.at), "mut"));
+    if (v.oc.resolved_rules && v.oc.resolved_rules.length) {
+      line.append(mk("span", "resolved: " + v.oc.resolved_rules.join(", "), "good"));
+    }
   } else line.append(mk("span", "none", "mut"));
   if (editable && HTTP && v.ast === "done" && v.correctable) {
     const button = mk("button", v.oc ? "Open / revise" : "Verify / correct values"),
@@ -943,6 +952,10 @@ function correctionBox(v, editable) {
     line.append(button);
   }
   box.append(line);
+  if (v.resolved && v.resolved.length) {
+    const resolved = mk("div", "Resolved by correction: ", "sub good");
+    resolved.append(badges(v.resolved)); box.append(resolved);
+  }
   return box;
 }
 function reconciliationEl(rec) {
@@ -986,7 +999,7 @@ function ocStoredDraft(url) {
 }
 function ocStartingSnapshot(state) {
   const old = [...state.history].reverse().find(x => x.action === "correction");
-  return state.active_snapshot || (state.status === "suspended" && old ? old.snapshot : null) || state.snapshot;
+  return state.proposal || state.active_snapshot || (state.status === "suspended" && old ? old.snapshot : null) || state.snapshot;
 }
 function ocReadSnapshot() {
   const values = {};
@@ -1069,7 +1082,7 @@ function renderCorrectionEditor(state) {
   ocState = state;
   const body = $("ocbody"), draft = ocStoredDraft(ocUrl), start = draft && draft.snapshot || ocStartingSnapshot(state);
   const reasonValue = draft ? draft.reason || "" : "";
-  const meta = mk("p", "Exact document version: " + ocUrl, "ocmeta");
+  const meta = mk("p", state.type13_source ? "Type-13 source: " + state.type13_source + " · Target RG-2: " + ocTargetUrl : "Exact document version: " + ocUrl, "ocmeta");
   const status = mk("p", null, state.status === "suspended" ? "ocwarn" : "mut");
   status.textContent = state.status === "suspended"
     ? "Suspended: the analysis or РГ-7 source changed. Review every value and save a new revision to reconfirm."
@@ -1100,7 +1113,7 @@ function renderCorrectionEditor(state) {
   const actions = mk("div", null, "ocactions"), save = mk("button", "Verify / correct values", "ocsave");
   save.id = "ocsave"; save.type = "button"; save.onclick = () => submitCorrection("correction");
   const revoke = mk("button", "Revoke correction"); revoke.type = "button";
-  revoke.hidden = !["active", "suspended"].includes(state.status); revoke.onclick = () => submitCorrection("revoke");
+  revoke.hidden = !!state.type13_source || !["active", "suspended"].includes(state.status); revoke.onclick = () => submitCorrection("revoke");
   const msg = mk("span", "", "ocerror"); msg.id = "ocmsg";
   actions.append(save, revoke, msg);
   const history = document.createElement("details"); history.className = "ochistory";
@@ -1120,11 +1133,22 @@ function renderCorrectionEditor(state) {
   if (ocAutoReason) reason.setSelectionRange(0, 0);
 }
 function openCorrection(v) {
-  ocUrl = v.u;
+  ocUrl = ocTargetUrl = v.u; ocEndpoint = "correction";
   $("ocbody").replaceChildren(mk("p", "Loading correction data…", "mut"));
   $("ocdlg").showModal();
   ocFetch("correction?url=" + encodeURIComponent(v.u)).then(renderCorrectionEditor,
     e => $("ocbody").replaceChildren(mk("p", "Correction unavailable: " + e.message, "ocerror")));
+}
+function openType13Correction(x) {
+  ocUrl = x.u; ocTargetUrl = null; ocEndpoint = "type13";
+  $("ocbody").replaceChildren(mk("p", "Loading type-13 correction data…", "mut"));
+  $("ocdlg").showModal();
+  ocFetch("type13?url=" + encodeURIComponent(x.u)).then(state => {
+    if (!state.can_edit) throw new Error("No unambiguous active RG-2 target is available");
+    ocTargetUrl = state.target_url;
+    renderCorrectionEditor({...state.target_state, proposal: state.proposal,
+      source_token: state.source_token, type13_source: state.source_url});
+  }).catch(e => $("ocbody").replaceChildren(mk("p", "Correction unavailable: " + e.message, "ocerror")));
 }
 function updateCorrectionSummary(url, state) {
   for (const r of rows) for (const v of [r, ...r.v]) if (v.u === url) {
@@ -1150,8 +1174,10 @@ function applyCorrectionData(data, url) {
   const fresh = prep(source), row = rowOf(fresh.id), shown = row && row.child.isShown();
   D = data; rows[index] = fresh; T = data.tally;
   if (row) {
-    row.data(fresh).draw(false);
-    if (shown) row.child(child(fresh)).show();
+    row.remove();
+    const replacement = table.row.add(fresh);
+    table.draw(false);
+    if (shown) replacement.child(child(fresh)).show();
   }
   renderTally();
   $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
@@ -1177,17 +1203,19 @@ function waitForCorrectionData(url, state, attempt = 0) {
       if (attempt >= 60) console.error("refreshing corrected totals failed", e);
     });
 }
+function refreshType13Data() { dataBuilt = null; loadData(); }
 function submitCorrection(action) {
   const reason = $("ocreason").value, request = {url: ocUrl, action, reason, source_token: ocState.source_token};
   if (action === "correction") request.snapshot = ocReadSnapshot();
   for (const b of $("ocbody").querySelectorAll("button")) b.disabled = true;
   $("ocmsg").textContent = "Saving…"; $("ocmsg").className = "mut";
-  ocFetch("correction", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
+  ocFetch(ocEndpoint, {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
     body: JSON.stringify(request)}).then(state => {
       try { sessionStorage.removeItem(ocDraftKey(ocUrl)); } catch (_) {}
       updateCorrectionSummary(ocUrl, state);
       $("ocdlg").close();
-      waitForCorrectionData(ocUrl, state);
+      if (ocEndpoint === "type13") refreshType13Data();
+      else waitForCorrectionData(ocUrl, state);
     }, e => {
       for (const b of $("ocbody").querySelectorAll("button")) b.disabled = false;
       saveCorrectionDraft();
@@ -1195,6 +1223,44 @@ function submitCorrection(action) {
     });
 }
 $("occlose").onclick = () => $("ocdlg").close();
+
+function resolveType13(x, action) {
+  const label = {other_decision: "Mark as other correction", uncertain: "Mark uncertain",
+    revoke: "Revoke correction"}[action];
+  const reason = prompt(label + " — reason:");
+  if (!reason || !reason.trim()) return;
+  ocFetch("type13", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
+    body: JSON.stringify({url: x.u, action, reason, source_token: x.source_token})})
+    .then(() => { dataBuilt = null; loadData(); }, e => alert("Type-13 resolution was not saved: " + e.message));
+}
+
+function type13Box(x) {
+  const box = mk("div", null, "t13box"), line = mk("div");
+  line.append(mk("strong", "Исправка решења"), mk("span", x.classification, "ocpill " +
+    (x.resolution ? "active" : "none")), " ", linksOf(x));
+  if (x.evidence) line.append(mk("span", x.evidence, "mut"));
+  if (x.resolution) line.append(mk("span", "resolved: " + x.resolution, "mut"));
+  box.append(line);
+  if (HTTP) {
+    const actions = mk("div", null, "t13actions");
+    if (x.can_edit) {
+      const edit = mk("button", x.can_approve ? "Review correction" : "Enter manually");
+      edit.type = "button"; edit.onclick = () => openType13Correction(x); actions.append(edit);
+    }
+    if (x.resolution !== "rg2_correction") {
+      for (const [action, label] of [["other_decision", "Mark as other correction"], ["uncertain", "Mark uncertain"]]) {
+        const button = mk("button", label); button.type = "button";
+        button.onclick = () => resolveType13(x, action); actions.append(button);
+      }
+    }
+    if (x.resolution === "rg2_correction") {
+      const revoke = mk("button", "Revoke correction"); revoke.type = "button";
+      revoke.onclick = () => resolveType13(x, "revoke"); actions.append(revoke);
+    }
+    box.append(actions);
+  }
+  return box;
+}
 
 function escalatedCsv() {  // one line per escalated version, current or older
   const head = ["Municipality", "BM", "Station", "Document", "Version", "RIK link", "Findings", "Note", "Verdict time (RS)"];
@@ -1217,8 +1283,13 @@ function download(name, text) {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+function rg7TargetText(x) {
+  const label = {original: "target: original voting", repeat: "target: repeat voting",
+    uncertain: "target round uncertain"}[x.target_round];
+  return label ? " · " + label + (x.target_evidence ? " (" + x.target_evidence + ")" : "") : "";
+}
 function rg7Text(x) {  // x.ch: read by the watch model; x.by: read by other models only
-  return "РГ-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : x.by.length ? "read by " + x.by.join(", ") + " (not the watch model)" : "not read yet");
+  return "РГ-7 " + x.d + ": " + (x.ch ? x.ch.join(", ") : x.by.length ? "read by " + x.by.join(", ") + " (not the watch model)" : "not read yet") + rg7TargetText(x);
 }
 function rg7Badges(r) {
   const td = document.createDocumentFragment();
@@ -1229,6 +1300,22 @@ function rg7Badges(r) {
     td.append(d);
   }
   return td;
+}
+function type13Label(x) {
+  return ({rg2_correction: "T13 approved", other_decision: "T13 other",
+    uncertain: "T13 uncertain"})[x.resolution] || "T13 review";
+}
+function type13Badges(r) {
+  const out = document.createDocumentFragment();
+  for (const x of r.t13 || []) {
+    const label = type13Label(x), state = x.resolution === "other_decision" ? "revoked" :
+      x.resolution === "uncertain" || !x.resolution ? "suspended" : "";
+    const line = mk("div", null, "f t13"), badge = mk("span", label, "ocpill " + state);
+    badge.title = x.evidence || label;
+    line.append(badge);
+    out.append(line);
+  }
+  return out;
 }
 function classificationLabel(c) {
   return {quarantined_rg7: "quarantined: mislabeled РГ-7",
@@ -1267,6 +1354,7 @@ function classificationBox(v, editable) {
 function child(r) {
   const box = mk("div");
   box.append(correctionBox(r, r.state !== "removed"), reviewBox(r), classificationBox(r, r.state !== "removed"));
+  for (const x of r.t13 || []) box.append(type13Box(x));
   for (const x of r.r7) {
     const d = mk("div", null, "sub");
     d.append(mk("strong", rg7Text(x)), " ", linksOf(x), x.f.length ? badges(x.f) : "");
@@ -1315,6 +1403,7 @@ function prep(r) {
     ...x.ops.map(o => o.m), ...x.ars.map(a => a.m + " (arithmetic)")]));
   r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models,
     ...r.r7.flatMap(x => x.ch || []), r.rec.status, ...r.rec.rules, ...r.rec.details,
+    ...r.t13.flatMap(x => [type13Label(x), x.evidence || ""]),
     ...(r.rec.annulled ? ["поништено rg-9"] : []),
     ...(r.rec.undetermined ? ["резултати се не могу утврдити rg-8"] : []),
     ...all.flatMap(v => v.oc ? [v.oc.status, v.oc.reason || ""] : [])].join("\n").toLowerCase();
@@ -1356,7 +1445,7 @@ function initTable() {
   table = new DataTable("#forms", {
     data: rows, deferRender: true, pageLength: 100, lengthMenu: [50, 100, 250, 500],
     order: [[6, "desc"], [4, "desc"]], stateSave: true, stateDuration: 0,
-    layout: {topStart: "pageLength", topEnd: null, bottomStart: "info", bottomEnd: "paging"},
+    layout: {topStart: "pageLength", topEnd: () => { const legend = $("legendbox"); legend.hidden = false; return legend; }, bottomStart: "info", bottomEnd: "paging"},
     stateSaveParams: (s, d) => { d.rg = readCtl(); d.rgColumns = 3; },
     stateLoadParams: (s, d) => {
       if (d.rgColumns !== 3) delete d.columns;  // reset once: Result inclusion added; Models hidden
@@ -1374,7 +1463,7 @@ function initTable() {
       {data: "_st", title: "Status", className: "nw", render: {_: d => d, display: () => ""},
        createdCell: (td, d, r) => td.append(documentStatusEl(r))},
       {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
-       createdCell: (td, d, r) => { td.append(badges(r.f), rg7Badges(r)); if (r._note) td.append(mk("span", r._note, "note")); }},
+       createdCell: (td, d, r) => { td.append(badges(r.f), rg7Badges(r), type13Badges(r)); if (r._note) td.append(mk("span", r._note, "note")); }},
       {data: "rec", title: "Numbers", className: "nw", render: {
         _: d => d.status + " " + d.rules.join(" ") + " " + d.gap, display: () => "", sort: d => Math.abs(d.gap)},
        createdCell: (td, d) => td.append(reconciliationEl(d))},
@@ -1464,6 +1553,12 @@ function stationRoundInfo(round) {
 }
 const num = v => v == null ? "-" : nf.format(v);
 const pc = x => x == null ? "-" : (x * 100).toFixed(1) + "%";
+function decisionTargetText(x) {
+  if (!x || !x.target_round) return "";
+  const label = {original: "original voting", repeat: "repeat voting",
+    uncertain: "round uncertain"}[x.target_round] || x.target_round;
+  return " · target: " + label + (x.target_evidence ? " (" + x.target_evidence + ")" : "");
+}
 function documentStatusEl(r) {
   const box = mk("span");
   box.append(mk("span", r.state), mk("br"), mk("span", "analysis " + ({done: "complete", pending: "pending",
@@ -1480,11 +1575,15 @@ function documentStatusEl(r) {
     box.append(mk("br"), mk("span", "Поништено — РГ-9", "bad"));
     const href = rikHref(r.rec.annulled.rik);
     if (href) box.append(" ", link("РГ-9", href));
+    const target = decisionTargetText(r.rec.annulled);
+    if (target) box.append(target);
   }
   if (r.rec.undetermined) {
     box.append(mk("br"), mk("span", "Резултати се не могу утврдити — РГ-8", "bad"));
     const href = rikHref(r.rec.undetermined.rik);
     if (href) box.append(" ", link("РГ-8", href));
+    const target = decisionTargetText(r.rec.undetermined);
+    if (target) box.append(target);
   }
   for (const warning of r.rec.decision_warnings || []) {
     box.append(mk("br"), mk("span", warning.label, "warn"));
@@ -2462,6 +2561,13 @@ $("rules").addEventListener("input", () => { rulesSummary(); redraw(); });
 for (const button of document.querySelectorAll("[data-preset]")) button.addEventListener("click", () => {
   const name = button.dataset.preset;
   setCtl(presetControls(name, {e: sel("e"), m: sel("m"), auto: $("auto").checked}));
+  redraw();
+});
+$("reviewbatch").addEventListener("change", () => {
+  const name = $("reviewbatch").value;
+  if (!name) return;
+  setCtl(presetControls(name, {e: sel("e"), m: sel("m"), auto: $("auto").checked}));
+  $("reviewbatch").value = ""; // action menu, not another persistent filter
   redraw();
 });
 $("clearfilters").addEventListener("click", () => {

@@ -6,10 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from rg2watch.analyze import RG7_SCHEMA, AnalysisResult, _normalise_rg7, analyze_document
-from rg2watch.browse import build_data, build_page
+from rg2watch.browse import STATIC, build_data, build_page
 from rg2watch.config import Config
 from rg2watch.models import Finding
 from rg2watch.models import Event
+from rg2watch.operator_corrections import OperatorCorrections
 from rg2watch.pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from rg2watch.rules import RULE_INFO, evaluate_rg7
 from rg2watch.store import Store
@@ -24,7 +25,8 @@ M = "claude-sonnet-5-5"
 
 
 def rg7(changes=(), table=(), conf="high", date=None, station="37"):
-    return {"decision_date": date, "station_no": station, "reason": "arithmetic error", "confidence": conf,
+    return {"target_round": "uncertain", "target_evidence": "round wording is unclear",
+            "decision_date": date, "station_no": station, "reason": "arithmetic error", "confidence": conf,
             "changes": [{"item": i, "old": o, "new": n} for i, o, n in changes],
             "table": [{"item": i, "value": v} for i, v in table]}
 
@@ -48,8 +50,10 @@ def test_schema_small_flat_strict_and_nameless():
     from anthropic.lib._parse._transform import transform_schema
 
     transform_schema(RG7_SCHEMA)
-    assert len(json.dumps(RG7_SCHEMA)) < 1500
+    assert len(json.dumps(RG7_SCHEMA)) < 1700
     assert "name" not in json.dumps(RG7_SCHEMA).replace("station_no", "")
+    assert RG7_SCHEMA["properties"]["target_round"]["enum"] == ["original", "repeat", "uncertain"]
+    assert "target_evidence" in RG7_SCHEMA["properties"]
 
     def walk(n):
         if isinstance(n, dict):
@@ -91,6 +95,16 @@ def test_normalise_r2_maps_by_field_meaning_not_item_number():
     assert n["table"] == [{"item": "voted", "printed": "11.1", "value": 73}]
 
 
+def test_normalise_r3_records_which_voting_round_the_decision_corrects():
+    n = _normalise_rg7(rg7() | {
+        "target_round": "original",
+        "target_evidence": "The decision names the 26 October polling-station minutes.",
+    })
+
+    assert n["target_round"] == "original"
+    assert n["target_evidence"] == "The decision names the 26 October polling-station minutes."
+
+
 def test_2026_numbering_voted_11_1_is_a_high_applied_result_change():
     from rg2watch.rules import RG7_FIELDS as F
     assert "voted" in F
@@ -123,6 +137,7 @@ def test_analyze_document_rg7_kind_uses_its_schema_and_prompt():
     res = analyze_document([SimpleNamespace(name="p1", jpeg=b"x")], client, Config(fallbacks=False), "rg7")
     assert seen["output_config"]["format"]["schema"] == RG7_SCHEMA
     assert "RG-7" in seen["messages"][0]["content"][-1]["text"]
+    assert "standard RG-7 with no repeat-voting wording" in seen["messages"][0]["content"][-1]["text"]
     assert res.report["changes"][0]["item"] == "list:1"
 
 
@@ -208,6 +223,47 @@ def test_tally_applies_corrections_and_rechecks_arithmetic():
     assert o["corrected"] == 1
 
 
+def test_repeat_slot_rg7_classified_original_applies_to_original_rg2():
+    s = bstore()
+    target = bdoc("/e/rg2-rakovica-5.pdf", no="5", muni="Градска општина Раковица")
+    add(s, target)
+    report = clean_report()
+    report["numbers"].update(voted=nf(800), ballots_in_box=nf(800), invalid=nf(20),
+                             valid=nf(780), list_votes=[{"row": 1, "field": nf(780)}])
+    put(s, target, report)
+    correction = d7("5", dt=24, url="/e/PA-5-RG-7-2.pdf",
+                    up="2026-10-26T03:26:00Z", muni="Градска општина Раковица")
+    add(s, correction)
+    decision = rg7([("10.3", 20, 19), ("10.4", 780, 781), ("list:1", 780, 781)]) | {
+        "target_round": "original",
+        "target_evidence": "The decision corrects the original polling-station minutes.",
+    }
+    put(s, correction, decision, version=RG7_PROMPT_VERSION)
+
+    result = tally(s)
+
+    assert result["overall"]["all"]["invalid"] == 19
+    assert result["overall"]["all"]["valid"] == 781
+    assert result["corrected"][0]["rg7"][0]["u"] == correction.url
+
+
+def test_operator_snapshot_includes_repeat_slot_rg7_classified_original():
+    s = bstore()
+    target = bdoc("/e/original-5.pdf", no="5", muni="Градска општина Раковица")
+    add(s, target)
+    put(s, target, clean_report())
+    correction = d7("5", dt=24, url="/e/misfiled-rg7.pdf",
+                    up="2026-10-26T03:26:00Z", muni="Градска општина Раковица")
+    add(s, correction)
+    put(s, correction, rg7([("10.4", 780, 781)]) | {
+        "target_round": "original", "target_evidence": "Original voting minutes."},
+        version=RG7_PROMPT_VERSION)
+
+    state = OperatorCorrections(s, Config(model=M), M).state(target.url)
+
+    assert state["snapshot"]["valid"] == 781
+
+
 def test_tally_latest_decision_wins_and_table_is_final():
     s = bstore()
     station(s, clean_report(), [
@@ -281,6 +337,25 @@ def test_ambiguous_repeat_rg7_is_unapplied_and_reported():
     assert result["decision_warnings"][0]["rik"].endswith("ambiguous-rg7.pdf")
 
 
+def test_original_classification_prevents_false_repeat_round_warning():
+    s = bstore()
+    original = bdoc("/e/original.pdf", no="1", up="2026-10-20T08:00:00Z")
+    add(s, original)
+    put(s, original, clean_report())
+    decision = d7("1", dt=24, url="/e/misfiled-original.pdf", up="2026-10-20T09:00:00Z")
+    add(s, decision)
+    put(s, decision, rg7([("3", 1000, 900)]) | {
+        "target_round": "original", "target_evidence": "Original voting minutes."},
+        version=RG7_PROMPT_VERSION)
+    repeat = bdoc("/e/repeat.pdf", no="1", dt=10, up="2026-10-20T10:00:00Z")
+    add(s, repeat)
+    put(s, repeat, clean_report())
+
+    result = tally(s)
+
+    assert result["decision_warnings"] == []
+
+
 def test_page_attaches_repeat_rg7_only_to_its_bound_round(tmp_path):
     s = bstore()
     repeat_i = bdoc("/e/repeat-I.pdf", no="1", dt=10, up="2026-10-20T10:00:00Z")
@@ -298,6 +373,34 @@ def test_page_attaches_repeat_rg7_only_to_its_bound_round(tmp_path):
 
     assert [x["u"] for x in by_type[10]["r7"]] == [decision.url]
     assert by_type[15]["r7"] == []
+
+
+def test_page_attaches_repeat_slot_rg7_classified_original_to_original_row(tmp_path):
+    s = bstore()
+    target = bdoc("/e/original.pdf", no="5", muni="Градска општина Раковица")
+    add(s, target)
+    put(s, target, clean_report())
+    decision = d7("5", dt=24, url="/e/PA-5-RG-7-2.pdf",
+                  up="2026-10-26T03:26:00Z", muni="Градска општина Раковица")
+    add(s, decision)
+    put(s, decision, rg7([("10.4", 780, 781)]) | {
+        "target_round": "original", "target_evidence": "Corrects the original voting minutes."},
+        version=RG7_PROMPT_VERSION)
+
+    [row] = build_data(s, tmp_path, parent=BP, cfg=Config(model=M))["rows"]
+
+    assert [x["u"] for x in row["r7"]] == [decision.url]
+    assert row["r7"][0]["target_round"] == "original"
+    assert row["r7"][0]["target_evidence"] == "Corrects the original voting minutes."
+
+
+def test_page_explains_rg7_round_classification_in_expanded_details():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "function rg7TargetText(" in html
+    assert 'target: original voting' in html
+    assert 'target: repeat voting' in html
+    assert "rg7TargetText(x)" in html
 
 
 def test_page_treats_decision_equal_to_later_round_start_as_ambiguous(tmp_path):
@@ -426,13 +529,13 @@ def test_pipeline_analyses_rg7_with_its_own_prompt_version_and_rules(tmp_path):
     e.publish(d)
     assert e.drain() == 1
     assert e.rules() == ["R1"] and e.status(d.url) == ("done", 1)
-    assert e.store._db.execute("SELECT prompt_version FROM analyses").fetchone()[0] == RG7_PROMPT_VERSION == "r2"
+    assert e.store._db.execute("SELECT prompt_version FROM analyses").fetchone()[0] == RG7_PROMPT_VERSION == "r3"
     assert e.store.total_spend() > 0
 
 
 def test_pipeline_rg2_unchanged_and_other_types_not_analysed(tmp_path):
     e = Env(tmp_path, rg7_reply(NEGOTIN))
-    e.publish(pdoc("b.pdf", dt=8))  # RG-8 stays out
+    e.publish(pdoc("b.pdf", dt=7))  # legacy RG-7 type stays out of this pipeline
     assert e.drain() == 0
 
 
@@ -498,7 +601,7 @@ def test_cli_analyze_doc_type_rg7_prints_changes(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "changes: ballots_in_box (item 10.2) 180->178; valid (item 10.4) 177->175; list:1 146->144" in out and "[HIGH] R1" in out
     s = Store(tmp_path / "d.sqlite")
-    assert s._db.execute("SELECT prompt_version FROM analyses").fetchone()[0] == "r2"
+    assert s._db.execute("SELECT prompt_version FROM analyses").fetchone()[0] == "r3"
     s.close()
 
 
@@ -630,6 +733,21 @@ def test_pipeline_prior_decision_feeds_r2(tmp_path):
     e.ai.reply = rg7_reply(rg7([("10.2", 800, 780)], date="05.10.2026"))  # contradicts the previous new 790
     e.publish(pdoc("b.pdf", dt=21))
     e.drain()
+    assert e.rules() == ["R1", "R1", "R2"]
+
+
+def test_pipeline_groups_repeat_slot_decision_classified_original_with_regular_rg7(tmp_path):
+    first = rg7([("10.2", 800, 790)], date="01.10.2026") | {
+        "target_round": "original", "target_evidence": "Original voting minutes."}
+    e = Env(tmp_path, rg7_reply(first))
+    e.publish(pdoc("a.pdf", dt=20))
+    e.drain()
+    misfiled = rg7([("10.2", 800, 780)], date="05.10.2026") | {
+        "target_round": "original", "target_evidence": "Original voting minutes."}
+    e.ai.reply = rg7_reply(misfiled)
+    e.publish(pdoc("b.pdf", dt=24))
+    e.drain()
+
     assert e.rules() == ["R1", "R1", "R2"]
 
 

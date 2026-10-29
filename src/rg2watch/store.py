@@ -19,10 +19,12 @@ if TYPE_CHECKING:
 ANALYSED_TYPES = (6, 10, 15, 16)  # RG-2 and repeat-vote RG-2
 MAX_ANALYSIS_ATTEMPTS = 3
 BROWSE_CHUNK = 2000
-STATUS_RARE = (7, 8, 9, 14, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)  # RG-7/8/9 families, Primedba
+STATUS_RARE = (7, 8, 9, 13, 14, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)  # correction/RG-7/8/9 families, Primedba
 RG7_TYPES = (19, 20, 21, 22, 23, 24, 25, 26)  # RG-7-1..4 correction decisions (+ repeat vote)
+DECISION_TYPES = (8, 9, 27, 28)  # RG-8/RG-9 decisions, original and repeat-vote slots
+TYPE13_TYPES = (13,)
 _ANALYSED = ",".join(map(str, ANALYSED_TYPES))
-_QUEUED = ",".join(map(str, ANALYSED_TYPES + RG7_TYPES))  # everything the analysis queue handles
+_QUEUED = ",".join(map(str, ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES))  # analysis queue types
 VERDICTS = ("ok", "escalate", "unsure")  # operator review of one document version (URL)
 NOTE_MAX = 500
 
@@ -37,6 +39,7 @@ CREATE INDEX IF NOT EXISTS events_parent_kind ON events(parent, kind);
 CREATE INDEX IF NOT EXISTS reviews_url ON reviews(url, id);
 CREATE INDEX IF NOT EXISTS operator_corrections_url ON operator_corrections(url, id);
 CREATE INDEX IF NOT EXISTS classification_overrides_url ON classification_overrides(url, id);
+CREATE INDEX IF NOT EXISTS type13_resolutions_url ON type13_resolutions(source_url, id);
 """  # after the migrations: older DBs lack some of these columns until then
 
 SCHEMA = """
@@ -82,6 +85,11 @@ CREATE TABLE IF NOT EXISTS reviews(
 CREATE TABLE IF NOT EXISTS operator_corrections(
     id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, url TEXT NOT NULL,
     action TEXT NOT NULL, snapshot_json TEXT, reason TEXT NOT NULL,
+    source_token TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS type13_resolutions(
+    id INTEGER PRIMARY KEY, source_document_id INTEGER NOT NULL, source_url TEXT NOT NULL,
+    target_document_id INTEGER, target_url TEXT, action TEXT NOT NULL,
+    analysis_id INTEGER, correction_id INTEGER, reason TEXT NOT NULL,
     source_token TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS classification_overrides(
     id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, url TEXT NOT NULL,
@@ -273,6 +281,28 @@ class Store:
                 (model, prompt_version, parent)).fetchall()
         return _selected_rg2_urls(rows, prompt_version)
 
+    def selected_rg2_round_urls(self, parent: str, station_key: str, model: str,
+                                prompt_version: str) -> dict[int, tuple[str, str]]:
+        """Legitimate active RG-2 URL and upload time for each round type at one station."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT d.*,a.result_json,a.prompt_version AS analysis_prompt_version,"
+                "(SELECT o.action FROM classification_overrides o WHERE o.url=d.url "
+                "ORDER BY o.id DESC LIMIT 1) AS class_override FROM documents d "
+                "LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
+                "AND x.model=? AND x.status='done' AND x.result_json IS NOT NULL "
+                "ORDER BY x.prompt_version IS ? DESC,x.id DESC LIMIT 1) "
+                "WHERE d.parent=? AND d.station_key=? AND d.active=1 AND d.doc_type IN (6,10,15,16)",
+                (model, prompt_version, parent, station_key)).fetchall()
+        out = {}
+        for doc_type in (6, 10, 15, 16):
+            group = [row for row in rows if row["doc_type"] == doc_type]
+            selected = _selected_rg2_urls(group, prompt_version)
+            if selected:
+                row = next(row for row in group if row["url"] in selected)
+                out[doc_type] = (row["url"], row["uploaded_at"] or "")
+        return out
+
     def upsert_election(self, e: Election) -> None:
         self._write(
             "INSERT INTO elections(parent, round, election_type, title, url) VALUES(?,?,?,?,?) "
@@ -316,6 +346,27 @@ class Store:
             return self._db.execute(
                 f"SELECT * FROM documents WHERE parent=? AND active=1 AND doc_type IN "
                 f"({','.join('?' * len(types))}) ORDER BY id", (parent, *types)).fetchall()
+
+    def decision_round_reports(self, parent: str, model: str,
+                               prompt_version: str) -> list[tuple[sqlite3.Row, dict | None]]:
+        """Active RG-8/RG-9 documents and their current round-classification report, if any."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT d.*,a.result_json decision_result_json FROM documents d "
+                "LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
+                "AND x.model=? AND x.prompt_version=? AND x.status='done' "
+                "AND x.result_json IS NOT NULL ORDER BY x.id DESC LIMIT 1) "
+                f"WHERE d.parent=? AND d.active=1 AND d.doc_type IN ({','.join(map(str, DECISION_TYPES))}) "
+                "ORDER BY d.id", (model, prompt_version, parent)).fetchall()
+        return [(row, json.loads(row["decision_result_json"]) if row["decision_result_json"] else None)
+                for row in rows]
+
+    def active_type13(self, parent: str | None = None) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._db.execute(
+                "SELECT * FROM documents WHERE active=1 AND doc_type=13" +
+                (" AND parent=?" if parent is not None else "") + " ORDER BY id",
+                (parent,) if parent is not None else ()).fetchall()
 
     def add_operator_correction(self, url: str, action: str, snapshot: dict | None,
                                 reason: str, source_token: str, expected_revision=...) -> sqlite3.Row | None:
@@ -377,6 +428,153 @@ class Store:
                 "ORDER BY x.prompt_version IS ? DESC,x.id DESC LIMIT 1)",
                 (url, model, model, prompt_version)).fetchone()
 
+    def expected_rows_revision(self, parent: str, model: str) -> tuple[int, int, int]:
+        """Cheap election revision for safely caching the ballot row shape."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT "
+                "COALESCE((SELECT MAX(a.id) FROM analyses a JOIN documents d ON d.id=a.document_id "
+                f"WHERE d.parent=? AND d.doc_type IN ({_ANALYSED}) AND a.model=? "
+                "AND a.prompt_version LIKE 'v%' AND a.status='done' AND a.result_json IS NOT NULL),0),"
+                "COALESCE((SELECT MAX(id) FROM events WHERE parent=?),0),"
+                "COALESCE((SELECT MAX(o.id) FROM classification_overrides o JOIN documents d "
+                "ON d.id=o.document_id WHERE d.parent=?),0)",
+                (parent, model, parent, parent)).fetchone()
+        return tuple(row)
+
+    def type13_source(self, url: str, model: str, prompt_version: str) -> sqlite3.Row | None:
+        """Type-13 document plus its latest successful analysis for this model and prompt."""
+        with self._lock:
+            return self._db.execute(
+                "SELECT d.*,a.id analysis_id,a.result_json FROM documents d "
+                "LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
+                "AND x.model=? AND x.prompt_version=? AND x.status='done' "
+                "AND x.result_json IS NOT NULL ORDER BY x.id DESC LIMIT 1) "
+                "WHERE d.url=? AND d.doc_type=13", (model, prompt_version, url)).fetchone()
+
+    def latest_type13_resolution(self, source_url: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self._db.execute(
+                "SELECT * FROM type13_resolutions WHERE source_url=? ORDER BY id DESC LIMIT 1",
+                (source_url,)).fetchone()
+
+    def type13_correction_source_state(self, correction_id: int) -> sqlite3.Row | None:
+        """Whether the type-13 source analysis linked to an operator snapshot is still current."""
+        with self._lock:
+            return self._db.execute(
+                "SELECT d.active,r.analysis_id,CASE WHEN r.analysis_id IS NULL THEN "
+                "(SELECT MAX(x.id) FROM analyses x WHERE x.document_id=d.id AND "
+                "x.prompt_version LIKE 't%' AND x.status='done' AND x.result_json IS NOT NULL) ELSE "
+                "(SELECT MAX(x.id) FROM analyses x JOIN analyses a ON a.id=r.analysis_id "
+                "WHERE x.document_id=d.id AND x.model=a.model AND x.prompt_version=a.prompt_version "
+                "AND x.status='done' AND x.result_json IS NOT NULL) END current_analysis_id "
+                "FROM type13_resolutions r JOIN documents d ON d.id=r.source_document_id "
+                "WHERE r.correction_id=? AND r.action='rg2_correction' ORDER BY r.id DESC LIMIT 1",
+                (correction_id,)).fetchone()
+
+    def add_type13_correction(self, source_url: str, target_url: str, snapshot: dict,
+                              reason: str, target_source_token: str, resolution_source_token: str,
+                              analysis_id: int | None, analysis_model: str, analysis_prompt: str,
+                              expected_correction_revision,
+                              expected_resolution_revision) -> None:
+        """Atomically save a complete operator snapshot and its type-13 provenance."""
+        reason = clean_note(reason)
+        if reason is None:
+            raise ValueError("correction reason is required")
+        blob = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+        with self._lock, self._db:
+            source = self._db.execute(
+                "SELECT id FROM documents WHERE url=? AND doc_type=13", (source_url,)).fetchone()
+            target = self._db.execute("SELECT id FROM documents WHERE url=?", (target_url,)).fetchone()
+            if source is None or target is None:
+                raise ValueError("correction source or target no longer exists")
+            current_correction = self._db.execute(
+                "SELECT MAX(id) FROM operator_corrections WHERE url=?", (target_url,)).fetchone()[0]
+            current_resolution = self._db.execute(
+                "SELECT MAX(id) FROM type13_resolutions WHERE source_url=?", (source_url,)).fetchone()[0]
+            if current_correction != expected_correction_revision:
+                raise CorrectionRevisionConflict("operator correction revision changed")
+            if current_resolution != expected_resolution_revision:
+                raise CorrectionRevisionConflict("type-13 resolution revision changed")
+            current_analysis = self._db.execute(
+                "SELECT id FROM analyses WHERE document_id=? AND model=? AND prompt_version=? "
+                "AND status='done' AND result_json IS NOT NULL ORDER BY id DESC LIMIT 1",
+                (source["id"], analysis_model, analysis_prompt)).fetchone()
+            if (current_analysis["id"] if current_analysis else None) != analysis_id:
+                raise CorrectionRevisionConflict("type-13 analysis changed")
+            correction = self._db.execute(
+                "INSERT INTO operator_corrections(document_id,url,action,snapshot_json,reason,"
+                "source_token,created_at) VALUES(?,?,?,?,?,?,?)",
+                (target["id"], target_url, "correction", blob, reason, target_source_token, _now()))
+            self._db.execute(
+                "INSERT INTO type13_resolutions(source_document_id,source_url,target_document_id,"
+                "target_url,action,analysis_id,correction_id,reason,source_token,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (source["id"], source_url, target["id"], target_url, "rg2_correction",
+                 analysis_id, correction.lastrowid, reason, resolution_source_token, _now()))
+
+    def add_type13_resolution(self, source_url: str, target_url: str | None, action: str,
+                              reason: str, source_token: str, analysis_id: int | None,
+                              expected_revision) -> None:
+        if action not in ("other_decision", "uncertain"):
+            raise ValueError("type-13 action must be other_decision or uncertain")
+        reason = clean_note(reason)
+        if reason is None:
+            raise ValueError("resolution reason is required")
+        with self._lock, self._db:
+            source = self._db.execute(
+                "SELECT id FROM documents WHERE url=? AND doc_type=13", (source_url,)).fetchone()
+            target = (self._db.execute("SELECT id FROM documents WHERE url=?", (target_url,)).fetchone()
+                      if target_url else None)
+            if source is None:
+                raise ValueError("type-13 source no longer exists")
+            current = self._db.execute(
+                "SELECT MAX(id) FROM type13_resolutions WHERE source_url=?", (source_url,)).fetchone()[0]
+            if current != expected_revision:
+                raise CorrectionRevisionConflict("type-13 resolution revision changed")
+            self._db.execute(
+                "INSERT INTO type13_resolutions(source_document_id,source_url,target_document_id,"
+                "target_url,action,analysis_id,correction_id,reason,source_token,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (source["id"], source_url, target["id"] if target else None, target_url, action,
+                 analysis_id, None, reason, source_token, _now()))
+
+    def revoke_type13_correction(self, source_url: str, reason: str, target_source_token: str,
+                                 resolution_source_token: str, expected_resolution: int,
+                                 expected_correction: int) -> None:
+        """Revoke only when this resolution still owns the latest complete snapshot."""
+        reason = clean_note(reason)
+        if reason is None:
+            raise ValueError("revocation reason is required")
+        with self._lock, self._db:
+            source = self._db.execute(
+                "SELECT id FROM documents WHERE url=? AND doc_type=13", (source_url,)).fetchone()
+            resolution = self._db.execute(
+                "SELECT * FROM type13_resolutions WHERE source_url=? ORDER BY id DESC LIMIT 1",
+                (source_url,)).fetchone()
+            if source is None or resolution is None or resolution["id"] != expected_resolution:
+                raise CorrectionRevisionConflict("type-13 resolution revision changed")
+            if resolution["action"] != "rg2_correction" or resolution["correction_id"] != expected_correction:
+                raise ValueError("type-13 resolution has no current correction to revoke")
+            current = self._db.execute(
+                "SELECT * FROM operator_corrections WHERE url=? ORDER BY id DESC LIMIT 1",
+                (resolution["target_url"],)).fetchone()
+            if current is None or current["id"] != expected_correction:
+                raise CorrectionRevisionConflict(
+                    "a newer complete snapshot exists; review it in the correction form")
+            revoked = self._db.execute(
+                "INSERT INTO operator_corrections(document_id,url,action,snapshot_json,reason,"
+                "source_token,created_at) VALUES(?,?,?,?,?,?,?)",
+                (current["document_id"], current["url"], "revoke", None, reason,
+                 target_source_token, _now()))
+            self._db.execute(
+                "INSERT INTO type13_resolutions(source_document_id,source_url,target_document_id,"
+                "target_url,action,analysis_id,correction_id,reason,source_token,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (source["id"], source_url, resolution["target_document_id"],
+                 resolution["target_url"], "revoke", resolution["analysis_id"],
+                 revoked.lastrowid, reason, resolution_source_token, _now()))
+
     def known_docs(self, parent: str, scope: Scope) -> dict[tuple[str, int | str], Doc]:
         sql, args = "SELECT * FROM documents WHERE parent=? AND active=1", [parent]
         if scope.doc_type is not None:
@@ -425,7 +623,7 @@ class Store:
                         "ON CONFLICT(url) DO UPDATE SET active=1",
                         (parent, d.municipality, d.station_no, d.station_name, d.station_key,
                          d.doc_type, d.label, d.url, d.uploaded_at, now,
-                         "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES else "skipped"))
+                          "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES else "skipped"))
                 row = self._db.execute("SELECT id FROM documents WHERE url=?", (d.url,)).fetchone()
                 self._db.execute(
                     "INSERT INTO events(sweep_id, parent, kind, document_id, station_key, "
@@ -609,7 +807,7 @@ class Store:
                 "skipped": ast.get("skipped", 0), "findings": sev}
 
     def requeue_rg7(self, parent: str, municipalities: Collection[str] | None = None,
-                    prompt_version: str = "r2") -> int:
+                    prompt_version: str = "r3") -> int:
         """Queue active RG-7 decisions without a successful `prompt_version` analysis that are
         never analysed (NULL/skipped: recorded before RG-7 analysis existed or before analysis was
         enabled), or marked done/failed after a successful analysis with another prompt (an older RG-7
@@ -628,6 +826,37 @@ class Store:
             "(w.status='done' OR w.prompt_version NOT LIKE 'r%')))) "
             "AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.document_id=documents.id "
             f"AND a.status IN ('done', 'failed') AND a.prompt_version=?){where}",
+            (parent, prompt_version, prompt_version, *extra)).rowcount
+
+    def requeue_type13(self, parent: str, municipalities: Collection[str] | None = None,
+                       prompt_version: str = "t1") -> int:
+        """Queue active type-13 follow-ups that have not completed this prompt version."""
+        where, extra = _in_municipalities(municipalities)
+        return self._write(
+            "UPDATE documents SET analysis_status='new', analysis_attempts=0, analysis_next_at=NULL, "
+            "analysis_error=NULL WHERE parent=? AND active=1 AND doc_type=13 "
+            "AND (analysis_status IS NULL OR analysis_status='skipped' OR (analysis_status IN "
+            "('done', 'failed') AND analysis_next_at IS NULL AND EXISTS "
+            "(SELECT 1 FROM analyses w WHERE w.document_id=documents.id AND w.prompt_version<>? AND "
+            "(w.status='done' OR w.prompt_version NOT LIKE 't%')))) "
+            "AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.document_id=documents.id "
+            "AND a.status IN ('done', 'failed') AND a.prompt_version=?)" + where,
+            (parent, prompt_version, prompt_version, *extra)).rowcount
+
+    def requeue_decision_rounds(self, parent: str, municipalities: Collection[str] | None = None,
+                                prompt_version: str = "d1") -> int:
+        """Queue active RG-8/RG-9 decisions without this round-classification analysis."""
+        where, extra = _in_municipalities(municipalities)
+        return self._write(
+            "UPDATE documents SET analysis_status='new', analysis_attempts=0, analysis_next_at=NULL, "
+            "analysis_error=NULL WHERE parent=? AND active=1 "
+            f"AND doc_type IN ({','.join(map(str, DECISION_TYPES))}) "
+            "AND (analysis_status IS NULL OR analysis_status='skipped' OR (analysis_status IN "
+            "('done', 'failed') AND analysis_next_at IS NULL AND EXISTS "
+            "(SELECT 1 FROM analyses w WHERE w.document_id=documents.id AND w.prompt_version<>? AND "
+            "(w.status='done' OR w.prompt_version NOT LIKE 'd%')))) "
+            "AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.document_id=documents.id "
+            "AND a.status IN ('done', 'failed') AND a.prompt_version=?)" + where,
             (parent, prompt_version, prompt_version, *extra)).rowcount
 
     def delete_rg2_findings(self, url: str) -> int:

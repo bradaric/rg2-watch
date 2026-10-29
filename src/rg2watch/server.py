@@ -181,6 +181,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._classification_post()
         if parsed.path == "/correction" and not parsed.query:
             return self._correction_post()
+        if parsed.path == "/type13" and not parsed.query:
+            return self._type13_post()
         if parsed.path in ("/case/prepare", "/case/publish") and not parsed.query:
             return self._case_post(parsed.path)
         if parsed.path != "/review" or parsed.query:
@@ -294,6 +296,60 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             log.exception("operator correction could not be stored")
             return self._json(500, {"error": "operator correction could not be stored"})
+        self._json(200, state)
+
+    def _type13_post(self) -> None:
+        self.close_connection = True
+        if any(len(self.headers.get_all(h) or ()) > 1 for h in REVIEW_HEADERS):
+            return self._json(400, {"error": "duplicate header"})
+        if self.server.type13_api is None or not self._same_origin():
+            return self._json(403, {"error": "forbidden"})
+        if self.headers.get("X-RG2W") != "1":
+            return self._json(403, {"error": "missing X-RG2W"})
+        if (self.headers.get("Content-Type") or "").strip().lower() != "application/json":
+            return self._json(400, {"error": "Content-Type must be exactly application/json"})
+        length = self.headers.get("Content-Length")
+        if length is None or not LENGTH.fullmatch(length) or int(length) > CORRECTION_MAX_BYTES:
+            return self._json(400, {"error": "invalid body length"})
+        try:
+            raw = self.rfile.read(int(length))
+        except (OSError, TimeoutError):
+            return
+        if len(raw) != int(length):
+            return self._json(400, {"error": "body shorter than Content-Length"})
+        try:
+            req = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return self._json(400, {"error": "body is not JSON"})
+        common = (isinstance(req, dict) and isinstance(req.get("url"), str)
+                  and isinstance(req.get("reason"), str)
+                  and isinstance(req.get("source_token"), str))
+        action = req.get("action") if isinstance(req, dict) else None
+        if action == "correction":
+            valid = common and set(req) == {"url", "action", "snapshot", "reason", "source_token"}
+        elif action in ("other_decision", "uncertain", "revoke"):
+            valid = common and set(req) == {"url", "action", "reason", "source_token"}
+        else:
+            valid = False
+        if not valid:
+            return self._json(400, {"error": "malformed type-13 request"})
+        try:
+            if action == "correction":
+                state = self.server.type13_api.approve(
+                    req["url"], req["snapshot"], req["reason"], req["source_token"])
+            elif action in ("other_decision", "uncertain"):
+                state = self.server.type13_api.resolve(
+                    req["url"], action, req["reason"], req["source_token"])
+            else:
+                state = self.server.type13_api.revoke(
+                    req["url"], req["reason"], req["source_token"])
+        except CorrectionConflict as exc:
+            return self._json(409, {"error": str(exc)})
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)[:300]})
+        except Exception:
+            log.exception("type-13 resolution could not be stored")
+            return self._json(500, {"error": "type-13 resolution could not be stored"})
         self._json(200, state)
 
     def _correction_post_refusal(self) -> tuple[int, str] | None:
@@ -415,7 +471,31 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": "operator correction could not be read"})
         return True
 
+    def _type13_get(self) -> bool:
+        parsed = urlsplit(self.path)
+        if parsed.path != "/type13":
+            return False
+        if self.server.type13_api is None:
+            return False
+        if not self._same_origin():
+            self._json(403, {"error": "forbidden"})
+            return True
+        try:
+            values = parse_qs(parsed.query, strict_parsing=True)
+            if set(values) != {"url"} or len(values["url"]) != 1:
+                self._json(400, {"error": "expected one url query parameter"})
+            else:
+                self._json(200, self.server.type13_api.state(values["url"][0]))
+        except ValueError as exc:
+            self._json(400, {"error": str(exc)[:300]})
+        except Exception:
+            log.exception("type-13 correction could not be read")
+            self._json(500, {"error": "type-13 correction could not be read"})
+        return True
+
     def do_GET(self) -> None:
+        if self._type13_get():
+            return
         if self._correction_get():
             return
         if self._case_get():
@@ -440,7 +520,7 @@ class _Handler(BaseHTTPRequestHandler):
 def start_server(out_dir: Path, cache_dir: Path, port: int,
                    get_reviews: Callable[[], dict] | None = None,
                    put_review: Callable[[str, str, str | None], dict | None] | None = None,
-                   case_api=None, correction_api=None, classification_api=None
+                    case_api=None, correction_api=None, classification_api=None, type13_api=None
                  ) -> ThreadingHTTPServer | None:
     """Serve `out_dir` (+ cached PDFs) in a daemon thread; None when the port is unavailable.
     `get_reviews` serves GET /reviews.json, `put_review(url, verdict, note)` backs POST /review,
@@ -457,6 +537,7 @@ def start_server(out_dir: Path, cache_dir: Path, port: int,
     server.case_api = case_api
     server.correction_api = correction_api
     server.classification_api = classification_api
+    server.type13_api = type13_api
     threading.Thread(target=server.serve_forever, name="web", daemon=True).start()
     log.info("browse page at http://127.0.0.1:%d", server.server_port)
     return server

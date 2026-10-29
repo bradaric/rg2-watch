@@ -247,6 +247,27 @@ def test_repeat_annulment_after_selected_repeat_excludes_it():
     assert result["station_results"][0]["annulled"]["rik"].endswith("repeat-II-rg9.pdf")
 
 
+@pytest.mark.parametrize(("decision_type", "field"), [(27, "undetermined"), (28, "annulled")])
+def test_repeat_slot_decision_classified_original_excludes_original_rg2(decision_type, field):
+    s = store()
+    form(s, 111, clean_report())
+    decision = doc(BASE + f"/e/misfiled-{decision_type}.pdf", muni="Alpha", no="111",
+                   dt=decision_type, up="2026-10-26T04:04")
+    add(s, decision)
+    s.save_analysis(decision.url, AnalysisResult({
+        "target_round": "original",
+        "target_evidence": "The decision concerns the original voting minutes.",
+    }, 0, 0, 0.0, M, "stop"), "d1", parent=P)
+
+    result = tally(s, include_station_results=True)
+
+    assert result["overall"][field] == 1
+    assert result["overall"]["all"]["registered"] == 0
+    assert result["station_results"][0][field]["rik"] == decision.url
+    assert result["station_results"][0][field]["target_round"] == "original"
+    assert "original voting minutes" in result["station_results"][0][field]["target_evidence"]
+
+
 def test_first_round_decision_gets_no_repeat_round_warning():
     s = store()
     form(s, 12, clean_report())

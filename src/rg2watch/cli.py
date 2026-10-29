@@ -29,7 +29,7 @@ from .models import Doc, Event, Finding
 from .names import MunicipalityError, resolve_municipalities
 from .notify import Notifier
 from .official_results import OfficialResultsClient, write_official_results
-from .operator_corrections import OperatorCorrections
+from .operator_corrections import OperatorCorrections, Type13Corrections
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from .public_results import write_public_results
 from .render import RenderError, render_tiles
@@ -327,12 +327,19 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
     """Serve the page on `port`, else the next free port up to +10; None when none is free."""
     case_api = _publication_api(store, cfg) if cfg is not None else None
     if cfg is not None:
+        expected_rows_cache = {}
         refresh = correction_change or (lambda: build_page(
             store, page_dir / "index.html", cache_dir, cfg=cfg,
             interval=cfg.browse_interval_s, with_status=False))
-        correction_api = OperatorCorrections(store, cfg, stored_model(cfg.model), on_change=refresh)
+        correction_api = OperatorCorrections(
+            store, cfg, stored_model(cfg.model), on_change=refresh,
+            expected_rows_cache=expected_rows_cache)
+        type13_api = Type13Corrections(
+            store, cfg, stored_model(cfg.model), on_change=refresh,
+            expected_rows_cache=expected_rows_cache)
     else:
         correction_api = None
+        type13_api = None
 
     def classification_api(url: str, action: str):
         row = store.add_classification_override(url, action)
@@ -342,7 +349,7 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
 
     for p in range(port, min(port + PORT_TRIES, 65536)):
         server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
-                               correction_api, classification_api)
+                               correction_api, classification_api, type13_api)
         if server is not None:
             if p != port:
                 log.warning("port %d busy, using %d", port, p)
