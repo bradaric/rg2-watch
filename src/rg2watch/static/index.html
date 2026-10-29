@@ -1155,8 +1155,10 @@ function applyCorrectionData(data, url) {
   const fresh = prep(source), row = rowOf(fresh.id), shown = row && row.child.isShown();
   D = data; rows[index] = fresh; T = data.tally;
   if (row) {
-    row.data(fresh).draw(false);
-    if (shown) row.child(child(fresh)).show();
+    row.remove();
+    const replacement = table.row.add(fresh);
+    table.draw(false);
+    if (shown) replacement.child(child(fresh)).show();
   }
   renderTally();
   $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);

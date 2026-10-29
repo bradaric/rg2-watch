@@ -643,7 +643,7 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "applyCorrectionData(data, url)" in wait
     assert "applyData(data)" not in wait
     apply = html[html.index("function applyCorrectionData("):html.index("function waitForCorrectionData(")]
-    assert "row.data(fresh).draw(false)" in apply
+    assert "row.remove();" in apply and "table.row.add(fresh)" in apply
     assert "table.clear()" not in apply
     assert "v.oc.revision === state.revision" in html
     assert '$("ocdlg").close();' in success
@@ -654,6 +654,47 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "rec-ok" in html and "rec-fail" in html and "rec-unavailable" in html
     assert 'data: "rec", title: "Numbers"' in html and "r.rec.rules.includes(nc)" in html
     assert 'nc === "gap"' in html and '"Gap " + snum(rec.gap)' in html
+
+
+def test_correction_refresh_recreates_row_cells_built_by_created_cell():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    refresh = html[html.index("function correctionRowFromData("):html.index("function retryCorrectionData(")]
+    script = r'''
+const assert = require("assert");
+let dataCalls = 0, removes = 0, adds = 0, draws = 0, childShows = 0;
+const oldChild = () => ({show() { childShows++; }});
+oldChild.isShown = () => true;
+const oldRow = {
+  child: oldChild,
+  data() { dataCalls++; return this; },
+  draw() { draws++; return this; },
+  remove() { removes++; return this; },
+};
+const replacementChild = () => ({show() { childShows++; }});
+const replacement = {child: replacementChild};
+const table = {
+  row: {add(value) { adds++; assert.equal(value.id, 1); return replacement; }},
+  draw(hold) { assert.equal(hold, false); draws++; },
+};
+let rows = [{id: 1}], D = null, T = null;
+const prep = value => value;
+const rowOf = () => oldRow;
+const child = value => value;
+const renderTally = () => {};
+const els = {built: {textContent: ""}};
+const $ = id => els[id];
+const epoch = () => "now";
+''' + refresh + r'''
+const fresh = {id: 1, v: [], u: "u", rec: {}, marker: "fresh"};
+assert.equal(applyCorrectionData({rows: [fresh], tally: {}, built: "2026-10-29T00:00:00Z"}, "u"), true);
+assert.equal(dataCalls, 0, "row.data() clears cells whose display renderer is intentionally empty");
+assert.equal(removes, 1);
+assert.equal(adds, 1);
+assert.equal(draws, 1);
+assert.equal(childShows, 1, "an expanded row remains expanded");
+'''
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_expanded_form_puts_operator_correction_before_review_and_classification():
