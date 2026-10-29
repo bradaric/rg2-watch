@@ -359,14 +359,59 @@ WRANGLER=/absolute/path/to/wrangler
 exec 9>"$ROOT/data/public-results-publish.lock"
 flock -n 9 || exit 0
 
+TMP=$(mktemp -d "$ROOT/data/public-results-export.XXXXXX")
+BASELINE_TMP="$ROOT/public-results/.index.html.$$.tmp"
+trap 'rm -rf "$TMP"; rm -f "$BASELINE_TMP"' EXIT
+
 set -a
 source "$HOME/.config/rg2-watch/cloudflare.env"
 set +a
 
 cd "$ROOT"
-scripts/export.sh "$ELECTION" --out "$ROOT/public-results"
-"$WRANGLER" pages deploy "$ROOT/public-results" --project-name "$PROJECT"
+scripts/export.sh "$ELECTION" --out "$TMP"
+
+CURRENT="$ROOT/public-results/index.html"
+if [[ -f "$CURRENT" ]]; then
+    if uv run python - "$CURRENT" "$TMP/index.html" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+built = re.compile(rb'"built":"[^"]*"')
+
+
+def snapshot(path):
+    normalized, replacements = built.subn(b'"built":""', Path(path).read_bytes())
+    if replacements != 1:
+        print(f"expected one built timestamp in {path}, found {replacements}", file=sys.stderr)
+        raise SystemExit(2)
+    return normalized
+
+
+raise SystemExit(0 if snapshot(sys.argv[1]) == snapshot(sys.argv[2]) else 1)
+PY
+    then
+        echo "public results unchanged; skipping Cloudflare deployment"
+        exit 0
+    else
+        status=$?
+        [[ $status -eq 1 ]] || exit "$status"
+    fi
+fi
+
+"$WRANGLER" pages deploy "$TMP" --project-name "$PROJECT"
+
+# Keep the comparison baseline aligned with the last successful deployment.
+install -d -m 700 "$ROOT/public-results"
+install -m 600 "$TMP/index.html" "$BASELINE_TMP"
+mv -f "$BASELINE_TMP" "$CURRENT"
 ```
+
+The generated snapshot timestamp changes on every export, so the comparison ignores only the embedded
+`built` value. Any result, review-count or page-template change still deploys. `public-results/index.html`
+is updated only after Wrangler succeeds, so a failed upload is retried by the next run. Manual deployments
+remain compatible when they are exported to and deployed from that same directory; it then continues to
+represent the latest successfully deployed snapshot.
 
 Make it executable, run it once manually, inspect the production URL, and check Cloudflare's deployment
 history before scheduling it:
