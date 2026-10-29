@@ -377,7 +377,7 @@ import re
 import sys
 from pathlib import Path
 
-built = re.compile(rb'"built":"[^"]*"')
+built = re.compile(rb'"built"\s*:\s*"[^"]*"')
 
 
 def snapshot(path):
