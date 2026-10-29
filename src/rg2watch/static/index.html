@@ -1296,6 +1296,22 @@ function rg7Badges(r) {
   }
   return td;
 }
+function type13Label(x) {
+  return ({rg2_correction: "T13 approved", other_decision: "T13 other",
+    uncertain: "T13 uncertain"})[x.resolution] || "T13 review";
+}
+function type13Badges(r) {
+  const out = document.createDocumentFragment();
+  for (const x of r.t13 || []) {
+    const label = type13Label(x), state = x.resolution === "other_decision" ? "revoked" :
+      x.resolution === "uncertain" || !x.resolution ? "suspended" : "";
+    const line = mk("div", null, "f t13"), badge = mk("span", label, "ocpill " + state);
+    badge.title = x.evidence || label;
+    line.append(badge);
+    out.append(line);
+  }
+  return out;
+}
 function classificationLabel(c) {
   return {quarantined_rg7: "quarantined: mislabeled РГ-7",
     quarantined_other: "quarantined: not an РГ-2", pending: "classification pending",
@@ -1382,6 +1398,7 @@ function prep(r) {
     ...x.ops.map(o => o.m), ...x.ars.map(a => a.m + " (arithmetic)")]));
   r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models,
     ...r.r7.flatMap(x => x.ch || []), r.rec.status, ...r.rec.rules, ...r.rec.details,
+    ...r.t13.flatMap(x => [type13Label(x), x.evidence || ""]),
     ...(r.rec.annulled ? ["поништено rg-9"] : []),
     ...(r.rec.undetermined ? ["резултати се не могу утврдити rg-8"] : []),
     ...all.flatMap(v => v.oc ? [v.oc.status, v.oc.reason || ""] : [])].join("\n").toLowerCase();
@@ -1441,7 +1458,7 @@ function initTable() {
       {data: "_st", title: "Status", className: "nw", render: {_: d => d, display: () => ""},
        createdCell: (td, d, r) => td.append(documentStatusEl(r))},
       {data: "sev", title: "Findings", render: {_: d => d, display: () => ""}, className: "fcol",
-       createdCell: (td, d, r) => { td.append(badges(r.f), rg7Badges(r)); if (r._note) td.append(mk("span", r._note, "note")); }},
+       createdCell: (td, d, r) => { td.append(badges(r.f), rg7Badges(r), type13Badges(r)); if (r._note) td.append(mk("span", r._note, "note")); }},
       {data: "rec", title: "Numbers", className: "nw", render: {
         _: d => d.status + " " + d.rules.join(" ") + " " + d.gap, display: () => "", sort: d => Math.abs(d.gap)},
        createdCell: (td, d) => td.append(reconciliationEl(d))},

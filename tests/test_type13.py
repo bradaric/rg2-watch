@@ -317,6 +317,20 @@ def test_page_reuses_existing_correction_dialog_for_type13():
     assert ".catch(e =>" in open_type13
 
 
+def test_page_shows_type13_state_in_collapsed_findings_cell():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "function type13Badges(" in html
+    findings = html[html.index('{data: "sev", title: "Findings"'):
+                    html.index('{data: "rec", title: "Numbers"')]
+    assert "type13Badges(r)" in findings
+    assert 'rg2_correction: "T13 approved"' in html
+    assert 'other_decision: "T13 other"' in html
+    assert 'uncertain: "T13 uncertain"' in html
+    assert '"T13 review"' in html
+    assert "...r.t13.flatMap(x => [type13Label(x), x.evidence || \"\"])" in html
+
+
 def test_approved_type13_marks_fixed_numeric_finding_resolved(tmp_path):
     store, target, source = correction_workflow_store()
     faulty = clean_report()
