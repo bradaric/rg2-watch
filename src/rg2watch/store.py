@@ -420,18 +420,19 @@ class Store:
 
     def operator_correction_source(self, url: str, model: str,
                                    prompt_version: str) -> sqlite3.Row | None:
-        """Document plus its preferred current, otherwise newest legacy, successful analysis."""
+        """Document plus the configured model's analysis, or the dominant completed fallback."""
         with self._lock:
             return self._db.execute(
-                "SELECT d.*,a.id analysis_id,a.prompt_version analysis_prompt_version,a.result_json "
-                "FROM documents d "
-                "JOIN analyses a ON a.document_id=d.id WHERE d.url=? AND a.model=? "
-                "AND a.prompt_version LIKE 'v%' AND a.status='done' AND a.result_json IS NOT NULL "
-                "AND a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
-                "AND x.model=? AND x.prompt_version LIKE 'v%' AND x.status='done' "
-                "AND x.result_json IS NOT NULL "
-                "ORDER BY x.prompt_version IS ? DESC,x.id DESC LIMIT 1)",
-                (url, model, model, prompt_version)).fetchone()
+                "SELECT d.*,a.id analysis_id,a.model analysis_model,"
+                "a.prompt_version analysis_prompt_version,a.result_json FROM documents d "
+                "JOIN analyses a ON a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
+                "AND x.prompt_version LIKE 'v%' AND x.status='done' AND x.result_json IS NOT NULL "
+                "ORDER BY x.model=? DESC,(SELECT COUNT(DISTINCT c.document_id) FROM analyses c "
+                "JOIN documents cd ON cd.id=c.document_id WHERE cd.parent=d.parent "
+                "AND c.model=x.model AND c.prompt_version LIKE 'v%' AND c.status='done' "
+                "AND c.result_json IS NOT NULL) DESC,x.model,x.prompt_version IS ? DESC,x.id DESC "
+                "LIMIT 1) WHERE d.url=?",
+                (model, prompt_version, url)).fetchone()
 
     def expected_rows_revision(self, parent: str, model: str) -> tuple[int, int, int]:
         """Cheap election revision for safely caching the ballot row shape."""

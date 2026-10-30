@@ -95,18 +95,30 @@ def test_legacy_operator_correction_survives_prompt_upgrade(monkeypatch, tmp_pat
 
 def test_operator_correction_survives_primary_model_change(tmp_path):
     s = analysed_store()
-    old_cfg = Config(model=MODEL, tally_scope={P: "national"})
-    service = OperatorCorrections(s, old_cfg, MODEL)
+    new_model = "openai/gpt-6.1-terra#none"
+    new_cfg = Config(model="opencode:" + new_model, tally_scope={P: "national"})
+    service = OperatorCorrections(s, new_cfg, new_model)
     state = service.state(URL)
     service.save(URL, snapshot(registered=900), "audited correction", state["source_token"])
 
-    new_model = "openai/gpt-6.1-terra#none"
-    new_cfg = Config(model="opencode:" + new_model, tally_scope={P: "national"})
     tally = build_tally(s, new_cfg, P, new_model)
     row = build_data(s, tmp_path, cfg=new_cfg)["rows"][0]
 
     assert tally["overall"]["all"]["registered"] == 900
     assert row["oc"]["status"] == "active"
+
+
+def test_operator_correction_prefers_configured_model_when_it_exists():
+    s = analysed_store()
+    preferred = "openai/gpt-6.1-terra#none"
+    terra = clean_report()
+    terra["numbers"]["registered"]["value"] = 900
+    s.save_analysis(URL, AnalysisResult(terra, 0, 0, 0.0, preferred, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    state = OperatorCorrections(s, Config(model="opencode:" + preferred), preferred).state(URL)
+
+    assert state["snapshot"]["registered"] == 900
 
 
 def test_operator_correction_rejects_rg2_superseded_by_repeat_round():

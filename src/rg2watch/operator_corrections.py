@@ -88,6 +88,15 @@ class OperatorCorrections:
             except Exception:
                 log.exception("browse data could not be refreshed after an operator correction")
 
+    def _source_service(self, url: str):
+        """Use the configured model when present, else bind all correction work to its fallback."""
+        row = self.store.operator_correction_source(url, self.model, PROMPT_VERSION)
+        if row is None or row["analysis_model"] == self.model:
+            return self
+        return OperatorCorrections(
+            self.store, self.cfg, row["analysis_model"], self.on_change,
+            expected_rows_cache=self.expected_rows_cache)
+
     @staticmethod
     def _hash(value) -> str:
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -195,6 +204,9 @@ class OperatorCorrections:
         return out
 
     def state(self, url: str) -> dict:
+        service = self._source_service(url)
+        if service is not self:
+            return service.state(url)
         row, report, raw, expected = self._source(url)
         history_rows = self.store.operator_correction_history(url)
         source_snapshot = snapshot_of(report, expected)
@@ -230,6 +242,9 @@ class OperatorCorrections:
                 "history": self._history(history_rows, raw, source_snapshot)}
 
     def save(self, url: str, snapshot: dict, reason: str, source_token: str) -> dict:
+        service = self._source_service(url)
+        if service is not self:
+            return service.save(url, snapshot, reason, source_token)
         state = self.state(url)
         if source_token != state["source_token"]:
             raise CorrectionConflict("correction source changed; review the new values before saving")
@@ -250,6 +265,9 @@ class OperatorCorrections:
         return self.state(url)
 
     def revoke(self, url: str, reason: str, source_token: str) -> dict:
+        service = self._source_service(url)
+        if service is not self:
+            return service.revoke(url, reason, source_token)
         state = self.state(url)
         if source_token != state["source_token"]:
             raise CorrectionConflict("correction source changed; review it before revoking")
