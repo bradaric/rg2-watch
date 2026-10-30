@@ -283,6 +283,29 @@ def test_document_type_and_decision_status_filters_are_in_their_workflow_section
     assert 'optsOf($("dt"), "all document types"' in html
 
 
+def test_review_filter_and_search_match_latest_review_note():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<option value="has-note">has note</option>' in html
+    start = html.index("const reviewHasNote =")
+    helpers = html[start:html.index("function keep(r)", start)]
+    script = """
+const assert = require("assert");
+""" + helpers + """
+assert.equal(reviewHasNote(null), false);
+assert.equal(reviewHasNote({n: "   "}), false);
+assert.equal(reviewHasNote({n: "1 glas manjka"}), true);
+assert.equal(reviewTextMatches({_h: "station text"}, {n: "1 Glas Manjka"}, "glas manjka"), true);
+assert.equal(reviewTextMatches({_h: "station text"}, {n: "other"}, "station"), true);
+assert.equal(reviewTextMatches({_h: "station text"}, null, "missing"), false);
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    keep = html[html.index("function keep(r)"):html.index("function stationCellHtml(")]
+    assert 'rf === "has-note" ? reviewHasNote(x)' in keep
+    assert "reviewTextMatches(r, x, q)" in keep
+
+
 def test_common_review_filter_presets_preserve_scope_and_auto_refresh_setting():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
@@ -529,7 +552,7 @@ assert(stationCellHtml({muni: "M", no: "1", name: "N", settlement: "<Paris>"}).i
     assert ".stationplace{display:block;color:var(--mut);font-size:12px" in html
 
 
-def test_current_escalation_note_is_available_from_forms_table_pill():
+def test_current_review_note_is_available_from_forms_table_pill_for_every_verdict():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     verdict = html[html.index("function verdictHtml"):html.index("function verdictEl")]
     script = r'''
@@ -548,8 +571,11 @@ assert(noted.includes('tabindex="0"'));
 assert(noted.includes('aria-label="escalate: Проверити &quot;потписе&quot; &lt;сада&gt;"'));
 assert(!verdictHtml({v: "escalate"}).includes("hasnote"));
 assert(!verdictHtml({v: "escalate"}).includes("rvnote-inline"));
-assert(!verdictHtml({v: "ok", n: "checked"}).includes("hasnote"));
-assert(!verdictHtml({v: "ok", n: "checked"}).includes("rvnote-inline"));
+for (const status of ["ok", "unsure"]) {
+  const shown = verdictHtml({v: status, n: "checked"});
+  assert(shown.includes("hasnote"));
+  assert(shown.includes('<span class="rvnote-inline">checked</span>'));
+}
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr

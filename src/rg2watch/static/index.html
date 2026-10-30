@@ -418,7 +418,7 @@ stroke-width:2.5;
 <details id="rulesbox"><summary id="rulessum">rules: any</summary><div id="rules"></div></details>
 <label>number check <select id="nc"><option value="">any</option><option value="ok">reconcile</option><option value="fail">any failure</option><option value="gap">turnout gap</option><option value="A1">A1</option><option value="A2">A2</option><option value="A3">A3</option><option value="A4">A4</option><option value="unavailable">unavailable</option></select></label>
 <label>result inclusion <select id="ri"><option value="">any</option><option value="counted-both">counted in both</option><option value="corrected-only">corrected only</option><option value="filed-only">as filed only</option><option value="not-counted">not counted</option><option value="not-in-tally">not in tally</option><option value="excluded-filed">excluded as filed</option></select></label>
-<label>review <select id="rv"><option value="">any</option><option value="todo">to review</option><option value="escalate">escalated</option><option value="unsure">unsure</option><option value="ok">ok</option></select></label>
+<label>review <select id="rv"><option value="">any</option><option value="todo">to review</option><option value="has-note">has note</option><option value="escalate">escalated</option><option value="unsure">unsure</option><option value="ok">ok</option></select></label>
 </div>
 <div id="morefilters" class="filtergroup" role="group" aria-labelledby="moretitle">
 <span id="moretitle" class="filtertitle">More</span>
@@ -785,7 +785,7 @@ function reviewCounts() {  // the chosen election, else the status panel's
 }
 function verdictHtml(x) {  // fixed class names; the label goes through esc
   if (!x) return "";
-  const k = VERDICTS.includes(x.v) ? x.v : "", note = k === "escalate" && x.n ? String(x.n) : "",
+  const k = VERDICTS.includes(x.v) ? x.v : "", note = x.n ? String(x.n) : "",
     attrs = note ? ' data-note="' + esc(note) + '" tabindex="0" aria-label="' + esc((VLABEL[k] || String(x.v)) + ": " + note) + '"' : "";
   const pill = '<span class="rv rv-' + k + (x.pending ? " pending" : "") + (note ? " hasnote" : "") + '"' + attrs + '>' + esc(VLABEL[k] || String(x.v)) + "</span>";
   return note ? '<span class="rvgroup">' + pill + '<span class="rvnote-inline">' + esc(note) + "</span></span>" : pill;
@@ -1457,18 +1457,22 @@ function prep(r) {
 const txt = () => DataTable.render.text();
 const fmt = () => ({_: d => d, display: d => esc(when(d))});
 const sel = id => $(id).value;
+const reviewHasNote = x => !!(x && (x.n || "").trim());
+const reviewTextMatches = (r, x, q) => !q || r._h.includes(q) ||
+  !!(x && (x.n || "").toLowerCase().includes(q));
 function keep(r) {
   if (onlyId != null && r.id !== onlyId) return false;
   const q = $("q").value.trim().toLowerCase();
   const rs = chosenRules();
   const rf = sel("rv"), x = rvOf(r);
-  if (rf && !(rf === "todo" ? isTodo(r) : rf === "escalate" ? isEsc(r) : x && x.v === rf)) return false;
+  if (rf && !(rf === "todo" ? isTodo(r) : rf === "has-note" ? reviewHasNote(x)
+    : rf === "escalate" ? isEsc(r) : x && x.v === rf)) return false;
   const nc = sel("nc");
   if (nc && !(nc === "gap" ? r.rec.gap !== 0 : nc === r.rec.status || nc[0] === "A" && r.rec.rules.includes(nc))) return false;
   const ri = sel("ri");
   if (ri && !(ri === "excluded-filed" ? r.rec.result.filed.included === false
     : resultInclusionStatus(r.rec.result) === ri)) return false;
-  return (!q || r._h.includes(q)) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
+  return reviewTextMatches(r, x, q) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
     && (!sel("dt") || String(r.doc_type) === sel("dt"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
     && (!sel("an") || (r.rec.annulled ? "annulled" : r.rec.undetermined ? "undetermined" : "not") === sel("an"))
