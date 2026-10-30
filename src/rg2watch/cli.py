@@ -40,6 +40,7 @@ from .rik_client import USER_AGENT, AdaptiveLimiter, RikClient, RikError, downlo
 from .rules import change_text, evaluate_report, evaluate_rg7
 from .server import start_server
 from .status import WATCHER_FRESH_S, format_status, to_belgrade
+from .station_documents import StationDocuments
 from .store import NOTE_MAX, VERDICTS, Store
 from .tally import build_tally, format_tally
 from .watcher import Watcher, filter_request_rate
@@ -334,7 +335,7 @@ def _publication_api(store: Store, cfg: Config):
 
 
 def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Config | None = None,
-               correction_change=None):
+               correction_change=None, rik_client: RikClient | None = None):
     """Serve the page on `port`, else the next free port up to +10; None when none is free."""
     case_api = _publication_api(store, cfg) if cfg is not None else None
     if cfg is not None:
@@ -352,6 +353,27 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
         correction_api = None
         type13_api = None
 
+    station_api = None
+    if cfg is not None:
+        station_clients = ({rik_client.election.parent: rik_client} if rik_client is not None else {})
+        owned_station_clients = []
+        station_clients_lock = threading.Lock()
+
+        def station_client_for(parent: str):
+            with station_clients_lock:
+                client = station_clients.get(parent)
+                if client is None:
+                    election = store.get_election(parent)
+                    if election is None:
+                        raise ValueError("unknown election")
+                    client = _rik_client(cfg, election)
+                    station_clients[parent] = client
+                    owned_station_clients.append(client)
+                return client
+
+        station_api = StationDocuments(store, station_client_for)
+        station_api.close = lambda: [client.http.close() for client in owned_station_clients]
+
     def classification_api(url: str, action: str):
         row = store.add_classification_override(url, action)
         if row is not None and cfg is not None:
@@ -360,13 +382,15 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
 
     for p in range(port, min(port + PORT_TRIES, 65536)):
         server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
-                               correction_api, classification_api, type13_api)
+                               correction_api, classification_api, type13_api, station_api)
         if server is not None:
             if p != port:
                 log.warning("port %d busy, using %d", port, p)
             return server
     if case_api is not None:
         case_api.close()
+    if station_api is not None:
+        station_api.close()
     log.warning("no free web port in %d-%d", port, port + PORT_TRIES - 1)
     return None
 
@@ -517,6 +541,8 @@ def _cmd_serve(args) -> int:
             server.server_close()
             if server.case_api is not None:
                 server.case_api.close()
+            if server.station_api is not None:
+                server.station_api.close()
         return 0
     finally:
         store.close()
@@ -913,7 +939,8 @@ def _run_watch(args, cfg: Config) -> int:
                 if port:
                     server = _start_web(
                         _browse_path(cfg).parent, _cache_dir(cfg), port, store, cfg,
-                        correction_change=browse_wake.set if browse_wake is not None else None)
+                        correction_change=browse_wake.set if browse_wake is not None else None,
+                        rik_client=client)
                 url = f"http://127.0.0.1:{server.server_port}" if server else None
                 if url:
                     notifier.page_url = url
@@ -968,6 +995,8 @@ def _run_watch(args, cfg: Config) -> int:
                 server.server_close()
                 if server.case_api is not None:
                     server.case_api.close()
+                if server.station_api is not None:
+                    server.station_api.close()
             helpers_by = time.monotonic() + HELPER_JOIN_S  # one shared deadline for all helpers
             for t in threads:  # a build in flight should finish before the store is closed
                 t.join(max(0.0, helpers_by - time.monotonic()))

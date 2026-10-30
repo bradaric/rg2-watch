@@ -688,6 +688,14 @@ class Store:
                 (parent, municipality_id)).fetchall()
         return {r["station_no"]: r["station_id"] for r in rows}
 
+    def station_document_urls(self, parent: str, station_key: str) -> set[str]:
+        """Every document URL ever stored for one station, including replaced/removed versions."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT url FROM documents WHERE parent=? AND station_key=?",
+                (parent, station_key)).fetchall()
+        return {row["url"] for row in rows}
+
     def add_finding(self, parent: str, f: Finding, document_url: str) -> bool:
         with self._lock, self._db:
             row = self._db.execute("SELECT id FROM documents WHERE url=?",

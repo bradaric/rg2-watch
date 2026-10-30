@@ -1121,6 +1121,15 @@ def test_forms_and_results_share_the_url_municipality_context():
     assert "redraw();" in html
 
 
+def test_forms_rows_offer_live_rik_station_document_check_in_a_modal():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<dialog id="rikstationdlg"' in html
+    assert 'button.textContent = "Station docs"' in html
+    assert 'fetch("/rik-station?url=" + encodeURIComponent(row.u)' in html
+    assert 'item.stored ? "Stored locally" : "Missing locally"' in html
+
+
 def test_municipal_unknown_municipality_gets_no_list_totals():
     s = store()
     two_ballots(s)

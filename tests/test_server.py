@@ -79,6 +79,25 @@ def test_classification_endpoint_is_guarded_and_exact(tmp_path):
         server.server_close()
 
 
+def test_live_rik_station_endpoint_is_same_origin_and_exact(tmp_path):
+    calls = []
+    server = start_server(tmp_path, tmp_path, 0,
+                          station_api=lambda url: calls.append(url) or {"documents": [], "missing": 0})
+    try:
+        headers = {"Sec-Fetch-Site": "same-origin"}
+        status, content_type, body, _ = req(
+            server, "/rik-station?url=https%3A%2F%2Frik.example%2Fdoc.pdf", headers=headers)
+        assert status == 200 and content_type == "application/json"
+        assert json.loads(body) == {"documents": [], "missing": 0}
+        assert calls == ["https://rik.example/doc.pdf"]
+        assert req(server, "/rik-station", headers=headers)[0] == 400
+        assert req(server, "/rik-station?url=x&url=y", headers=headers)[0] == 400
+        assert req(server, "/rik-station?url=x", headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_serves_allow_listed_files(srv):
     s, ct, body, r = req(srv, "/")
     assert s == 200 and body == b"<html>page</html>" and ct.startswith("text/html")
