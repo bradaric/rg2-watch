@@ -1887,7 +1887,7 @@ function setHeroMunicipality(value, picked = true) {
   heroPicked = picked;
 }
 function setSharedMunicipality(value) {
-  if (T && T.scope === "council") { $("council").value = value; setHeroMunicipality(value, true); redraw(); return; }
+  if (T && T.scope === "council") { $("council").value = value; redraw(); return; }
   $("m").value = value;
   setHeroMunicipality($("m").value, true);
   redraw();

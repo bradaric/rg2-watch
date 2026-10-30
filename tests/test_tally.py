@@ -1178,6 +1178,12 @@ def test_forms_and_results_share_the_url_municipality_context():
     assert "redraw();" in html
 
 
+def test_council_result_selector_leaves_change_detection_to_redraw():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'if (T && T.scope === "council") { $("council").value = value; redraw(); return; }' in html
+
+
 def test_operator_council_results_label_coverage_as_station_council_combinations():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
