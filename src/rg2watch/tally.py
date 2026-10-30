@@ -6,6 +6,7 @@ import logging
 from collections import Counter
 from datetime import datetime, timezone
 
+from .analysis_selection import preferred_analyses
 from .config import Config
 from .models import DOC_TYPES, Doc
 from .names import to_cyrillic
@@ -377,7 +378,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     by_doc: dict[int, dict[str, object]] = {}
     for a in arows:
         by_doc.setdefault(a["document_id"], {})[a["model"]] = a
-    classification_ids = [models[model]["id"] for models in by_doc.values() if model in models]
+    selected_by_doc = preferred_analyses(arows, model, "v")
+    classification_ids = [analysis["id"] for analysis in selected_by_doc.values()]
     classification_reports = (store.analysis_reports(classification_ids)
                               if report_json is None else report_json)
     classification_overrides = store.latest_classification_overrides(parent)
@@ -388,7 +390,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             return "rg2"
         if override == "quarantine_rg7":
             return "rg7"
-        a = by_doc.get(d["id"], {}).get(model)
+        a = selected_by_doc.get(d["id"])
         if a is None:
             return None
         if a["prompt_version"] != PROMPT_VERSION:
@@ -430,7 +432,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             starts = round_starts.setdefault(d["station_key"], {})
             starts[d["doc_type"]] = min(starts.get(d["doc_type"], at), at)
 
-    decision_reports = store.decision_round_reports(parent, model, DECISION_PROMPT_VERSION)
+    decision_reports = store.decision_round_reports(
+        parent, model, DECISION_PROMPT_VERSION, fallback=True)
     decision_docs = []
     reports_by_decision = {}
     for source, report in decision_reports:
@@ -469,7 +472,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                                    and selected_types.get(d["station_key"]) in (10, 15, 16)
                                    and bound_repeat_type(d) is not None
                                    and bound_repeat_type(d) != selected_types[d["station_key"]]]
-    for row, rep in store.rg7_reports(parent, model, RG7_PROMPT_VERSION, analysed_only=False):
+    for row, rep in store.rg7_reports(
+            parent, model, RG7_PROMPT_VERSION, analysed_only=False, fallback=True):
         station_key = row["station_key"]
         selected_type = selected_types.get(station_key)
         repeat_target = rg7_group(row["doc_type"], rep) == "repeat"
@@ -491,15 +495,17 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     latest_operator = {r["url"]: r for r in store.latest_operator_corrections(parent)}
     operator_states = {}
     if latest_operator:
-        service = OperatorCorrections(store, cfg, model,
-                                      expected_rows_cache=expected_rows_cache)
+        services = {}
         for d in mains:
             if d["url"] not in latest_operator:
                 continue
-            source = by_doc.get(d["id"], {}).get(model)
+            source = selected_by_doc.get(d["id"])
             if source is None or not source["prompt_version"].startswith("v"):
                 continue
             try:
+                source_model = source["model"]
+                service = services.setdefault(source_model, OperatorCorrections(
+                    store, cfg, source_model, expected_rows_cache=expected_rows_cache))
                 operator_states[d["id"]] = service.state(d["url"])
             except Exception:
                 log.warning("operator correction state of %s could not be read", d["url"], exc_info=True)
@@ -515,8 +521,10 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         return parts[0] if len(parts) == 1 else tuple(parts)
 
     docobj = {d["id"]: _doc(d) for d in mains}
+    selected_ids = {a["id"] for a in selected_by_doc.values()}
     need = [a["id"] for d in mains for m, a in by_doc.get(d["id"], {}).items()
-            if key_of(a) not in cache and (m == model or a["prompt_version"] == PROMPT_VERSION)]
+            if key_of(a) not in cache
+            and (a["id"] in selected_ids or a["prompt_version"] == PROMPT_VERSION)]
     reports = ({**classification_reports, **store.analysis_reports(need)}
                if report_json is None else report_json)
 
@@ -543,13 +551,16 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             continue
         muni_sources.setdefault(muni, []).append(d["municipality"])
         got = by_doc.get(d["id"], {})
-        mine = ex_of(got[model]) if model in got else None
+        source = selected_by_doc.get(d["id"])
+        mine = ex_of(source) if source is not None else None
         if mine is None:
             unanalysed[muni] = unanalysed.get(muni, 0) + 1
             continue
-        others = {m: e for m, a in got.items() if m != model and a["prompt_version"] == PROMPT_VERSION
-                  and (e := ex_of(a)) is not None}
+        source_model = source["model"]
+        others = {m: e for m, a in got.items() if m != source_model and a["prompt_version"] == PROMPT_VERSION
+                   and (e := ex_of(a)) is not None}
         forms.append({"d": d, "muni": muni, "ex": mine, "others": others,
+                       "source_model": source_model,
                        "held": d["id"] in held_ids,
                        "annulled": annulled.get(d["station_key"]),
                        "undetermined": undetermined.get(d["station_key"]),
@@ -613,9 +624,11 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
         f["annulment"] = decision_result(f["annulled"])
         f["undetermined_result"] = decision_result(f["undetermined"])
         f["rows"] = rows_of[f["muni"]]
-        dis, note = disagreements(f["ex"], f["others"], model)
+        dis, note = disagreements(f["ex"], f["others"], f["source_model"])
         f["why"] = reasons(f["ex"], dis, f["rows"])
-        fdis, _ = disagreements(as_filed(f["ex"]), {m: as_filed(e) for m, e in f["others"].items()}, model)
+        fdis, _ = disagreements(as_filed(f["ex"]),
+                                {m: as_filed(e) for m, e in f["others"].items()},
+                                f["source_model"])
         f["why_f"] = reasons(as_filed(f["ex"]), fdis, f["rows"])
         if f["annulled"] is not None:
             f["why"].append("annulled by RG-9")

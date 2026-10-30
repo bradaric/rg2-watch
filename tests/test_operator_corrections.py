@@ -93,6 +93,22 @@ def test_legacy_operator_correction_survives_prompt_upgrade(monkeypatch, tmp_pat
     assert row["rec"]["result"]["corrected"] == {"included": True, "reason": None}
 
 
+def test_operator_correction_survives_primary_model_change(tmp_path):
+    s = analysed_store()
+    old_cfg = Config(model=MODEL, tally_scope={P: "national"})
+    service = OperatorCorrections(s, old_cfg, MODEL)
+    state = service.state(URL)
+    service.save(URL, snapshot(registered=900), "audited correction", state["source_token"])
+
+    new_model = "openai/gpt-6.1-terra#none"
+    new_cfg = Config(model="opencode:" + new_model, tally_scope={P: "national"})
+    tally = build_tally(s, new_cfg, P, new_model)
+    row = build_data(s, tmp_path, cfg=new_cfg)["rows"][0]
+
+    assert tally["overall"]["all"]["registered"] == 900
+    assert row["oc"]["status"] == "active"
+
+
 def test_operator_correction_rejects_rg2_superseded_by_repeat_round():
     s = analysed_store()
     repeat = doc(BASE + "/extfile/repeat.pdf", dt=15, up="2026-10-20T20:15")

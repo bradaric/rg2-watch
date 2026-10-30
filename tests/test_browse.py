@@ -183,6 +183,45 @@ def test_successful_legacy_analysis_displays_as_rg2_without_reanalysis(tmp_path)
     assert 'analysis " + ({done: "complete"' in html
 
 
+def test_model_change_uses_completed_analysis_as_read_fallback(tmp_path):
+    s = store()
+    d = doc(BASE + "/e/haiku-complete.pdf")
+    add(s, d)
+    old_model = "claude-haiku-5-5"
+    s.save_analysis(d.url, AnalysisResult(clean_report(), 0, 0, 0, old_model, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs",
+               cfg=Config(model="opencode:openai/gpt-6.1-terra#none"))
+
+    (row,) = rows_of(out)
+    assert row["classification"]["status"] == "confirmed_rg2"
+    assert row["analysis_model"] == old_model
+    data = json.loads((out.parent / "data.json").read_text())
+    assert data["tally"]["overall"]["counted"] == 1
+
+
+def test_configured_model_wins_over_completed_fallback(tmp_path):
+    s = store()
+    d = doc(BASE + "/e/two-models.pdf")
+    add(s, d)
+    s.save_analysis(d.url, AnalysisResult(clean_report(), 0, 0, 0, "claude-haiku-5-5", "stop"),
+                    PROMPT_VERSION, parent=P)
+    terra = clean_report()
+    terra["document_classification"] = {"kind": "other", "evidence": "not polling minutes"}
+    preferred = "openai/gpt-6.1-terra#none"
+    s.save_analysis(d.url, AnalysisResult(terra, 0, 0, 0, preferred, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs", cfg=Config(model="opencode:" + preferred))
+
+    (row,) = rows_of(out)
+    assert row["classification"]["status"] == "quarantined_other"
+    assert row["analysis_model"] == preferred
+
+
 def test_result_inclusion_analysis_status_filter_and_models_column_are_present():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 

@@ -268,6 +268,24 @@ def test_repeat_slot_decision_classified_original_excludes_original_rg2(decision
     assert "original voting minutes" in result["station_results"][0][field]["target_evidence"]
 
 
+def test_model_change_keeps_completed_decision_round_read():
+    s = store()
+    form(s, 111, clean_report())
+    decision = doc(BASE + "/e/misfiled-model-change.pdf", muni="Alpha", no="111",
+                   dt=28, up="2026-10-26T04:04")
+    add(s, decision)
+    s.save_analysis(decision.url, AnalysisResult({
+        "target_round": "original",
+        "target_evidence": "The decision concerns the original voting minutes.",
+    }, 0, 0, 0.0, M, "stop"), "d1", parent=P)
+
+    result = build_tally(s, Config(tally_scope={P: "national"}), P,
+                         "openai/gpt-6.1-terra#none", include_station_results=True)
+
+    assert result["overall"]["annulled"] == 1
+    assert result["station_results"][0]["annulled"]["target_round"] == "original"
+
+
 def test_first_round_decision_gets_no_repeat_round_warning():
     s = store()
     form(s, 12, clean_report())
@@ -486,12 +504,12 @@ def test_disagreement_unit_fields_and_list_rows():
     assert disagreements(mine, {"b": blind}, "a") == ([], ["b could not read voted"])
 
 
-def test_forms_without_watch_model_analysis_are_not_counted():
+def test_forms_use_other_completed_model_when_watch_model_has_no_analysis():
     s = store()
     form(s, 12, clean_report(), model="someone-else")
     form(s, 13)
     t = tally(s)
-    assert t["overall"]["counted"] == 0 and t["overall"]["unanalysed"] == 2
+    assert t["overall"]["counted"] == 1 and t["overall"]["unanalysed"] == 1
 
 
 def test_removed_form_is_left_out():
