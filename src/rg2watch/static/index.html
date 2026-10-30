@@ -1490,9 +1490,9 @@ function initTable() {
     data: rows, deferRender: true, pageLength: 100, lengthMenu: [50, 100, 250, 500],
     order: [[6, "desc"], [4, "desc"]], stateSave: true, stateDuration: 0,
     layout: {topStart: "pageLength", topEnd: () => { const legend = $("legendbox"); legend.hidden = false; return legend; }, bottomStart: "info", bottomEnd: "paging"},
-    stateSaveParams: (s, d) => { d.rg = readCtl(); d.rgColumns = 3; },
+    stateSaveParams: (s, d) => { d.rg = readCtl(); d.rgColumns = 4; },
     stateLoadParams: (s, d) => {
-      if (d.rgColumns !== 3) delete d.columns;  // reset once: Result inclusion added; Models hidden
+      if (d.rgColumns !== 4) delete d.columns;  // reset once: Local PDF and RIK merged
       if (!location.hash.slice(1) && d.rg) setCtl(d.rg);
     },
     columns: [
@@ -1520,10 +1520,15 @@ function initTable() {
         display: (d, t, r) => verdictHtml(rvOf(r)) + (olderEsc(r).length && (rvOf(r) || {}).v !== "escalate"
           ? '<span class="rv rv-escalate rv-older">older escalated</span>' : "")}},
       {data: "mods", title: "Models", visible: false, className: "models", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
-      {data: "pdf", title: "Local PDF", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},
-       createdCell: (td, d, r) => { const h = localHref(r.pdf); if (h) td.append(link("Local PDF", h)); }},
-      {data: "rik", title: "RIK", className: "nw", render: {_: d => d ? 1 : 0, display: () => ""},
-       createdCell: (td, d, r) => { const h = rikHref(r.rik); if (h) td.append(link("PDF", h), " "); td.append(stationDocumentsButton(r)); }}]
+      {data: null, title: "Documents", className: "nw", render: {
+         _: (d, t, r) => (r.pdf ? 2 : 0) + (r.rik ? 1 : 0), display: () => ""},
+       createdCell: (td, d, r) => {
+         const local = localHref(r.pdf), rik = rikHref(r.rik), links = mk("div", null, "documentlinks");
+         if (local) links.append(link("Local PDF", local));
+         if (rik) { if (local) links.append(" · "); links.append(link("RIK PDF", rik)); }
+         if (local || rik) td.append(links);
+         td.append(stationDocumentsButton(r));
+       }}]
   });
   const box = $("cols");  // column visibility toggles (saved with the table state)
   table.columns().every(function (i) {

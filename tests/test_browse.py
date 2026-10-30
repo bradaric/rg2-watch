@@ -244,7 +244,7 @@ def test_result_inclusion_analysis_status_filter_and_models_column_are_present()
     assert '(!sel("ast") || r.ast === sel("ast"))' in html
     assert 'title: "Result inclusion"' in html
     assert 'data: "mods", title: "Models", visible: false' in html
-    assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
+    assert "d.rgColumns = 4" in html and "d.rgColumns !== 4" in html
 
 
 def test_result_inclusion_filter_uses_the_same_five_states_as_the_column():
@@ -264,6 +264,19 @@ assert.equal(resultInclusionStatus(result(null, null)), "not-in-tally");
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert 'ri === "excluded-filed" ? r.rec.result.filed.included === false' in html
+
+
+def test_local_and_rik_links_share_one_documents_column():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    columns = html[html.index("columns: ["):html.index("]\n  });", html.index("columns: ["))]
+
+    assert 'title: "Documents"' in columns
+    assert 'title: "Local PDF"' not in columns
+    assert 'title: "RIK"' not in columns
+    assert 'link("Local PDF", local)' in columns
+    assert 'link("RIK PDF", rik)' in columns
+    assert 'stationDocumentsButton(r)' in columns
+    assert '"documentlinks"' in columns
 
 
 def test_document_type_and_decision_status_filters_are_in_their_workflow_sections():
