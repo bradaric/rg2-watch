@@ -15,7 +15,8 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
-from .analyze import AnalysisError, OllamaUnavailable, analyze_document, is_ollama, stored_model
+from .analyze import (AnalysisError, OllamaUnavailable, analyze_document, is_ollama, is_opencode,
+                      parse_opencode_model, stored_model)
 from .batch import ARITHMETIC_PROMPT_VERSION, ADHOC, describe_estimate, run_batch, select_forms
 from .browse import (build_page, copy_static, default_parent, record_review, review_record,
                      reviews_payload, write_status)
@@ -28,6 +29,7 @@ from .findings import findings_for
 from .models import Doc, Event, Finding
 from .names import MunicipalityError, resolve_municipalities
 from .notify import Notifier
+from .opencode_client import OpenCodeClient, OpenCodeError
 from .official_results import OfficialResultsClient, write_official_results
 from .operator_corrections import OperatorCorrections, Type13Corrections
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
@@ -100,11 +102,11 @@ def _parser() -> argparse.ArgumentParser:
                    "default 8770; 0 = off)")
     mode = s.add_mutually_exclusive_group()
     mode.add_argument("--analyze", action="store_true",
-                      help="analyse new RG-2 forms with Claude (paid API; also config "
-                           "analysis_enabled = true)")
+                       help="analyse new RG-2 forms with the configured vision model (also config "
+                            "analysis_enabled = true)")
     mode.add_argument("--no-analyze", action="store_true",
                       help="do not analyse, even if the config enables it")
-    s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
+    s.add_argument("--model", help="override config model (including ollama: or opencode: selectors)")
     s.add_argument("--analyze-backlog", action="store_true",
                    help="with analysis on, also analyse forms seen before analysis was enabled")
     s.add_argument("--no-ntfy", action="store_true",
@@ -126,7 +128,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--arithmetic-only", action="store_true",
                    help="batch: targeted second read of A1-A3 result numbers only")
     s.add_argument("--json", action="store_true", help="print report and findings as JSON")
-    s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
+    s.add_argument("--model", help="override config model (including ollama: or opencode: selectors)")
     s.add_argument("--doc-type", choices=["rg2", "rg7"], default="rg2",
                    help="single-file mode: rg7 reads a correction decision (default rg2)")
 
@@ -135,7 +137,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--labels", type=Path, required=True, help="labels JSONL (tests/golden/labels.jsonl)")
     s.add_argument("--pdf-dir", type=Path, required=True, help="directory holding the labelled PDFs")
     s.add_argument("--limit", type=_positive_int, help="only the first N labelled forms (N >= 1)")
-    s.add_argument("--model", help="override config model (ollama:<name> for a local model)")
+    s.add_argument("--model", help="override config model (including ollama: or opencode: selectors)")
     s.add_argument("--cached", action="store_true",
                    help="use stored analyses only; never calls the API")
     s.add_argument("--yes", action="store_true", help="confirm the estimated API spend")
@@ -266,14 +268,23 @@ def _notifier_http() -> httpx.Client:
 
 
 def _analysis_client(cfg: Config):
-    """(client, None) for cfg.model's backend: an httpx client for ollama:, else Anthropic.
+    """(client, None) for cfg.model's backend: Ollama, OpenCode, or Anthropic.
     (None, reason) when the model has no known price: spend could not be tracked."""
     try:
         model_prices(cfg)
+        if is_opencode(cfg.model):
+            parse_opencode_model(cfg.model)
     except UnknownPrice as exc:
+        return None, str(exc)
+    except ValueError as exc:
         return None, str(exc)
     if is_ollama(cfg.model):
         return httpx.Client(), None
+    if is_opencode(cfg.model):
+        try:
+            return OpenCodeClient.from_service(), None
+        except OpenCodeError as exc:
+            return None, str(exc)
     return _anthropic_client()
 
 
@@ -722,7 +733,7 @@ class _UntilDone:
         if self.remaining and now - self._progress_at >= self.stuck_after:
             paused = self.pipeline.status_snapshot()["paused"]
             self.why = (f"analysis paused: {paused[0]}" if paused else
-                        "no form analysed (Anthropic overloaded or PDF downloads failing; see the log)")
+                        "no form analysed (model backend busy or PDF downloads failing; see the log)")
             return 1
         return None
 
@@ -864,9 +875,18 @@ def _run_watch(args, cfg: Config) -> int:
                     for f in found:
                         _store_finding(store, parent, f)
 
+                separate_sonnet = (cfg.arithmetic_recheck_enabled
+                                   and (is_ollama(cfg.model) or is_opencode(cfg.model)))
+                sonnet = None
+                if separate_sonnet:
+                    sonnet, sonnet_why = _anthropic_client()
+                    if sonnet is None:
+                        log.warning("paid Sonnet arithmetic fallback unavailable: %s", sonnet_why)
+                backend_args = ({"sonnet_client": sonnet} if separate_sonnet else {})
                 pipeline = AnalysisPipeline(client, store, notifier, ai, cfg, on_findings,
-                                            _cache_dir(cfg), backlog=args.analyze_backlog,
-                                            **({"municipalities": set(only)} if only else {}))
+                                             _cache_dir(cfg), backlog=args.analyze_backlog,
+                                             **backend_args,
+                                             **({"municipalities": set(only)} if only else {}))
         on_events, deliver = _handlers(store, notifier, parent, pipeline)
         watcher = Watcher(client, store, cfg, on_events,
                           initial_safety=args.once or args.until_done,
@@ -1107,7 +1127,7 @@ def _cmd_analyze(args) -> int:
         doc = Doc("", "", path.name, "", 19 if rg7 else 6, str(path), "")
     try:
         result = analyze_document(render_tiles(path), ai, cfg, args.doc_type)
-    except (RenderError, AnalysisError, OllamaUnavailable) as exc:
+    except (RenderError, AnalysisError, OllamaUnavailable, OpenCodeError) as exc:
         cost = getattr(exc, "cost_usd", 0.0)
         if cost:
             error = str(exc)[:200]

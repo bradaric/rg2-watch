@@ -22,7 +22,7 @@ class UnknownPrice(ValueError):
 
 def table_prices(model: str) -> tuple[float, float] | None:
     """Built-in price of a model (dated names like claude-haiku-5-5-2026... match), else None."""
-    if model.startswith("ollama:"):
+    if model.startswith(("ollama:", "opencode:")):
         return (0.0, 0.0)
     for name, price in PRICES.items():
         if model == name or model.startswith(name + "-"):

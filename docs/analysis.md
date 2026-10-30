@@ -20,16 +20,17 @@ enabled for that election, queue them with `rg2watch requeue --skipped`. With `-
 the baseline pass are seen after enabling and are analysed.
 
 While analysis is on, every newly published RG-2 (and repeat-vote RG-2: types 6/10/15/16) is
-downloaded through the same rate limiter, rendered into page tiles and checked by Claude vision for
+downloaded through the same rate limiter, rendered into page tiles and checked by the configured
+vision model for
 corrections, missing signatures, a different pen/hand in the results block, arithmetic errors and
 procedural flags. This happens in background worker threads (`analysis_workers`, default 4), so the
 watcher keeps sweeping. Findings (rules V*, P*, A*) are stored and alerted like the D-rule findings.
 Documents that cannot be processed give a LOW `D3` (not a PDF / unreadable), a LOW `X1` (model
 refused) or, after 3 failed attempts with 60 s / 120 s backoff (e.g. output that is not valid
-JSON), a LOW `X2`. When Anthropic is busy after the SDK's own retries (429, 5xx, 529 overloaded,
+JSON), a LOW `X2`. When the model backend is busy after its own retries (429, 5xx, 529 overloaded,
 connection errors or timeouts, also when they arrive mid-stream), the form is retried after 120 s
 without using an attempt; after 5 such failures in a row you get one "[rg2-watch] analysis delayed:
-Anthropic overloaded since HH:MM" alert and one "[rg2-watch] analysis no longer delayed" when a form
+backend overloaded since HH:MM" alert and one "[rg2-watch] analysis no longer delayed" when a form
 goes through again. Each document URL is analysed once; a replaced file is a new URL and is
 analysed again.
 
@@ -120,7 +121,7 @@ In both cases every other value must agree and the candidate must make A1-A3 rec
 Otherwise the original report remains flagged for manual review. Raw reads and promotion provenance
 are retained. Sonnet calls count against the election's `max_spend_usd`; when the cap is reached the
 form remains for manual review. Recheck workers are separate from primary analysis workers, so slow
-Ollama reads do not hold up Haiku.
+Ollama reads do not hold up the primary model.
 
 It prints the number of forms, how many are already analysed by this model and prompt version
 (cached: rules are re-applied for free) and an estimate for the rest. A paid model needs `--yes`;
@@ -137,6 +138,15 @@ sends the same tiles, prompt and JSON schema to a local Ollama (`ollama_url`, `o
 `ollama_timeout_s`; defaults `http://localhost:11434`, 65536, 900). No API key is needed, nothing is
 billed (cost 0), and `eval` needs no `--yes`. The model must support vision. If Ollama is down or
 times out the form is deferred like an Anthropic overload, without using an attempt.
+
+## OpenCode models
+
+`model = "opencode:<provider>/<model>#<variant>"` uses the running shared OpenCode service and its
+configured provider authentication. The default selector is
+`opencode:openai/gpt-6.1-terra#none`; Luna is `opencode:openai/gpt-6-luna#none`. Each form uses a
+temporary tool-free `rg2-analyzer` session with JPEG attachments; the session is deleted after the
+response. OpenCode OAuth calls are recorded at the service-reported cost (currently $0). The local
+Bonsai and direct-Anthropic Sonnet arithmetic passes remain separate from this primary backend.
 
 Stored analyses are kept per (document, model, prompt version): `eval --cached` only reuses reports
 from the same model and prompt version, so Claude and local runs can share one DB and be compared

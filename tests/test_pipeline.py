@@ -274,6 +274,38 @@ def test_unresolved_local_arithmetic_spills_to_sonnet(tmp_path, monkeypatch):
     assert sonnet_prices == [(None, None)]  # use Sonnet's built-in rates, not primary overrides
 
 
+def test_opencode_primary_keeps_separate_anthropic_sonnet_client(tmp_path, monkeypatch):
+    from rg2watch.analyze import AnalysisResult
+    from rg2watch import pipeline
+
+    primary = clean_report()
+    primary["numbers"]["ballots_in_box"] = nf(799)
+    local = arithmetic_read(primary)
+    sonnet = arithmetic_read(primary)
+    sonnet["ballots_in_box"]["value"] = 800
+    primary_client, sonnet_client = object(), object()
+    e = Env(tmp_path, resp(primary), model="opencode:openai/gpt-6.1-terra#none",
+            price_in_per_mtok=None, price_out_per_mtok=None, arithmetic_recheck_enabled=True)
+    e.pipe = AnalysisPipeline(e.rik, e.store, e.notifier, primary_client, e.cfg, e.on_findings,
+                              tmp_path / "cache", clock=e.clock, sonnet_client=sonnet_client)
+    seen = []
+
+    def analyze(tiles, client, cfg, kind="rg2"):
+        seen.append((kind, client, cfg.model))
+        report = primary if kind == "rg2" else local if cfg.model.startswith("ollama:") else sonnet
+        return AnalysisResult(report, 0, 0, 0.0, cfg.model, "stop")
+
+    monkeypatch.setattr(pipeline, "analyze_document", analyze)
+    d = doc()
+    e.publish(d)
+    e.drain()
+    e.pipe.process_arithmetic_next("local")
+    e.pipe.process_arithmetic_next("sonnet")
+
+    assert seen[0][1] is primary_client
+    assert seen[-1] == ("arithmetic", sonnet_client, "claude-sonnet-5-5")
+
+
 def test_sonnet_promotes_three_changes_but_local_still_requires_one(tmp_path, monkeypatch):
     from rg2watch.analyze import AnalysisResult
     from rg2watch import pipeline

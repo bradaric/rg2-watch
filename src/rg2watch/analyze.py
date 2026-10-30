@@ -9,6 +9,7 @@ import httpx
 import logging
 
 from rg2watch.config import Config, model_prices, table_prices
+from rg2watch.opencode_client import OpenCodeClient
 from rg2watch.render import Tile
 
 log = logging.getLogger(__name__)
@@ -37,15 +38,41 @@ class OllamaUnavailable(Exception):
 
 
 OLLAMA_PREFIX = "ollama:"
+OPENCODE_PREFIX = "opencode:"
 
 
 def is_ollama(model: str) -> bool:
     return model.startswith(OLLAMA_PREFIX)
 
 
+def is_opencode(model: str) -> bool:
+    return model.startswith(OPENCODE_PREFIX)
+
+
+def parse_opencode_model(model: str) -> tuple[str, str, str]:
+    """Return provider, model and variant from opencode:provider/model#variant."""
+    if not is_opencode(model):
+        raise ValueError(f"not an opencode model: {model!r}")
+    selector = model[len(OPENCODE_PREFIX):]
+    try:
+        provider, rest = selector.split("/", 1)
+        name, variant = rest.rsplit("#", 1)
+    except ValueError:
+        raise ValueError(
+            "opencode model must be opencode:<provider>/<model>#<variant>") from None
+    if not provider or not name or not variant:
+        raise ValueError("opencode model provider, model and variant must not be empty")
+    return provider, name, variant
+
+
 def stored_model(model: str) -> str:
-    """Name under which analyses of cfg.model are stored (the Ollama name for ollama: models)."""
-    return model[len(OLLAMA_PREFIX):] if is_ollama(model) else model
+    """Name under which analyses are stored, without a local backend prefix."""
+    if is_ollama(model):
+        return model[len(OLLAMA_PREFIX):]
+    if is_opencode(model):
+        parse_opencode_model(model)  # reject malformed selectors before a cache lookup
+        return model[len(OPENCODE_PREFIX):]
+    return model
 
 
 def _obj(props: dict) -> dict:
@@ -484,6 +511,32 @@ def analyze_document(tiles: list[Tile], client, cfg: Config, kind: str = "rg2") 
     if is_ollama(cfg.model):
         return analyze_ollama(tiles, client, cfg, kind)
     schema, _, prompt, normalise = _kind(kind)
+    if is_opencode(cfg.model):
+        if not isinstance(client, OpenCodeClient):
+            raise TypeError("OpenCode models require an OpenCodeClient")
+        provider, model, variant = parse_opencode_model(cfg.model)
+        message = client.analyze(tiles, prompt, schema, provider, model, variant)
+        tokens = message.get("tokens") or {}
+        cache = tokens.get("cache") or {}
+        tin = ((tokens.get("input") or 0) + (cache.get("read") or 0)
+               + (cache.get("write") or 0))
+        tout = tokens.get("output") or 0
+        cost = float(message.get("cost") or 0.0)
+        finish = message.get("finish") or "unknown"
+        if finish != "stop":
+            raise AnalysisError(f"OpenCode response did not finish normally: {finish}",
+                                tin, tout, cost)
+        text = "".join(part.get("text", "") for part in message.get("content", [])
+                       if part.get("type") == "text")
+        try:
+            report = _parse_report(text, kind)
+        except ValueError as exc:
+            raise AnalysisError(f"response is not valid JSON for the schema: {exc}",
+                                tin, tout, cost) from exc
+        except (TypeError, KeyError, AttributeError) as exc:
+            raise AnalysisError(f"response does not match schema: {exc!r}",
+                                tin, tout, cost) from exc
+        return AnalysisResult(report, tin, tout, cost, stored_model(cfg.model), finish)
     messages = [{"role": "user", "content": _content(tiles, prompt)}]
     extra = {"betas": [FALLBACK_BETA], "fallbacks": "default"} if cfg.fallbacks else {}
     tin = tout = 0

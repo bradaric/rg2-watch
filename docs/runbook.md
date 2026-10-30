@@ -35,15 +35,16 @@ change the file or environment variable.
 ## 1. Days before
 
 - [ ] `uv sync`, then `uv run pytest -q` - all pass.
-- [ ] Anthropic credit: enough for the election (section 6), plus margin.
+- [ ] OpenCode service and provider OAuth are working; Anthropic credit is available for Sonnet
+      arithmetic fallback.
 - [ ] ntfy: install the ntfy phone app, subscribe to an unguessable topic (the topic name is the
       only secret). Add `RG2W_NTFY_TOPIC=<topic>` to `.env`. Test it:
       `curl -d "rg2-watch test" https://ntfy.sh/<topic>` - the phone must buzz.
 - [ ] Config: `cp rg2watch.example.toml rg2watch.toml` and set:
 
-      model = "claude-haiku-5-5"       # or claude-sonnet-5-5 / claude-opus-5-5 / ollama:<name>
-      # prices come from a built-in table by model (Haiku 0.10/0.50, Sonnet 2/10, Opus 4/20 USD per
-      # MTok, local 0/0); set price_in_per_mtok/price_out_per_mtok only to override it, or for a
+      model = "opencode:openai/gpt-6.1-terra#none"  # Luna: gpt-6-luna#none; or claude-haiku-5-5
+      # prices come from a built-in table by model (OpenCode OAuth and local models 0/0,
+      # Haiku 0.10/0.50, Sonnet 2/10, Opus 4/20 USD per MTok); set overrides only for a
       # model outside the table (which is refused without them)
       max_spend_usd = 60.0             # per election; a parliamentary election is ~$40 on Haiku
       watchlist = []                   # municipalities/stations to check first (priority, not a filter)

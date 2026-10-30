@@ -17,6 +17,7 @@ from .evaluate import TOKENS_PER_TILE, count_tiles, usd_for
 from .fetch import fetch_pdf
 from .models import Doc
 from .names import resolve_municipalities
+from .opencode_client import OpenCodeBadRequest, OpenCodeError
 from .pipeline import BAD_REQUEST_GLOBAL, DOWNLOAD_BLOCKED_PAUSE_AFTER, GLOBAL_ERRORS, PROMPT_VERSION, _is_overload, _short
 from .render import RenderError, render_tiles
 from .rik_client import RikBlocked, RikClient, RikError
@@ -198,7 +199,7 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
                     blocked += 1
                     if blocked >= DOWNLOAD_BLOCKED_PAUSE_AFTER:
                         res["stopped"] = f"RIK blocked {blocked} downloads in a row: {_short(exc)}"
-                elif isinstance(exc, anthropic.BadRequestError):
+                elif isinstance(exc, (anthropic.BadRequestError, OpenCodeBadRequest)):
                     bad += 1
                     if bad >= BAD_REQUEST_GLOBAL:
                         res["stopped"] = f"{bad} forms in a row rejected as bad requests: {_short(exc)}"
@@ -216,7 +217,7 @@ def run_batch(docs: list[Doc], store: Store, rik: RikClient, ai, cfg: Config, ca
                     _sleep(BACKOFF_S[attempt])
                     continue
                 if not isinstance(exc, (RikError, httpx.HTTPError, RenderError, AnalysisError,
-                                        OllamaUnavailable)) and not _is_overload(exc):
+                                        OllamaUnavailable, OpenCodeError)) and not _is_overload(exc):
                     log.exception("analysis of %s failed", doc.url)
                 res["failed"] += 1
                 print(f"{label} | {model} | skipped: {_short(exc)}", file=err)
