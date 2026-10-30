@@ -50,7 +50,8 @@ def _iso(stamp: str) -> str:
         return raw
 
 
-def _parse_extfile(blob: str, municipality: str, station_no: str, station_name: str, base_url: str):
+def _parse_extfile(blob: str, municipality: str, station_no: str, station_name: str,
+                   base_url: str, minority: str | None = None):
     labels = [(m.start(), _norm(m.group(1))) for m in _LABEL.finditer(blob)]
     links = list(_LINK.finditer(blob))
     hrefs = len(_HREF.findall(blob))
@@ -69,6 +70,7 @@ def _parse_extfile(blob: str, municipality: str, station_no: str, station_name: 
             doc_type=LABEL_TO_TYPE.get(label),
             url=urljoin(base_url, _html.unescape(m.group(2))),
             uploaded_at=_iso(m.group(3)),
+            minority=minority,
         )
 
 
@@ -83,6 +85,7 @@ def parse_listing(payload: dict, base_url: str) -> ListingPage:
                 str(rec["election_station_number"]),
                 rec.get("election_station_name", ""),
                 base_url,
+                rec.get("minority") or None,
             ))
     pages = [int(n) for n in _PAGE.findall(payload.get("pagination", ""))]
     max_page = max(pages) if pages else (1 if records else 0)

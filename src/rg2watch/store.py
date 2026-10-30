@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS elections(
     parent TEXT PRIMARY KEY, round TEXT, election_type TEXT, title TEXT, url TEXT);
 CREATE TABLE IF NOT EXISTS documents(
     id INTEGER PRIMARY KEY, parent TEXT NOT NULL, municipality TEXT, station_no TEXT,
-    station_name TEXT, station_key TEXT, doc_type INTEGER, label TEXT,
+    station_name TEXT, station_key TEXT, minority TEXT, doc_type INTEGER, label TEXT,
     url TEXT NOT NULL UNIQUE, uploaded_at TEXT, first_seen_at TEXT,
     sha256 TEXT, status TEXT DEFAULT 'new', active INTEGER DEFAULT 1,
     analysis_status TEXT, analysis_attempts INTEGER DEFAULT 0, analysis_next_at REAL,
@@ -139,7 +139,7 @@ def _previous_url(details_json: str | None) -> str | None:
 
 def _doc(row) -> Doc:
     return Doc(row["municipality"], row["station_no"], row["station_name"], row["label"],
-               row["doc_type"], row["url"], row["uploaded_at"])
+               row["doc_type"], row["url"], row["uploaded_at"], row["minority"])
 
 
 def _selected_rg2_urls(rows, prompt_version: str) -> set[str]:
@@ -191,6 +191,9 @@ class Store:
                 self._db.execute("UPDATE analyses SET parent=(SELECT parent FROM documents "
                                  "WHERE documents.id=analyses.document_id)")
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(documents)")}
+        if "minority" not in cols:
+            with self._db:
+                self._db.execute("ALTER TABLE documents ADD COLUMN minority TEXT")
         if "analysis_status" not in cols:
             with self._db:
                 self._db.execute("ALTER TABLE documents ADD COLUMN analysis_status TEXT")
@@ -624,12 +627,12 @@ class Store:
                                                  (r["id"],))
                     self._db.execute(
                         "INSERT INTO documents(parent, municipality, station_no, station_name, "
-                        "station_key, doc_type, label, url, uploaded_at, first_seen_at, "
-                        "analysis_status) VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+                        "station_key, minority, doc_type, label, url, uploaded_at, first_seen_at, "
+                        "analysis_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
                         "ON CONFLICT(url) DO UPDATE SET active=1",
                         (parent, d.municipality, d.station_no, d.station_name, d.station_key,
-                         d.doc_type, d.label, d.url, d.uploaded_at, now,
-                          "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES else "skipped"))
+                         d.minority, d.doc_type, d.label, d.url, d.uploaded_at, now,
+                           "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES else "skipped"))
                 row = self._db.execute("SELECT id FROM documents WHERE url=?", (d.url,)).fetchone()
                 self._db.execute(
                     "INSERT INTO events(sweep_id, parent, kind, document_id, station_key, "

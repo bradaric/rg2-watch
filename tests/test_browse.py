@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import rg2watch.cli as cli
 from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.analyze import AnalysisResult
-from rg2watch.browse import STATIC, STATIC_FILES, build_page
+from rg2watch.browse import STATIC, STATIC_FILES, build_data, build_page
 from rg2watch.cli import main
 from rg2watch.config import Config
 from rg2watch.models import Doc, Election, Event, Finding
@@ -56,6 +56,17 @@ def test_groups_versions_and_states(tmp_path):
     assert by_no["1"]["doc_type"] == 6 and by_no["1"]["doc_type_label"] == "РГ-2"
     assert [v["rik"] for v in by_no["1"]["v"]] == [old.url]
     assert by_no["2"]["state"] == "removed"
+
+
+def test_form_rows_expose_nsnm_council(tmp_path):
+    s = store()
+    d = Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/extfile/nsnm.pdf",
+            "2026-10-19T20:15", "Мађарски")
+    add(s, d)
+
+    data = build_data(s, tmp_path, parent=P)
+
+    assert data["rows"][0]["council"] == "Мађарски"
 
 
 def test_form_rows_include_optional_domestic_and_foreign_settlement_labels(tmp_path):

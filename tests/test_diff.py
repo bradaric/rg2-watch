@@ -44,6 +44,13 @@ def test_two_docs_same_station_different_types_both_added():
     assert diff({}, [a, b], complete=True) == [Event("added", a), Event("added", b)]
 
 
+def test_nsnm_councils_at_same_physical_station_are_distinct():
+    a = Doc("Ада", "1", "МЗ", "lbl", 6, "https://x/a", "2026-10-19T20:15", "Мађарски")
+    b = Doc("Ада", "1", "МЗ", "lbl", 6, "https://x/b", "2026-10-19T20:15", "Ромски")
+
+    assert diff({}, [a, b], complete=True) == [Event("added", a), Event("added", b)]
+
+
 def test_unknown_labels_distinct_keys():
     a = doc("https://x/a", dt=None, label="Нешто 1")
     b = doc("https://x/b", dt=None, label="Нешто 2")

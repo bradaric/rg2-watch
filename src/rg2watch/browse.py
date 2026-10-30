@@ -235,6 +235,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         location = station_location(main["municipality"] or "", main["station_no"] or "")
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
+            council=main["minority"],
             name=main["station_name"], label=main["label"], doc_type=main["doc_type"],
             analysis_model=(selected_by_doc[main["id"]]["model"]
                             if main["id"] in selected_by_doc else None),

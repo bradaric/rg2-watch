@@ -34,35 +34,40 @@ TALLY_WARNING_TEMPLATES = {
     "empty_ballot": "no expected ballot rows - comparable list totals unavailable",
     "national_names_shape": "list_names must be a plain list for a national election",
     "municipal_names_shape": "list_names must map municipality -> names for a municipal election",
+    "council_names_shape": "list_names must map council -> names for a council election",
     "names_count": "list_names has {names} names, forms have {lists} lists - check config",
 }
 UNKNOWN_TYPE_NOTE = TALLY_WARNING_TEMPLATES["unknown_type"]
 UNKNOWN_MUNI = "(unknown)"
 UNKNOWN_MUNI_NOTE = TALLY_WARNING_TEMPLATES["unknown_municipality"]
+UNKNOWN_COUNCIL = "(unknown council)"
 EMPTY_BALLOT_NOTE = TALLY_WARNING_TEMPLATES["empty_ballot"]
 
 
 def scope_of(store: Store, cfg: Config, parent: str) -> tuple[str, str | None]:
-    """("national" | "municipal", note). Config override first, then RIK's election type
-    (2 parliamentary, 3 local); anything else (or no elections row) is municipal plus a note."""
+    """Configured/RIK tally scope and warning. Type 5 is one ballot per minority council."""
     if parent in cfg.tally_scope:
         return cfg.tally_scope[parent], None
     e = store.get_election(parent)
-    kind = {"2": "national", "3": "municipal"}.get(e.election_type if e else None)
+    kind = {"2": "national", "3": "municipal", "5": "council"}.get(
+        e.election_type if e else None)
     return (kind, None) if kind else ("municipal", UNKNOWN_TYPE_NOTE)
 
 
-def configured_names(cfg: Config, parent: str, scope: str, muni: str | None) -> tuple[list[str], str | None]:
-    """(names from list_names for the national ballot or one municipality, note on a wrong shape).
-    Municipality keys match as Latin or Cyrillic, case-insensitive."""
+def configured_names(cfg: Config, parent: str, scope: str,
+                     group: str | None) -> tuple[list[str], str | None]:
+    """Configured names for the national ballot or one municipal/council ballot group."""
     v = cfg.list_names.get(parent)
     if v is None:
+        return [], None
+    if v == []:
         return [], None
     if scope == "national":
         return (v, None) if isinstance(v, list) else ([], TALLY_WARNING_TEMPLATES["national_names_shape"])
     if isinstance(v, list):
-        return [], TALLY_WARNING_TEMPLATES["municipal_names_shape"]
-    want = to_cyrillic(muni or "")
+        key = "council_names_shape" if scope == "council" else "municipal_names_shape"
+        return [], TALLY_WARNING_TEMPLATES[key]
+    want = to_cyrillic(group or "")
     return next((n for k, n in v.items() if to_cyrillic(k) == want), []), None
 
 
@@ -544,29 +549,33 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     live = {a["id"] for a in arows} | {key_of(a) for a in arows}
     for gone in set(cache) - live:
         del cache[gone]
+    scope, scope_note = scope_of(store, cfg, parent)
+    e = store.get_election(parent)
     forms, unanalysed, muni_sources = [], {}, {}
     for d in mains:
         muni = d["municipality"] or UNKNOWN_MUNI
         if municipalities is not None and muni not in municipalities:
             continue
         muni_sources.setdefault(muni, []).append(d["municipality"])
+        council = d["minority"] or UNKNOWN_COUNCIL
+        group = council if scope == "council" else muni
         got = by_doc.get(d["id"], {})
         source = selected_by_doc.get(d["id"])
         mine = ex_of(source) if source is not None else None
         if mine is None:
-            unanalysed[muni] = unanalysed.get(muni, 0) + 1
+            unanalysed[group] = unanalysed.get(group, 0) + 1
             continue
         source_model = source["model"]
-        others = {m: e for m, a in got.items() if m != source_model and a["prompt_version"] == PROMPT_VERSION
-                   and (e := ex_of(a)) is not None}
-        forms.append({"d": d, "muni": muni, "ex": mine, "others": others,
+        others = {m: other_ex for m, a in got.items()
+                  if m != source_model and a["prompt_version"] == PROMPT_VERSION
+                  and (other_ex := ex_of(a)) is not None}
+        forms.append({"d": d, "muni": muni, "council": council, "group": group,
+                       "ex": mine, "others": others,
                        "source_model": source_model,
                        "held": d["id"] in held_ids,
                        "annulled": annulled.get(d["station_key"]),
                        "undetermined": undetermined.get(d["station_key"]),
                        "operator": operator_states.get(d["id"])})
-    scope, scope_note = scope_of(store, cfg, parent)
-    e = store.get_election(parent)
     selected_by_station = {d["station_key"]: d for d in mains if d["station_key"] is not None}
     decision_warnings = [{"id": selected_by_station[d["station_key"]]["id"],
                           "m": selected_by_station[d["station_key"]]["municipality"] or UNKNOWN_MUNI,
@@ -585,7 +594,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     national = scope == "national"
     by_muni: dict[str, list] = {}
     for f in forms:
-        by_muni.setdefault(f["muni"], []).append(f)
+        by_muni.setdefault(f["group"], []).append(f)
     if national:
         rows = expected_rows([f["ex"] for f in forms])
         rows_of = {m: rows for m in by_muni}
@@ -623,7 +632,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     for f in forms:
         f["annulment"] = decision_result(f["annulled"])
         f["undetermined_result"] = decision_result(f["undetermined"])
-        f["rows"] = rows_of[f["muni"]]
+        f["rows"] = rows_of[f["group"]]
         dis, note = disagreements(f["ex"], f["others"], f["source_model"])
         f["why"] = reasons(f["ex"], dis, f["rows"])
         fdis, _ = disagreements(as_filed(f["ex"]),
@@ -653,9 +662,15 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                      "result": {"corrected": inclusion or _result_inclusion(f["ex"], f["rows"]),
                                 "filed": inclusion or _result_inclusion(
                                     as_filed(f["ex"]), f["rows"])}}
-        notes += [{"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"], "note": n} for n in note]
-    stations = {m: n for m, n in store.station_counts(parent).items()
-                if municipalities is None or m in municipalities}
+        notes += [{"id": f["d"]["id"], "m": f["group"], "municipality": f["muni"],
+                   "no": f["d"]["station_no"], "note": n} for n in note]
+    if scope == "council":
+        stations = Counter((d["minority"] or UNKNOWN_COUNCIL) for d in mains
+                           if municipalities is None
+                           or (d["municipality"] or UNKNOWN_MUNI) in municipalities)
+    else:
+        stations = {m: n for m, n in store.station_counts(parent).items()
+                    if municipalities is None or m in municipalities}
     names = sorted({*by_muni, *unanalysed, *stations})
     nl = len(rows) if national else 0
     overall = {k: _acc(nl) for k in ("all", "cl", "fall", "fcl")}  # f*: as filed on the RG-2s
@@ -669,7 +684,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
     for name in names:
         mine = by_muni.get(name, [])
         # "(unknown)" in municipal scope may mix ballots: shared totals only, no list totals
-        mixed = not national and name == UNKNOWN_MUNI
+        mixed = ((scope == "municipal" and name == UNKNOWN_MUNI)
+                 or (scope == "council" and name == UNKNOWN_COUNCIL))
         mrows = rows if national else [] if mixed else rows_of.get(name, [])
         acc = {k: _acc(len(mrows)) for k in overall}
         pair = {k: _pair_acc(len(mrows)) for k in opair}
@@ -704,8 +720,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                     _put(acc[key], contribution)
                     _put(overall[key], contribution, None if national else contribution.keys() - {"lists"})
         row = {"m": name, "stations": stations.get(name, 0), "counted": len(mine),
-               "generated_unknown_muni": bool(muni_sources.get(name))
-               and all(not source for source in muni_sources[name]),
+                "generated_unknown_muni": bool(muni_sources.get(name))
+                and all(not source for source in muni_sources[name]),
                "corrected": sum(1 for f in mine if f["ex"]["rg7"]),
                "operator_corrected": sum(1 for f in mine if f["ex"]["operator"]),
                "clean": sum(1 for f in mine if not f["why"]),
@@ -726,7 +742,8 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
                "pair": {k: _pair_tot(p) for k, p in pair.items()}}
         if mixed:
             row.update({"nlists": 0, "names": [], "fallback_name_indices": [],
-                        "names_note": UNKNOWN_MUNI_NOTE})
+                        "names_note": (UNKNOWN_MUNI_NOTE if scope == "municipal" else
+                                       "council unknown - forms may be from different ballots, no list totals")})
             for key in acc:
                 del row[key]["lists"], row[key]["lists_valid"], row[key]["lists_ballots_in_box"]
             for p in row["pair"].values():
@@ -753,8 +770,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
             del p["f"]["lists"], p["f"]["lists_valid"], p["f"]["lists_ballots_in_box"]
     total["excluded"] = total["counted"] - total["clean"]
     total["fexcluded"] = total["counted"] - total["fclean"]
-    # top-level nlists/names/names_note describe the national ballot; in municipal scope they are
-    # empty and each municipality row carries its own
+    # Top-level names describe the national ballot; grouped scopes carry names on each row.
     top = ballot("", len(rows)) if national else {
         "nlists": 0, "names": [], "fallback_name_indices": [], "names_note": None}
 
@@ -764,6 +780,7 @@ def build_tally(store: Store, cfg: Config, parent: str, model: str,
 
     station_results = [] if not include_station_results else [
         {"id": f["d"]["id"], "m": f["muni"], "no": f["d"]["station_no"],
+         **({"council": f["council"]} if f["d"]["minority"] else {}),
          "name": f["d"]["station_name"], "source_round": RG2_ROUND_NAME[f["d"]["doc_type"]],
           **(station_location(f["muni"], f["d"]["station_no"]) or {}),
          "annulled": f["annulment"],

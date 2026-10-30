@@ -148,6 +148,27 @@ def test_removed_confirmed_by_direct_station_query():
     assert ("Alpha|4", 6) not in store.known_docs(P, Scope(doc_type=6))
 
 
+def test_removal_recheck_distinguishes_councils_at_the_same_physical_station():
+    records = [{
+        "municipality": "Alpha", "election_station_number": "1",
+        "election_station_name": "School", "number": "1.", "minority": council,
+        "_municipality_id": "101", "_docs": [doc(6, f"/extfile/101/1/{slug}.pdf")],
+    } for council, slug in (("Мађарски", "hungarian"), ("Ромски", "roma"))]
+    w, fake, store, t, batches, _ = env(records=records)
+    w.run_once()
+    batches.clear()
+    records[0]["_docs"] = []
+    t.now += 60
+    fake.request_log.clear()
+
+    w.run_once()
+
+    assert listing_reqs(fake, **{"filters[election_station_no]": "10101"})
+    assert [(e.kind, e.doc.station_key) for e in events(batches)] == [
+        ("removed", "Alpha|1|Мађарски")]
+    assert set(store.known_docs(P, Scope(doc_type=6))) == {("Alpha|1|Ромски", 6)}
+
+
 def test_shifted_page_does_not_emit_removed():
     w, fake, store, t, batches, _ = env()
     w.run_once()

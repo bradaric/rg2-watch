@@ -58,7 +58,8 @@ class StationDocuments:
         documents, seen = [], set()
         for item in remote:
             if (item.url in seen or item.municipality != source.municipality
-                    or item.station_no != source.station_no):
+                    or item.station_no != source.station_no
+                    or item.minority != source.minority):
                 continue
             seen.add(item.url)
             documents.append({
@@ -73,6 +74,7 @@ class StationDocuments:
             "municipality": source.municipality,
             "station_no": source.station_no,
             "station_name": source.station_name,
+            "minority": source.minority,
             "listing_url": f"{election.base_url.rstrip('/')}/zapisnici/{parent}",
             "documents": documents,
             "missing": sum(not item["stored"] for item in documents),

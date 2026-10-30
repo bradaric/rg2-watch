@@ -4,11 +4,17 @@ import httpx
 import pytest
 
 from rg2watch.models import Election
-from rg2watch.official_results import OfficialResultsClient, OfficialResultsError, write_official_results
+from rg2watch.official_results import (OfficialResultsClient, OfficialResultsError,
+                                       official_results_supported, write_official_results)
 
 
 ELECTION = Election("779676", "x", "3", "Записници Парламентарни избори 2026",
                     "https://rik.example")
+
+
+def test_official_results_are_only_supported_for_parliamentary_elections():
+    assert official_results_supported(Election("1", "r", "2", "Парламентарни", "https://rik"))
+    assert not official_results_supported(Election("2", "r", "5", "НСНМ", "https://rik"))
 
 
 def result_payload():

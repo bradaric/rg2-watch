@@ -7,7 +7,7 @@ from pathlib import Path
 from rg2watch.browse import STATIC
 from rg2watch.config import Config
 from rg2watch.cli import main
-from rg2watch.models import Election
+from rg2watch.models import Doc, Election
 from rg2watch.public_results import build_public_results, render_public_results, write_public_results
 from rg2watch.store import Store
 from test_browse import BASE, P, add, doc, store
@@ -56,6 +56,42 @@ def test_public_payload_has_only_sanitized_corrected_results_and_review_counts()
                     '"id"', '"reason"', '"filed"', '"rv"',
                     '"db"', '"model"', '"operator_corrected"'):
         assert private not in blob
+
+
+def test_public_council_payload_groups_ballots_and_keeps_geography_on_stations():
+    s = store()
+    s.upsert_election(Election(P, "1", "5", "Записници НСНМ", BASE))
+    docs = [
+        Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/h1.pdf", "2026-10-19T20:15", "Мађарски"),
+        Doc("Ада", "2", "Школа", "lbl", 6, BASE + "/h2.pdf", "2026-10-19T20:15", "Мађарски"),
+        Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/r1.pdf", "2026-10-19T20:15", "Ромски"),
+    ]
+    for item in docs:
+        add(s, item)
+        put(s, item, clean_report())
+
+    data = build_public_results(s, Config(model=M, list_names={P: []}), P)
+
+    assert data["scope"] == "council"
+    assert [(row["m"], row["counted"], row["names_note"]) for row in data["municipalities"]] == [
+        ("Мађарски", 2, None), ("Ромски", 1, None)]
+    assert {(row["m"], row["no"], row["council"]) for row in data["stations"]} == {
+        ("Ада", "1", "Мађарски"), ("Ада", "2", "Мађарски"), ("Ада", "1", "Ромски")}
+
+
+def test_public_council_page_labels_coverage_as_station_council_combinations():
+    html = (STATIC / "public_results.html").read_text(encoding="utf-8")
+
+    assert 'id="coverage-title"' in html
+    assert 'DATA.scope==="council"?"Обрађене комбинације места и савета"' in html
+    assert 'DATA.scope==="council"?"комбинација места и савета"' in html
+
+
+def test_public_council_station_cards_show_council_and_municipality_identity():
+    html = (STATIC / "public_results.html").read_text(encoding="utf-8")
+
+    assert 'station.council+" · "+station.m+" · "' in html
+    assert r'station.council+"\u0000"+station.m+"\u0000"+station.no' in html
 
 
 def test_public_rg9_station_is_annulled_without_exposing_the_document():

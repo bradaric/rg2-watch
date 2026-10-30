@@ -75,6 +75,21 @@ def test_parse_listing_unknown_label_gives_none_type():
     assert page.max_page == 1
 
 
+def test_parse_listing_keeps_nsnm_council_in_station_identity():
+    payload = {"records": [{
+        "municipality": "Ада", "election_station_number": "1",
+        "election_station_name": "I МЕСНА ЗАЈЕДНИЦА",
+        "minority": "Национални савет МАЂАРСКЕ националне мањине",
+        "extfiles": [{"extfile": "<div class=''><span>Записник о раду бирачког одбора (Образац РГ-2)</span></div>"
+                      "<div class='table-file'><a href='/x/a.pdf'>a</a><span>01-02-2025 03:04h</span></div>"}],
+    }], "pagination": ""}
+
+    doc = parse_listing(payload, BASE).docs[0]
+
+    assert doc.minority == "Национални савет МАЂАРСКЕ националне мањине"
+    assert doc.station_key == "Ада|1|Национални савет МАЂАРСКЕ националне мањине"
+
+
 def test_parse_listing_empty():
     assert parse_listing({"records": [], "pagination": ""}, BASE) == ListingPage([], 0, 0)
 

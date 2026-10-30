@@ -29,6 +29,17 @@ def test_added_then_known():
     assert ev[0][0] == "added" and ev[0][1] == d.url and ev[0][2].endswith("Z")
 
 
+def test_nsnm_council_is_persisted_and_keeps_same_station_documents_distinct():
+    s = store()
+    a = Doc("Ада", "1", "МЗ", "lbl", 6, "https://x/a", "2026-10-19T20:15", "Мађарски")
+    b = Doc("Ада", "1", "МЗ", "lbl", 6, "https://x/b", "2026-10-19T20:15", "Ромски")
+    s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", a), Event("added", b)])
+
+    assert s.known_docs(P, Scope()) == {doc_key(a): a, doc_key(b): b}
+    assert [r[0] for r in s._db.execute("SELECT minority FROM documents ORDER BY url")] == [
+        "Мађарски", "Ромски"]
+
+
 def test_replaced_marks_old_inactive():
     s = store()
     old, new = doc("https://x/old.pdf"), doc("https://x/new.pdf")
@@ -197,6 +208,7 @@ def test_phase1a_db_migrates_analysis_queue(tmp_path):
     con.commit()
     con.close()
     s = Store(db)
+    assert "minority" in {row[1] for row in s._db.execute("PRAGMA table_info(documents)")}
     rows = dict(s._db.execute("SELECT url, analysis_status FROM documents").fetchall())
     assert rows == {"u6": "skipped", "u9": "skipped"}  # old rows are never analysed implicitly
     assert s.next_for_analysis(5, now=0) == []

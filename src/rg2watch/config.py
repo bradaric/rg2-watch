@@ -48,9 +48,9 @@ class Config:
     probe_cost_guard: bool = True
     watchlist: list[str] = field(default_factory=list)
     only_municipalities: list[str] = field(default_factory=list)
-    # parent -> names of list rows 1..N (national) or {municipality -> names} (municipal)
+    # parent -> names of list rows 1..N (national) or {ballot group -> names} (municipal/council)
     list_names: dict[str, list[str] | dict[str, list[str]]] = field(default_factory=dict)
-    tally_scope: dict[str, str] = field(default_factory=dict)  # parent -> "national" | "municipal"
+    tally_scope: dict[str, str] = field(default_factory=dict)  # national | municipal | council
     ntfy_url: str = "https://ntfy.sh"
     ntfy_topic: str | None = None
     ntfy_findings: bool = False  # push stored findings; operational status alerts are always pushed
@@ -143,7 +143,7 @@ def load_config(path: Path | None) -> Config:
                 isinstance(m, str) and names(n) for m, n in v.items())))
             for k, v in cfg.list_names.items())):
         raise ValueError("list_names must map an election id to a list of strings "
-                         "or to {municipality = list of strings}")
+                         "or to {ballot group = list of strings}")
     for k, v in cfg.list_names.items():  # municipal keys match as Latin or Cyrillic: no two may fold together
         seen: dict[str, str] = {}
         for m in v if isinstance(v, dict) else ():
@@ -151,8 +151,9 @@ def load_config(path: Path | None) -> Config:
                 raise ValueError(f'list_names "{k}": "{seen[f]}" and "{m}" name the same municipality')
             seen[f] = m
     if not (isinstance(cfg.tally_scope, dict) and all(
-            isinstance(k, str) and v in ("national", "municipal") for k, v in cfg.tally_scope.items())):
-        raise ValueError('tally_scope must map an election id to "national" or "municipal"')
+            isinstance(k, str) and v in ("national", "municipal", "council")
+            for k, v in cfg.tally_scope.items())):
+        raise ValueError('tally_scope must map an election id to "national", "municipal" or "council"')
     if cfg.high_push_max < 1 or cfg.high_push_window_s < 1 or cfg.mass_replace_threshold < 1:
         raise ValueError("high_push_max, high_push_window_s and mass_replace_threshold must be >= 1")
     if cfg.browse_interval_s < 0:

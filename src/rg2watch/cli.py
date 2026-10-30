@@ -30,7 +30,8 @@ from .models import Doc, Event, Finding
 from .names import MunicipalityError, resolve_municipalities
 from .notify import Notifier
 from .opencode_client import OpenCodeClient, OpenCodeError
-from .official_results import OfficialResultsClient, write_official_results
+from .official_results import (OfficialResultsClient, official_results_supported,
+                               write_official_results)
 from .operator_corrections import OperatorCorrections, Type13Corrections
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from .public_results import write_public_results
@@ -946,7 +947,7 @@ def _run_watch(args, cfg: Config) -> int:
                     notifier.page_url = url
                     print(f"page: {url}", flush=True)
                     election = store.get_election(parent)
-                    if election is not None:
+                    if election is not None and official_results_supported(election):
                         official_http = httpx.Client(
                             headers={"User-Agent": USER_AGENT}, follow_redirects=True)
                         official = OfficialResultsClient(

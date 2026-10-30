@@ -105,13 +105,17 @@ class OperatorCorrections:
         from .tally import scope_of
         scope = scope_of(self.store, self.cfg, source["parent"])[0]
         revision = self.store.expected_rows_revision(source["parent"], self.model)
-        key = (source["parent"], None if scope == "national" else source["municipality"], revision)
+        group = None if scope == "national" else (
+            source["minority"] if scope == "council" else source["municipality"])
+        key = (source["parent"], group, revision)
         if self.expected_rows_cache is not None and key in self.expected_rows_cache:
             return list(self.expected_rows_cache[key])
         selected = self.store.selected_rg2_urls(source["parent"], self.model, PROMPT_VERSION)
         docs = [d for d in self.store.browse_rows(source["parent"])[0] if d["url"] in selected]
-        if scope != "national":
+        if scope == "municipal":
             docs = [d for d in docs if d["municipality"] == source["municipality"]]
+        elif scope == "council":
+            docs = [d for d in docs if d["minority"] == source["minority"]]
         ids = {d["id"] for d in docs}
         analyses = [a for a in self.store.browse_analyses(source["parent"], PROMPT_VERSION)
                     if a["document_id"] in ids and a["model"] == self.model]

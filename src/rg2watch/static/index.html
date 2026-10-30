@@ -408,7 +408,7 @@ stroke-width:2.5;
 <div id="scopefilters" class="filtergroup" role="group" aria-labelledby="scopetitle">
 <span id="scopetitle" class="filtertitle">Scope</span>
 <input id="q" type="search" placeholder="search">
-<select id="m"></select><select id="e"></select><label>document type <select id="dt"><option value="">all document types</option></select></label><select id="mod"></select>
+<select id="m"></select><select id="council"></select><select id="e"></select><label>document type <select id="dt"><option value="">all document types</option></select></label><select id="mod"></select>
 </div>
 <div id="reviewfilters" class="filtergroup" role="group" aria-labelledby="reviewtitle">
 <span id="reviewtitle" class="filtertitle">Review filters</span>
@@ -446,7 +446,7 @@ stroke-width:2.5;
 <div id="herohead"><span class="kicker">НЕЗВАНИЧНО</span><div id="herotitle"></div></div>
 <div id="heronums">
 <div class="tile"><div class="k">Излазност</div><div class="v" id="hv-turn">-</div><div class="s" id="hs-turn"></div></div>
-<div class="tile"><div class="k">Обрађена бирачка места</div><div class="v"><span id="hv-st">-</span><span class="of" id="hv-sttot"></span></div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
+<div class="tile"><div class="k" id="hero-coverage-title">Обрађена бирачка места</div><div class="v"><span id="hv-st">-</span><span class="of" id="hv-sttot"></span></div><div class="prog"><div id="hp-st"></div></div><div class="s" id="hs-st"></div></div>
 <div class="tile"><div class="k">Записници</div><div class="v"><span id="hv-forms">-</span><span class="of" id="hv-formstot"></span></div><div class="s" id="hs-forms"><div id="hs-forms-primary"></div><details id="hs-forms-reasons"><summary id="hs-forms-reasons-summary"></summary><div id="hs-forms-reasons-body"></div></details><details id="hs-forms-details"><summary>Детаљи статуса и обраде</summary><div id="hs-forms-context"></div></details></div></div>
 <div class="tile"><div class="k">Важећи гласови</div><div class="v" id="hv-valid">-</div><div class="s" id="hs-valid"><div id="hs-valid-primary"></div><div id="hs-valid-context"></div></div></div>
 </div>
@@ -467,7 +467,7 @@ stroke-width:2.5;
 <label>numbers: <select id="tview"><option value="corrected" selected>with РГ-7 / operator corrections</option><option value="filed">as filed on РГ-2 forms</option><option value="diff">difference (corrected − as filed)</option></select></label>
 <button id="csv">Download CSV</button></div>
 <h3>Overall</h3><div id="toverall"></div>
-<h3>Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
+<h3 id="tgroup-title">Per municipality</h3><p id="tmhint" class="mut" hidden>Local election - every municipality has its own lists: open a municipality (arrow) for its list votes.</p><div class="wrapx" style="overflow-x:auto"><table id="tmunis" class="display" style="width:100%"></table></div>
 </div></details>
 <details id="taudit" class="resultgroup"><summary>Result audit trail <span id="tauditcount"></span></summary><div class="resultgroupbody">
 <h3>Flagged forms</h3><div class="wrapx" style="overflow-x:auto"><table id="texcl" class="display" style="width:100%"></table></div>
@@ -670,7 +670,7 @@ function tickStatus() {
 // ---- table --------------------------------------------------------------------------------
 let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
-const FILTERS = ["q", "m", "e", "dt", "mod", "sev", "rv", "nc", "ri", "an", "ast", "fl", "rp", "rm", "c7", "loc", "dis", "auto"];
+const FILTERS = ["q", "m", "council", "e", "dt", "mod", "sev", "rv", "nc", "ri", "an", "ast", "fl", "rp", "rm", "c7", "loc", "dis", "auto"];
 const FILTER_PRESETS = {
   "not-counted-no-decision": {ri: "not-counted", an: "not"},
   "review-filed": {rv: "todo", ri: "excluded-filed", ast: "done", an: "not"},
@@ -1441,7 +1441,7 @@ function prep(r) {
   r._rules = new Set(ofs.map(f => f[0]));
   r._models = new Set(all.flatMap(x => [
     ...x.ops.map(o => o.m), ...x.ars.map(a => a.m + " (arithmetic)")]));
-  r._h = [r.muni, r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models,
+  r._h = [r.muni, r.council || "", r.no, r.name, r.label, ...ofs.map(f => f[0] + " " + f[2]), ...r._models,
     ...r.r7.flatMap(x => x.ch || []), r.rec.status, ...r.rec.rules, ...r.rec.details,
     ...r.t13.flatMap(x => [type13Label(x), x.evidence || ""]),
     ...(r.rec.annulled ? ["поништено rg-9"] : []),
@@ -1472,7 +1472,8 @@ function keep(r) {
   const ri = sel("ri");
   if (ri && !(ri === "excluded-filed" ? r.rec.result.filed.included === false
     : resultInclusionStatus(r.rec.result) === ri)) return false;
-  return reviewTextMatches(r, x, q) && (!sel("m") || r.muni === sel("m")) && (!sel("e") || r.el === sel("e"))
+  return reviewTextMatches(r, x, q) && (!sel("m") || r.muni === sel("m"))
+    && (!sel("council") || r.council === sel("council")) && (!sel("e") || r.el === sel("e"))
     && (!sel("dt") || String(r.doc_type) === sel("dt"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
     && (!sel("an") || (r.rec.annulled ? "annulled" : r.rec.undetermined ? "undetermined" : "not") === sel("an"))
@@ -1481,7 +1482,8 @@ function keep(r) {
     && (!$("c7").checked || r.r7.some(x => x.ch)) && (!$("loc").checked || r._pdfs) && (!$("dis").checked || r.dis.length);
 }
 function stationCellHtml(r) {
-  const main = esc(r.muni) + "<br>" + esc((r.no ? "БМ " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""));
+  const main = esc(r.muni) + (r.council ? '<span class="stationplace">' + esc(r.council) + '</span>' : "") +
+    "<br>" + esc((r.no ? "БМ " + r.no : "") + (r.no && r.name ? " - " : "") + (r.name || ""));
   return main + (r.settlement ? '<span class="stationplace">' + esc(r.settlement) + "</span>" : "");
 }
 function initTable() {
@@ -1559,6 +1561,9 @@ function applyData(data) {
   rows = D.rows.map(prep);
   setTitle();
   optsOf($("m"), "all municipalities", sortMunicipalityNames([...new Set(rows.map(r => r.muni))]).map(m => [m, m]));
+  const councils = sortMunicipalityNames([...new Set(rows.map(r => r.council).filter(Boolean))]);
+  optsOf($("council"), "all national councils", councils.map(c => [c, c]));
+  $("council").hidden = !councils.length;
   const parents = [...new Set(rows.map(r => r.el))].sort();
   optsOf($("e"), "all elections", parents.map(p => [p, shortTitle(D.elections[p] || p)]));
   $("e").hidden = parents.length < 2;
@@ -1677,14 +1682,14 @@ function vrow(r) {  // the row as the chosen numbers view shows it
 }
 function listAvailability(r) {
   if (r.nlists || (T.scope === "national" && T.names.length)) return "Available";
-  if (T.scope === "municipal" && r.m === T.overall.m) return "Unavailable - no universal ballot";
+  if (T.scope !== "national" && r.m === T.overall.m) return "Unavailable - no universal ballot";
   if ((r.names_note || T.names_note || "").startsWith("no expected ballot rows")) return "Unavailable - no expected ballot rows";
-  return T.scope === "municipal" ? "Unavailable - no comparable ballot" : "Unavailable - no expected ballot rows";
+  return T.scope !== "national" ? "Unavailable - no comparable ballot" : "Unavailable - no expected ballot rows";
 }
 function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come through vrow()
   const dg = NV() === "diff", n = dg ? dnum : num, p = dg ? dpp : pc, t = r => r[mode], c = [
-    ["Municipality", r => r.m, s => s, r => r.m],
-    ["Stations", r => r.stations, num], ["Counted", r => r.counted, num], ["Clean", r => r.clean, n],
+    [T.scope === "council" ? "National council" : "Municipality", r => r.m, s => s, r => r.m],
+    [T.scope === "council" ? "Station-council combinations" : "Stations", r => r.stations, num], ["Counted", r => r.counted, num], ["Clean", r => r.clean, n],
     ["Flagged", r => r.excluded, n], ["Held by escalation", r => r.held || 0, num],
     ["Не могу се утврдити (РГ-8)", r => r.undetermined || 0, num],
     ["Поништено (РГ-9)", r => r.annulled || 0, num],
@@ -1707,7 +1712,7 @@ function resultCols(mode) {  // [title, raw value, display, csv cell]; rows come
   else c.push(["Vote forms", r => t(r).vote_forms, num],
     ["Withheld readable valid", r => t(r).withheld_valid, num],
     ["Unreconciled turnout gap (signed)", gap, snum]);
-  if (T.scope === "municipal" || !T.names.length)
+  if (T.scope !== "national" || !T.names.length)
     c.push(["List totals availability", listAvailability, s => s]);
   const share = (r, i) => dg ? t(r).sh[i] : ratio(t(r).lists[i], t(r).lists_ballots_in_box);
   T.names.forEach((nm, i) => {
@@ -1731,7 +1736,7 @@ function tallyCsv() {
     "; escalated, РГ-8 undetermined and РГ-9 annulled forms are held from totals; numbers: " + NV_LABEL[NV()] +
     " Reported invalid counts are limited to forms with reconciled valid/list totals." +
     (NV() === "diff" ? " Paired cohort columns are unsigned actual sizes; turnout and shares are differences in percentage points." : "");
-  if (T.scope === "municipal") {  // long format: one row per (municipality, list), shared totals repeated
+  if (T.scope !== "national") {  // long format: one row per (ballot group, list), shared totals repeated
     const shared = cols.slice(1), out = [];
     for (const r of rows) {
       const t = r[mode], tot = shared.map(c => csvCell(c.c(r)));
@@ -1741,7 +1746,7 @@ function tallyCsv() {
         sh(i) == null ? "" : (100 * sh(i)).toFixed(1)]) : [["", unavailable, "", ""]];
       for (const l of ls) out.push([csvCell(r.m), ...l.map(csvCell), ...tot, out.length ? "" : csvCell(note)].join(","));
     }
-    const head = ["Municipality", "No.", "List", "Votes", NV() === "diff" ? "Share (pp)" : "Share %", ...shared.map(c => c.t), "Note"].map(csvCell).join(",");
+    const head = [T.scope === "council" ? "National council" : "Municipality", "No.", "List", "Votes", NV() === "diff" ? "Share (pp)" : "Share %", ...shared.map(c => c.t), "Note"].map(csvCell).join(",");
     return [head, ...out].join("\r\n") + "\r\n";
   }
   const head = [...cols.map(c => csvCell(c.t)), "Note"].join(",");
@@ -1758,7 +1763,7 @@ function showForm(id, label, updateUrl = true) {
   if (updateUrl) redraw();
 }
 let tkey = "", tcols = "";
-function listsOf(r) {  // municipal scope: this municipality's own lists, in ballot order
+function listsOf(r) {  // grouped scope: this municipality or council's lists, in ballot order
   const dg = NV() === "diff", t = vrow(r)[$("tmode").value], tbl = mk("table", null, "lists"), hr = mk("tr"), box = mk("div");
   hr.append(mk("th", "No."), mk("th", "List"), mk("th", "Votes"), mk("th", dg ? "Share (pp)" : "Share"));
   tbl.append(hr);
@@ -1793,11 +1798,13 @@ function renderTally() {
     return;
   }
   $("tmeta").textContent = "Model: " + T.model + ". " + shortTitle(T.title) + ". Repeat-vote forms are not included.";
-  const muniScope = T.scope === "municipal";
-  const sw = [T.scope_note, ...(muniScope ? T.munis.filter(m => !m.nlists && m.names_note).map(m => m.m + ": " + m.names_note) : [T.names_note])].filter(Boolean);
+  const muniScope = T.scope === "municipal", groupedScope = muniScope || T.scope === "council";
+  const sw = [T.scope_note, ...(groupedScope ? T.munis.filter(m => !m.nlists && m.names_note).map(m => m.m + ": " + m.names_note) : [T.names_note])].filter(Boolean);
   $("tscope").hidden = !sw.length;
   $("tscope").textContent = sw.length ? "Warning: " + sw.join(". ") : "";
-  $("tmhint").hidden = !muniScope;
+  $("tmhint").hidden = !groupedScope;
+  $("tmhint").textContent = T.scope === "council" ? "Every national council has its own ballot: open a council for its list votes." : "Local election - every municipality has its own lists: open a municipality for its list votes.";
+  $("tgroup-title").textContent = T.scope === "council" ? "Per national council" : "Per municipality";
   renderHero();
   const key = $("tmode").value + NV() + JSON.stringify(T);
   if (key === tkey) return;  // unchanged: keep the tables (search, sort, page) as they are
@@ -1817,8 +1824,8 @@ function renderTally() {
     tcols = sig;
     if (tmTable) { tmTable.destroy(); $("tmunis").replaceChildren(); }
     tmTable = new DataTable("#tmunis", {
-      data: T.munis, paging: false, order: [[muniScope ? 1 : 0, "asc"]], layout: {topStart: "search", topEnd: null, bottomStart: "info"},
-      columns: [...(muniScope ? [{data: null, orderable: false, className: "dt-control", defaultContent: "",
+      data: T.munis, paging: false, order: [[groupedScope ? 1 : 0, "asc"]], layout: {topStart: "search", topEnd: null, bottomStart: "info"},
+      columns: [...(groupedScope ? [{data: null, orderable: false, className: "dt-control", defaultContent: "",
         createdCell: (td, d, r) => { if (!r.nlists) td.classList.remove("dt-control"); }}] : []),
         ...cols.map((c, i) => ({title: esc(c.t), type: i ? "num" : "string", className: i ? "dt-right" : "",
         render: {_: (d, t, r) => { const v = c.v(vrow(r)); return v == null ? -1 : v; }, display: (d, t, r) => esc(c.f(c.v(vrow(r))))}}))]});
@@ -1860,7 +1867,8 @@ function renderTally() {
   $("tcor").replaceChildren(...rg7Items, ...operatorItems);
   const correctionCount = NV() === "filed" ? 0 : rg7Items.length + operatorItems.length;
   $("tcorhead").hidden = $("tcor").hidden = !correctionCount;
-  $("tdetailcount").textContent = "— " + num(T.overall.counted) + " forms · " + num(T.munis.length) + " municipalities";
+  $("tdetailcount").textContent = "— " + num(T.overall.counted) + " forms · " + num(T.munis.length) +
+    (T.scope === "council" ? " national councils" : " municipalities");
   $("tauditcount").textContent = "— " + num(flagged.length) + " flagged · " + num(correctionCount) +
     " corrections · " + num(T.notes.length) + " notes";
 }
@@ -1875,6 +1883,7 @@ function setHeroMunicipality(value, picked = true) {
   heroPicked = picked;
 }
 function setSharedMunicipality(value) {
+  if (T && T.scope === "council") { $("council").value = value; setHeroMunicipality(value, true); redraw(); return; }
   $("m").value = value;
   setHeroMunicipality($("m").value, true);
   redraw();
@@ -1900,7 +1909,8 @@ function heroWarning(note) {
     "municipality unknown - forms may be from different ballots, no list totals": "Општина није позната — записници могу бити са различитих гласачких листића, без збирова по листама",
     "no expected ballot rows - comparable list totals unavailable": "Нема очекиваних редова на гласачком листићу — упоредиви збирови по листама нису доступни",
     "list_names must be a plain list for a national election": "list_names мора бити обична листа за републичке изборе",
-    "list_names must map municipality -> names for a municipal election": "list_names мора да пресликава општину у називе за локалне изборе"
+    "list_names must map municipality -> names for a municipal election": "list_names мора да пресликава општину у називе за локалне изборе",
+    "list_names must map council -> names for a council election": "list_names мора да пресликава национални савет у називе листа"
   };
   return String(note).split("; ").map(part => {
     if (exact[part]) return exact[part];
@@ -1982,9 +1992,10 @@ function heroMunis() {
   const sel = $("hmuni"), rows = sortHeroMunis(T ? T.munis : []), names = rows.map(m => m.m);
   const wanted = rows.map(r => r.m + "\t" + heroMuniName(r)).join("\n");
   if ([...sel.options].slice(1).map(o => o.value + "\t" + o.textContent).join("\n") !== wanted || !sel.options.length)
-    sel.replaceChildren(new Option("Све општине", ""), ...rows.map(r => new Option(heroMuniName(r), r.m)));
+    sel.replaceChildren(new Option(T && T.scope === "council" ? "Сви национални савети" : "Све општине", ""),
+      ...rows.map(r => new Option(heroMuniName(r), r.m)));
   if (!names.includes(heroMuni)) heroMuni = "";
-  if (!heroPicked && !heroMuni && T && T.scope === "municipal") {  // default: most counted forms
+  if (!heroPicked && !heroMuni && T && T.scope !== "national") {  // default: most counted forms
     const best = T.munis.reduce((a, m) => m.counted > (a ? a.counted : 0) ? m : a, null);
     if (best) heroMuni = best.m;
   }
@@ -2184,7 +2195,8 @@ function renderStationResults() {
   if (!T) { stationKey = ""; section.hidden = true; list.replaceChildren(); $("stationmore").hidden = true; return; }
   if (stationScope !== heroMuni) { stationScope = heroMuni; stationLimit = 100; stationKey = ""; }
   const allScope = !heroMuni, mode = $("tmode").value, viewName = NV();
-  let stations = (T.station_results || []).filter(station => allScope || station.m === heroMuni);
+  let stations = (T.station_results || []).filter(station => allScope ||
+    (T.scope === "council" ? station.council === heroMuni : station.m === heroMuni));
   if (mode === "cl") stations = stations.filter(station => {
     const filed = station.filed || station.corrected;
     return viewName === "diff" ? station.corrected.clean && filed.clean
@@ -2201,7 +2213,7 @@ function renderStationResults() {
   }
   const requestedSort = $("stationsort").value || "station", barCount = Number($("stationbars").value) || 1,
     diff = viewName === "diff", incompatibleSort = ["margin-close", "margin-wide", "review"].includes(requestedSort),
-    localAll = T.scope === "municipal" && allScope,
+    localAll = T.scope !== "national" && allScope,
     sort = (localAll && requestedSort === "winner") || (diff && incompatibleSort) ? "station" : requestedSort;
   if (sort !== requestedSort) $("stationsort").value = sort;
   $("stationfilters").hidden = diff;
@@ -2219,8 +2231,8 @@ function renderStationResults() {
     const corrected = station.corrected, filed = station.filed || corrected,
       chosen = viewName === "filed" ? filed : corrected, source = stationSource(station.id),
       review = stationReview(station.id, source),
-      municipality = municipalityByName.get(station.m),
-      listOwner = T.scope === "municipal" ? municipality : T,
+      municipality = municipalityByName.get(T.scope === "council" ? station.council : station.m),
+      listOwner = T.scope !== "national" ? municipality : T,
       correctedTurnout = stationTurnout(corrected), filedTurnout = stationTurnout(filed),
       turnout = diff ? correctedTurnout == null || filedTurnout == null ? null : correctedTurnout - filedTurnout
         : stationTurnout(chosen);
@@ -2240,7 +2252,9 @@ function renderStationResults() {
   if (!diff && stationFilter !== "all") records = records.filter(record => filterMatch(record, stationFilter));
   const byStation = (a, b) => (allScope
     ? SERBIAN_MUNICIPALITY_COLLATOR.compare(a.municipalityName, b.municipalityName)
-    : 0) || String(a.station.no).localeCompare(String(b.station.no), undefined, {numeric: true});
+    : 0) || (T.scope === "council"
+    ? SERBIAN_MUNICIPALITY_COLLATOR.compare(a.station.m, b.station.m) : 0)
+    || String(a.station.no).localeCompare(String(b.station.no), undefined, {numeric: true});
   const byNumber = (getter, descending = false) => (a, b) => {
     const av = getter(a), bv = getter(b);
     if (av == null) return bv == null ? byStation(a, b) : 1;
@@ -2305,7 +2319,9 @@ function renderStationResults() {
       statusEl.append(reviewEl);
     }
     statusEl.append(stationActionMenu(station, source));
-    const name = mk("span", (allScope ? municipalityName + " · " : "") + "БМ " + station.no +
+    const groupName = T.scope === "council" && allScope ? municipalityName + " · " : "",
+      placeName = T.scope === "council" ? station.m + " · " : allScope ? municipalityName + " · " : "";
+    const name = mk("span", groupName + placeName + "БМ " + station.no +
       (station.settlement ? " · " + station.settlement : "") + (station.name ? " — " + station.name : ""), "stationname"),
       roundInfo = stationRoundInfo(station.source_round), mapLink = stationMapLink(station);
     if (roundInfo) name.append(roundInfo);
@@ -2347,17 +2363,20 @@ function renderHero() {
   const raw = (heroMuni && T.munis.find(m => m.m === heroMuni)) || T.overall, r = vrow(raw), t = r[$("tmode").value], none = !r.counted;
   const dg = NV() === "diff", mode = $("tmode").value;
   const cover = r.stations ? r.counted / r.stations : null;
-  const muniScope = T.scope === "municipal", allMunis = raw === T.overall, names = heroListNames(muniScope ? r : T);
+  const muniScope = T.scope !== "national", councilScope = T.scope === "council",
+    allMunis = raw === T.overall, names = heroListNames(muniScope ? r : T);
   const warn = [T.scope_note, muniScope ? r.names_note : T.names_note].filter(Boolean);
   $("heronames").hidden = !warn.length;
   $("heronames").textContent = warn.length ? "Упозорење: " + warn.map(heroWarning).join(". ") : "";
   const titleSuffix = NV() === "corrected" ? " — са исправкама (РГ-7 / ручни унос)" : dg ? " — РАЗЛИКА (са исправкама РГ-7 / ручни унос − оригинални РГ-2)" : "";
-  put("herotitle", none ? "" : (allMunis ? "Све општине" : heroMuniName(raw)) + " — " + shortTitle(T.title) + titleSuffix);
+  put("herotitle", none ? "" : (allMunis ? (councilScope ? "Сви национални савети" : "Све општине") : heroMuniName(raw)) + " — " + shortTitle(T.title) + titleSuffix);
+  put("hero-coverage-title", councilScope ? "Обрађене комбинације места и савета" : "Обрађена бирачка места");
   put("hv-turn", none ? "-" : dg ? dpp(t.turnout) : pc(t.turnout));
   put("hs-turn", none ? "" : dg ? "разлика у излазности, процентни поени" : num(t.voted) + " од " + num(t.registered) + " уписаних");
   put("hv-st", num(r.counted));
   put("hv-sttot", r.stations ? " / " + num(r.stations) : "");
-  put("hs-st", cover == null ? "број бирачких места није познат" : pc(cover) + " бирачких места");
+  const coverageUnit = councilScope ? "комбинација места и савета" : "бирачких места";
+  put("hs-st", cover == null ? "број " + coverageUnit + " није познат" : pc(cover) + " " + coverageUnit);
   $("hp-st").style.width = (cover == null ? 0 : Math.min(100, cover * 100)) + "%";
   const reviewSummary = flaggedReviewSummary(heroFlagged(raw));
   if (dg) {
@@ -2438,7 +2457,7 @@ function renderHero() {
   $("heronote").textContent = none ? "Још нема обрађених записника — нема резултата за приказ."
     : [dg ? "Ставке присутне само у приказу са исправкама / оригиналном приказу: " + dnum(r.nin) + " / " + dnum(r.nout) +
         "; неупарене ставке су изостављене (можда се променила читљивост, избор записника без уочених проблема или прихватљивост усаглашених гласова)." : "",
-      muniScope && allMunis ? "Локални избори — листе се разликују по општинама; изаберите општину за резултате по листама." : "",
+      muniScope && allMunis ? (councilScope ? "Листе се разликују по националним саветима; изаберите савет за резултате по листама." : "Локални избори — листе се разликују по општинама; изаберите општину за резултате по листама.") : "",
       cover != null && cover < 0.1 ? "Рани резултати — обрађено је мало бирачких места; проценти се могу знатно променити." : ""].filter(Boolean).join(" ");
   const noChartLists = !t.lists || (!dg && !t.vote_forms) || (dg && (!t.sh || t.sh.every(x => x == null)));
   const rows = none || (muniScope && allMunis) || noChartLists ? [] : names.map((n, i) => ({n, i, v: t.lists[i], s: dg ? t.sh[i] : null}))
@@ -2577,7 +2596,7 @@ function readHash() {
   const o = {rules: (p.get("rules") || "").split(",")};
   for (const k of FILTERS) o[k] = $(k).type === "checkbox" ? (k === "auto" ? p.get(k) !== "0" : p.get(k) === "1") : p.get(k);
   setCtl(o);
-  setHeroMunicipality(o.m || "", true);
+  setHeroMunicipality(T && T.scope === "council" ? o.council || "" : o.m || "", true);
   const nv = p.get("nv");
   $("tview").value = ["corrected", "filed", "diff"].includes(nv) ? nv : "corrected";
   const formId = p.get("form"), form = D.rows.find(row => String(row.id) === formId);
@@ -2598,7 +2617,7 @@ function writeHash() {
   try { history.replaceState(null, "", "#" + p); } catch (e) {}
 }
 function redraw() {
-  const municipality = $("m").value;
+  const municipality = T && T.scope === "council" ? $("council").value : $("m").value;
   const municipalityChanged = municipality !== heroMuni || !heroPicked;
   if (municipalityChanged) setHeroMunicipality(municipality, true);
   writeHash();
