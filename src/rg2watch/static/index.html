@@ -400,9 +400,8 @@ stroke-width:2.5;
 <div id="ctl">
 <div id="presetbar" class="presetbar" role="group" aria-labelledby="presettitle">
 <span id="presettitle" class="filtertitle">Common workflows</span>
-<button type="button" data-preset="review-filed">Review excluded as filed</button>
-<button type="button" data-preset="review-v13">Review V13</button>
-<label>Review batch <select id="reviewbatch"><option value="">Choose a batch…</option><option value="review-numbers">Altered numbers</option><option value="review-integrity">Signatures &amp; scan integrity</option><option value="review-procedure">Procedural findings</option><option value="review-stats">Statistical flags</option></select></label>
+<button type="button" data-preset="not-counted-no-decision">Not counted, no decision</button>
+<label>Review batch <select id="reviewbatch"><option value="">Choose a batch…</option><option value="review-filed">Excluded as filed</option><option value="review-v13">No names or signatures (V13)</option><option value="review-numbers">Altered numbers</option><option value="review-integrity">Signatures &amp; scan integrity</option><option value="review-procedure">Procedural findings</option><option value="review-stats">Statistical flags</option></select></label>
 <div id="presetutils"><label><input type="checkbox" id="auto" checked> auto-refresh</label><button id="clearfilters" type="button">Clear all filters</button></div>
 </div>
 <div id="filtergroups">
@@ -673,6 +672,7 @@ let onlyId = null, T = null, tmTable = null, teTable = null;
 let D = {rows: [], elections: {}, built: "", interval: 0}, table = null, rows = [];
 const FILTERS = ["q", "m", "e", "dt", "mod", "sev", "rv", "nc", "ri", "an", "ast", "fl", "rp", "rm", "c7", "loc", "dis", "auto"];
 const FILTER_PRESETS = {
+  "not-counted-no-decision": {ri: "not-counted", an: "not"},
   "review-filed": {rv: "todo", ri: "excluded-filed", ast: "done", an: "not"},
   "review-v13": {rv: "todo", ast: "done", rules: ["V13"]},
   "review-numbers": {rv: "todo", ast: "done", rules: ["V1", "V12"]},

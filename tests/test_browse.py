@@ -287,8 +287,11 @@ def test_common_review_filter_presets_preserve_scope_and_auto_refresh_setting():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert '<div id="presetbar" class="presetbar"' in html
-    assert '<button type="button" data-preset="review-filed">Review excluded as filed</button>' in html
-    assert '<button type="button" data-preset="review-v13">Review V13</button>' in html
+    assert '<button type="button" data-preset="not-counted-no-decision">Not counted, no decision</button>' in html
+    assert '<button type="button" data-preset="review-filed">' not in html
+    assert '<button type="button" data-preset="review-v13">' not in html
+    assert '<option value="review-filed">Excluded as filed</option>' in html
+    assert '<option value="review-v13">No names or signatures (V13)</option>' in html
     assert '<button id="clearfilters" type="button">Clear all filters</button>' in html
     start = html.index("const FILTER_PRESETS =")
     code = html[start:html.index("// rule codes", start)]
@@ -299,6 +302,8 @@ assert.deepEqual(presetControls("review-filed", {{e: "779676", m: "Alpha", auto:
   {{e: "779676", m: "Alpha", auto: false, rv: "todo", ri: "excluded-filed", ast: "done", an: "not"}});
 assert.deepEqual(presetControls("review-v13", {{e: "779676", m: "Alpha", auto: false}}),
   {{e: "779676", m: "Alpha", auto: false, rv: "todo", ast: "done", rules: ["V13"]}});
+assert.deepEqual(presetControls("not-counted-no-decision", {{e: "779676", m: "Alpha", auto: false}}),
+  {{e: "779676", m: "Alpha", auto: false, ri: "not-counted", an: "not"}});
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -317,6 +322,8 @@ def test_review_batch_dropdown_applies_only_agreed_filters():
 const assert = require("assert");
 ''' + presets + controls + r'''
 const expected = {
+  "review-filed": {ri: "excluded-filed", an: "not"},
+  "review-v13": {rules: ["V13"]},
   "review-numbers": {rules: ["V1", "V12"]},
   "review-integrity": {rules: ["V3", "V4", "V5", "V6", "V7", "V9", "V13"]},
   "review-procedure": {rules: ["P1", "P2", "P3"]},
@@ -339,14 +346,15 @@ for (const [name, extra] of Object.entries(expected)) {
   callback();
   assert.equal(els.e.value, "779676"); assert.equal(els.m.value, "Alpha"); assert.equal(els.auto.checked, false);
   assert.equal(els.rv.value, "todo"); assert.equal(els.ast.value, "done");
-  for (const key of ["q", "an", "dt", "mod"]) assert.equal(els[key].value, "");
+  for (const key of ["q", "dt", "mod"]) assert.equal(els[key].value, "");
+  assert.equal(els.an.value, extra.an || "");
   assert.equal(els.sev.value, "0"); assert.equal(els.fl.checked, false); assert.equal(els.dis.checked, false);
   assert.equal(els.nc.value, extra.nc || ""); assert.equal(els.ri.value, extra.ri || "");
-  assert.deepEqual(boxes.filter(x => x.checked).map(x => x.value), extra.rules);
+  assert.deepEqual(boxes.filter(x => x.checked).map(x => x.value).sort(), [...(extra.rules || [])].sort());
   assert.equal(els.reviewbatch.value, "");
 }
-assert.equal(draws, 4);
-callback(); assert.equal(draws, 4); // placeholder is not a filter action
+assert.equal(draws, 6);
+callback(); assert.equal(draws, 6); // placeholder is not a filter action
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
