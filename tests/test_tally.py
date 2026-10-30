@@ -1126,6 +1126,8 @@ def test_forms_rows_offer_live_rik_station_document_check_in_a_modal():
 
     assert '<dialog id="rikstationdlg"' in html
     assert 'button.textContent = "Station docs"' in html
+    assert 'mk("button", null, "chip stationdocsbtn")' in html
+    assert ".stationdocsbtn{display:block" in html
     assert 'fetch("/rik-station?url=" + encodeURIComponent(row.u)' in html
     assert 'item.stored ? "Stored locally" : "Missing locally"' in html
 

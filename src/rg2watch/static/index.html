@@ -193,7 +193,7 @@ button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
 #ocdlg::backdrop,#rikstationdlg::backdrop{background:rgba(0,0,0,.55)}
 .ochead{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);background:var(--panel);border-bottom:1px solid var(--line)}
 .ochead h2{margin:0;font-size:17px}.ochead button{margin-left:auto}
-#rikstationbody{padding:var(--s4)}.rikstationsummary{margin:0 0 var(--s3)}.rikstationsummary.missing{color:var(--hi);font-weight:700}.rikstationdocs{display:grid;gap:var(--s2);padding:0;list-style:none}.rikstationdoc{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:var(--s1) var(--s3);padding:var(--s2);border:1px solid var(--line);border-radius:6px}.rikstationmeta{color:var(--mut);font-size:.9em}.rikstationstate{font-weight:700;color:var(--good)}.rikstationstate.missing{color:var(--hi)}
+#rikstationbody{padding:var(--s4)}.stationdocsbtn{display:block;margin-top:var(--s1)}.rikstationsummary{margin:0 0 var(--s3)}.rikstationsummary.missing{color:var(--hi);font-weight:700}.rikstationdocs{display:grid;gap:var(--s2);padding:0;list-style:none}.rikstationdoc{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:var(--s1) var(--s3);padding:var(--s2);border:1px solid var(--line);border-radius:6px}.rikstationmeta{color:var(--mut);font-size:.9em}.rikstationstate{font-weight:700;color:var(--good)}.rikstationstate.missing{color:var(--hi)}
 #ocbody{padding:var(--s4)}
 .ocmeta{margin:0 0 var(--s3);color:var(--mut);overflow-wrap:anywhere}
 .ocgrid{display:grid;grid-template-columns:minmax(10em,1fr) minmax(7em,.6fr) minmax(8em,.7fr);gap:var(--s1) var(--s3);align-items:center;margin-bottom:var(--s4)}
@@ -725,7 +725,7 @@ function linksOf(v) {
 }
 let rikStationRequest = 0;
 function stationDocumentsButton(row) {
-  const button = mk("button", null, "chip");
+  const button = mk("button", null, "chip stationdocsbtn");
   button.type = "button";
   button.textContent = "Station docs";
   button.onclick = () => openRikStation(row);
