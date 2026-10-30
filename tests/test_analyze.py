@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from rg2watch import analyze
-from rg2watch.analyze import ARITHMETIC_SCHEMA, SCHEMA, AnalysisError, AnalysisRefused, analyze_document
+from rg2watch.analyze import (ARITHMETIC_SCHEMA, PROMPT, SCHEMA, AnalysisError,
+                              AnalysisRefused, analyze_document)
 from rg2watch.config import Config
 from rg2watch.render import Tile
 
@@ -342,11 +343,20 @@ def test_prompt_distinguishes_slashes_from_ones_before_names():
             'row, sum the votes and compare the result with the valid-ballot count. If they differ, '
             're-examine every 1/dash classification. Arithmetic is a reason to look again, not '
             'permission to change a visually clear entry or invent a value. '
-            "A lone slash or dash in item 15 means no remarks (remarks_text_present=false).")
+            "A lone slash or dash in the printed remarks field means no remarks "
+            "(remarks_text_present=false). Do not infer this from the item number: item 15 on "
+            "НСНМ-10/22 is outside voting, while remarks are item 20.")
     assert para in analyze.PROMPT
     assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
     from rg2watch.pipeline import PROMPT_VERSION
-    assert PROMPT_VERSION == "v10"
+    assert PROMPT_VERSION == "v11"
+
+
+def test_rg2_prompt_treats_nsnm_minutes_as_rg2_despite_the_printed_form_code():
+    assert "НСНМ-10/22" in PROMPT and "NSNM-10/22" in PROMPT
+    assert "internal category" in PROMPT
+    assert "must classify it as rg2" in PROMPT
+    assert "13.1" in PROMPT and "13.4-13.7" in PROMPT
 
 
 def _priced(model, resp_model=None, **cfg):

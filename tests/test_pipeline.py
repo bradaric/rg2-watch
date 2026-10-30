@@ -206,7 +206,7 @@ def test_added_rg2_analysed_and_findings_stored(tmp_path):
     assert [(f.rule, f.severity, f.doc.url) for _, f in stored] == [("V1", "HIGH", d.url)]
     assert e.status(d.url) == ("done", 1)
     row = e.store._db.execute("SELECT prompt_version, status, result_json, model FROM analyses").fetchone()
-    assert row[0] == PROMPT_VERSION == "v10" and row[1] == "done" and row[3] == "claude-opus-5-5"
+    assert row[0] == PROMPT_VERSION == "v11" and row[1] == "done" and row[3] == "claude-opus-5-5"
     assert json.loads(row[2])["numbers"]["voted"]["mark"] == "overwritten"
     assert e.store.total_spend() == pytest.approx((1000 * 4 + 500 * 20) / 1e6)
     assert e.out.getvalue() == ""  # workers never alert directly

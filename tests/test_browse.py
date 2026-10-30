@@ -907,6 +907,14 @@ def test_page_marks_stale_status():
     assert "STALE_S = 60" in html and "watcher not running / stalled since" in html
 
 
+def test_council_status_describes_station_council_forms_not_physical_stations():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '"РГ-2 station–council forms"' in html
+    assert 'd.rg2_seen + " seen / " + d.rg2_rik + " listed by RIK"' in html
+    assert '"new forms, last 10 / 60 min"' in html
+
+
 def test_status_refresh_preserves_unchanged_alerts_and_skips_static_repaints():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     status = html[html.index("let statusKey"):html.index("// ---- table")]

@@ -627,9 +627,13 @@ function renderStatus() {
       ["lanes", Object.entries(w.lanes).map(([k, v]) => k + " " + ago(v)).join(", ")],
       ["municipalities", w.only ? w.only.join(", ") : "all"]]));
   }
+  const councilDocs = D.tally && D.tally.scope === "council";
+  const rg2Seen = councilDocs
+    ? (d.rg2_rik != null ? d.rg2_seen + " seen / " + d.rg2_rik + " listed by RIK" : d.rg2_seen + " seen")
+    : d.rg2_seen + " of " + (d.stations || "?") + " stations" + (d.rg2_rik != null ? " (RIK lists " + d.rg2_rik + ")" : "");
   cards.push(card("Documents", [
-    ["РГ-2 seen", d.rg2_seen + " of " + (d.stations || "?") + " stations" + (d.rg2_rik != null ? " (RIK lists " + d.rg2_rik + ")" : "")],
-    ["new, last 10 / 60 min", d.new10 + " / " + d.new60], ["replaced", d.replaced], ["removed", d.removed],
+    [councilDocs ? "РГ-2 station–council forms" : "РГ-2 seen", rg2Seen],
+    [councilDocs ? "new forms, last 10 / 60 min" : "new, last 10 / 60 min", d.new10 + " / " + d.new60], ["replaced", d.replaced], ["removed", d.removed],
     ["РГ-7 decisions", d.rg7 ? "read " + d.rg7.read + " / pending " + d.rg7.pending : "-"],
     ["rare types", Object.entries(d.rare).map(([k, v]) => k + ": " + v).join(", ") || "none"]]));
   const p = a.paused;
