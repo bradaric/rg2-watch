@@ -62,7 +62,7 @@ class Config:
     request_timeout_s: float = 20.0
     max_pdf_bytes: int = 50_000_000
     model: str = "claude-haiku-5-5"
-    effort: str = "high"
+    anthropic_effort: str = "high"  # direct Anthropic only; OpenCode uses its model #variant
     fallbacks: bool = True
     analysis_enabled: bool = False  # opt-in: `watch --analyze` also enables it
     max_spend_usd: float = 60.0  # per election (parent)
@@ -117,6 +117,10 @@ def load_config(path: Path | None) -> Config:
     if "sweep_pages_per_tick" in data:  # older name of the per-tick budget
         data.setdefault("tick_request_budget", data["sweep_pages_per_tick"])
         del data["sweep_pages_per_tick"]
+    if "effort" in data:  # older, backend-ambiguous name
+        if "anthropic_effort" in data:
+            raise ValueError("set anthropic_effort, not both effort and anthropic_effort")
+        data["anthropic_effort"] = data.pop("effort")
     known = {f.name for f in fields(Config)}
     unknown = set(data) - known
     if unknown:

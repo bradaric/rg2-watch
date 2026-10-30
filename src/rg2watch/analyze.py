@@ -547,7 +547,8 @@ def analyze_document(tiles: list[Tile], client, cfg: Config, kind: str = "rg2") 
                 model=cfg.model,
                 max_tokens=max_tokens,
                 messages=messages,
-                output_config={"effort": cfg.effort, "format": {"type": "json_schema", "schema": schema}},
+                output_config={"effort": cfg.anthropic_effort,
+                               "format": {"type": "json_schema", "schema": schema}},
                 **extra,
             ))
         except Exception as exc:

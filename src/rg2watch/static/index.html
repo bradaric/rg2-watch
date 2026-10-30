@@ -1509,7 +1509,7 @@ function applyData(data) {
   if (S) renderStatus();  // alert rule codes get their descriptions
   rows = D.rows.map(prep);
   setTitle();
-  optsOf($("m"), "all municipalities", [...new Set(rows.map(r => r.muni))].sort().map(m => [m, m]));
+  optsOf($("m"), "all municipalities", sortMunicipalityNames([...new Set(rows.map(r => r.muni))]).map(m => [m, m]));
   const parents = [...new Set(rows.map(r => r.el))].sort();
   optsOf($("e"), "all elections", parents.map(p => [p, shortTitle(D.elections[p] || p)]));
   $("e").hidden = parents.length < 2;
@@ -1863,6 +1863,9 @@ function heroWarning(note) {
   }).join("; ");
 }
 const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl");
+function sortMunicipalityNames(names) {
+  return [...names].sort((a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(a, b));
+}
 function heroMuniName(row) { return row && row.generated_unknown_muni ? "Непозната општина" : row.m; }
 function sortHeroMunis(rows) {
   return [...rows].sort((a, b) => SERBIAN_MUNICIPALITY_COLLATOR.compare(heroMuniName(a), heroMuniName(b)));

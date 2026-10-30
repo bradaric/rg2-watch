@@ -44,6 +44,19 @@ def test_toml_overrides(tmp_path, monkeypatch):
     assert c.probe_interval_s == 30
 
 
+def test_anthropic_effort_name_and_legacy_alias(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('anthropic_effort = "low"\n')
+    assert load_config(p).anthropic_effort == "low"
+    p.write_text('effort = "medium"\n')
+    assert load_config(p).anthropic_effort == "medium"
+
+    p.write_text('effort = "low"\nanthropic_effort = "high"\n')
+    import pytest
+    with pytest.raises(ValueError, match="effort.*anthropic_effort"):
+        load_config(p)
+
+
 def test_medium_ntfy_can_be_disabled(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("ntfy_medium = false\n", encoding="utf-8")

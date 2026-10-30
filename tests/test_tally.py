@@ -1095,6 +1095,7 @@ def test_operator_results_sort_municipality_picker_by_serbian_alphabet():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl")' in html
     assert 'rows = sortHeroMunis(T ? T.munis : [])' in html
+    assert 'sortMunicipalityNames([...new Set(rows.map(r => r.muni))])' in html
     helper = html[html.index("const SERBIAN_MUNICIPALITY_COLLATOR"):html.index("function heroListNames")]
     script = helper + r'''
 const assert = require("assert");
@@ -1103,6 +1104,8 @@ assert.deepEqual(sortHeroMunis(rows).map(row => row.m),
   ["Ада", "Лапово", "Љиг", "Тител", "Ћуприја", "Чока", "Џеп", "Шид"]);
 assert.deepEqual(rows.map(row => row.m),
   ["Љиг", "Ћуприја", "Ада", "Шид", "Лапово", "Тител", "Чока", "Џеп"], "must not mutate tally order");
+assert.deepEqual(sortMunicipalityNames(["Љиг", "Ћићевац", "Ада", "Лапово"]),
+  ["Ада", "Лапово", "Љиг", "Ћићевац"]);
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr

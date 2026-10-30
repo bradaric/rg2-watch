@@ -62,7 +62,8 @@ analysis_enabled = false
 # Luna is only: model = "opencode:openai/gpt-6-luna#none". Direct Anthropic remains available with
 # model = "claude-haiku-5-5" (needs ANTHROPIC_API_KEY or an ant profile).
 model = "opencode:openai/gpt-6.1-terra#none"
-effort = "high"
+# Direct Anthropic only. OpenCode uses the model selector's #variant (`#none` above).
+anthropic_effort = "high"
 # Local model instead: model = "ollama:qwen3.8:27b-64k" (free, no API key; or `--model` on
 # eval/analyze/watch). Settings for that backend:
 ollama_url = "http://localhost:11434"
