@@ -90,6 +90,27 @@ def test_parse_listing_keeps_nsnm_council_in_station_identity():
     assert doc.station_key == "Ада|1|Национални савет МАЂАРСКЕ националне мањине"
 
 
+def test_parse_listing_repairs_known_missing_nsnm_councils():
+    expected = {
+        "/extfile/sr/election_results/63715b6eb9bc2/@14БУГ_66494ba92e1f7f78d0c0f00ab1deaec7.pdf":
+            "Национални савет БУГАРСКЕ националне мањине",
+        "/extfile/sr/election_results/637152ec06a83/@25БО_37295f736f26f0f6388efdd4dfe6a48d.pdf":
+            "Национални савет БОШЊАЧКЕ националне мањине",
+    }
+    payload = {"records": [{
+        "municipality": "M", "election_station_number": str(i), "election_station_name": "S",
+        "minority": None,
+        "extfiles": [{"extfile": "<div class=''><span>Записник о раду бирачког одбора (Образац РГ-2)</span></div>"
+                      f"<div class='table-file'><a href='{url}'>a</a><span>01-02-2025 03:04h</span></div>"}],
+    } for i, url in enumerate(expected, 1)], "pagination": ""}
+
+    docs = parse_listing(payload, BASE).docs
+
+    assert {doc.url: doc.minority for doc in docs} == {
+        BASE + url: council for url, council in expected.items()
+    }
+
+
 def test_parse_listing_empty():
     assert parse_listing({"records": [], "pagination": ""}, BASE) == ListingPage([], 0, 0)
 
