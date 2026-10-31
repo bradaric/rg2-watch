@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from rg2watch import analyze
-from rg2watch.analyze import (ARITHMETIC_SCHEMA, PROMPT, SCHEMA, AnalysisError,
+from rg2watch.analyze import (ARITHMETIC_SCHEMA, LIST_NAMES_SCHEMA, PROMPT, SCHEMA, AnalysisError,
                               AnalysisRefused, analyze_document)
 from rg2watch.config import Config
 from rg2watch.render import Tile
@@ -104,6 +104,24 @@ def test_arithmetic_request_only_reads_result_numbers():
 def test_arithmetic_schema_uses_only_anthropic_supported_integer_constraints():
     row = ARITHMETIC_SCHEMA["properties"]["list_votes"]["items"]["properties"]["row"]
     assert row == {"type": "integer"}
+
+
+def test_list_name_request_transcribes_ordered_public_list_names():
+    raw = {"lists": [
+        {"row": 2, "name": " List B ", "confidence": "medium"},
+        {"row": 1, "name": "List A", "confidence": "high"},
+    ], "confidence": "medium", "note": "row 2 blurred"}
+    client = FakeClient(_resp(report=raw))
+
+    result = analyze_document(TILES, client, Config(), "list_names")
+
+    call = client.calls[0]
+    assert call["output_config"]["format"] == {"type": "json_schema", "schema": LIST_NAMES_SCHEMA}
+    assert "official electoral-list names" in call["messages"][0]["content"][-1]["text"]
+    assert result.report["lists"] == [
+        {"row": 1, "name": "List A", "confidence": "high"},
+        {"row": 2, "name": "List B", "confidence": "medium"},
+    ]
 
 
 def test_fallbacks_disabled_omits_params():
