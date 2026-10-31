@@ -55,27 +55,28 @@ request_timeout_s = 20.0
 # Max size of a downloaded PDF in bytes
 max_pdf_bytes = 50000000
 
-# --- Claude vision analysis of RG-2 forms (needs ANTHROPIC_API_KEY or an ant profile) ---
-# Off by default: it calls a paid API. `watch --analyze` turns it on for one run.
+# --- Vision analysis of RG-2 forms ---
+# Off by default. `watch --analyze` turns it on for one run.
 analysis_enabled = false
-# Model and effort for the forensic check (Haiku 5.5 default after calibration, 20/10/2026:
-# same findings as Sonnet 5.5 on 72 RG-2s at 1/12 of the cost)
-model = "claude-haiku-5-5"
-effort = "high"
+# OpenCode model through the running shared service and its existing OAuth connection. Switching to
+# Luna is only: model = "opencode:openai/gpt-6-luna#none". Direct Anthropic remains available with
+# model = "claude-haiku-5-5" (needs ANTHROPIC_API_KEY or an ant profile).
+model = "opencode:openai/gpt-6.1-terra#none"
+# Direct Anthropic only. OpenCode uses the model selector's #variant (`#none` above).
+anthropic_effort = "high"
 # Local model instead: model = "ollama:qwen3.8:27b-64k" (free, no API key; or `--model` on
 # eval/analyze/watch). Settings for that backend:
 ollama_url = "http://localhost:11434"
 ollama_num_ctx = 65536
 ollama_timeout_s = 900
-# Server-side refusal fallback to another model
+# Anthropic server-side refusal fallback (ignored by OpenCode and Ollama)
 fallbacks = true
 # Analysis pauses once the recorded analysis + explicit case-drafting spend of this election
 # reaches this (USD); eval and ad-hoc `analyze` spend are counted separately. Concurrent in-flight
 # calls can exceed the cap slightly.
 max_spend_usd = 60.0  # a parliamentary election (~8,300 forms) is estimated at ~$40 on Haiku
 # Spend is priced by model from a built-in table (USD per million tokens; also with `--model`):
-# Haiku 5.5 0.10/0.50, Sonnet 5.5 2/10, Opus 5.5 4/20, local ollama 0/0. Source: Anthropic list
-# price as of 20/10/2026. Haiku's price rises above 100k-token prompts (ours are ~20k).
+# OpenCode OAuth and local Ollama 0/0, Haiku 5.5 0.10/0.50, Sonnet 5.5 2/10, Opus 5.5 4/20.
 # Uncomment to override the table; REQUIRED for a model that is not in it (else analysis is refused).
 # price_in_per_mtok = 0.10
 # price_out_per_mtok = 0.50

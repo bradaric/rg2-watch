@@ -493,7 +493,28 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": "type-13 correction could not be read"})
         return True
 
+    def _station_get(self) -> bool:
+        parsed = urlsplit(self.path)
+        if parsed.path != "/rik-station":
+            return False
+        if self.server.station_api is None or not self._same_origin():
+            self._json(403, {"error": "forbidden"})
+            return True
+        try:
+            values = parse_qs(parsed.query, strict_parsing=True)
+            if set(values) != {"url"} or len(values["url"]) != 1:
+                raise ValueError("expected one url query parameter")
+            self._json(200, self.server.station_api(values["url"][0]))
+        except ValueError as exc:
+            self._json(400, {"error": str(exc)[:300]})
+        except Exception:
+            log.exception("live RIK station documents could not be read")
+            self._json(502, {"error": "live RIK station lookup failed"})
+        return True
+
     def do_GET(self) -> None:
+        if self._station_get():
+            return
         if self._type13_get():
             return
         if self._correction_get():
@@ -520,7 +541,8 @@ class _Handler(BaseHTTPRequestHandler):
 def start_server(out_dir: Path, cache_dir: Path, port: int,
                    get_reviews: Callable[[], dict] | None = None,
                    put_review: Callable[[str, str, str | None], dict | None] | None = None,
-                    case_api=None, correction_api=None, classification_api=None, type13_api=None
+                    case_api=None, correction_api=None, classification_api=None, type13_api=None,
+                    station_api=None
                  ) -> ThreadingHTTPServer | None:
     """Serve `out_dir` (+ cached PDFs) in a daemon thread; None when the port is unavailable.
     `get_reviews` serves GET /reviews.json, `put_review(url, verdict, note)` backs POST /review,
@@ -538,6 +560,7 @@ def start_server(out_dir: Path, cache_dir: Path, port: int,
     server.correction_api = correction_api
     server.classification_api = classification_api
     server.type13_api = type13_api
+    server.station_api = station_api
     threading.Thread(target=server.serve_forever, name="web", daemon=True).start()
     log.info("browse page at http://127.0.0.1:%d", server.server_port)
     return server

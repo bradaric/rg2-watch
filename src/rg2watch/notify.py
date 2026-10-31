@@ -39,7 +39,8 @@ def _uploaded(f: Finding) -> str:
 def format_alert(f: Finding) -> tuple[str, str]:
     d = f.doc
     title = f"[{f.severity}] {f.rule} {d.municipality} BM {d.station_no}"
-    lines = [f.summary, d.station_name, f"uploaded {_uploaded(f)}", d.url]
+    lines = [f.summary, *([d.minority] if d.minority else []), d.station_name,
+             f"uploaded {_uploaded(f)}", d.url]
     if f.previous_url:
         lines.append(f"was: {f.previous_url}")
     body = "\n".join(lines)
@@ -65,7 +66,8 @@ def digest_body(findings: list[Finding], page_url: str | None = None, severity: 
     shown = sorted(findings, key=lambda f: rank.get(f.rule, len(rank)))[:DIGEST_DETAIL_LINES]
     for f in shown:
         summary = f.summary if len(f.summary) <= DIGEST_SUMMARY_CHARS else f.summary[:DIGEST_SUMMARY_CHARS - 3] + "..."
-        line = f"{f.rule} {f.doc.municipality} BM {f.doc.station_no}: {summary}"
+        council = f" [{f.doc.minority}]" if f.doc.minority else ""
+        line = f"{f.rule} {f.doc.municipality} BM {f.doc.station_no}{council}: {summary}"
         if len(findings) == 1:
             line += f" {f.doc.url}"
         lines.append(line)

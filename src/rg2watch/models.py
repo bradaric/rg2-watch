@@ -62,10 +62,12 @@ class Doc:
     doc_type: int | None
     url: str
     uploaded_at: str
+    minority: str | None = None
 
     @property
     def station_key(self) -> str:
-        return f"{self.municipality}|{self.station_no}"
+        key = f"{self.municipality}|{self.station_no}"
+        return f"{key}|{self.minority}" if self.minority else key
 
 
 def doc_key(doc: Doc) -> tuple[str, int | str]:

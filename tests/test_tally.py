@@ -11,7 +11,7 @@ from rg2watch.browse import STATIC, build_data
 from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.store import Store
 from rg2watch.tally import _contrib, build_tally, disagreements, extract, format_tally
-from rg2watch.models import Event
+from rg2watch.models import Doc, Election, Event
 from test_browse import BASE, P, add, doc, store
 from test_rules import clean_report, nf
 
@@ -268,6 +268,24 @@ def test_repeat_slot_decision_classified_original_excludes_original_rg2(decision
     assert "original voting minutes" in result["station_results"][0][field]["target_evidence"]
 
 
+def test_model_change_keeps_completed_decision_round_read():
+    s = store()
+    form(s, 111, clean_report())
+    decision = doc(BASE + "/e/misfiled-model-change.pdf", muni="Alpha", no="111",
+                   dt=28, up="2026-10-26T04:04")
+    add(s, decision)
+    s.save_analysis(decision.url, AnalysisResult({
+        "target_round": "original",
+        "target_evidence": "The decision concerns the original voting minutes.",
+    }, 0, 0, 0.0, M, "stop"), "d1", parent=P)
+
+    result = build_tally(s, Config(tally_scope={P: "national"}), P,
+                         "openai/gpt-6.1-terra#none", include_station_results=True)
+
+    assert result["overall"]["annulled"] == 1
+    assert result["station_results"][0]["annulled"]["target_round"] == "original"
+
+
 def test_first_round_decision_gets_no_repeat_round_warning():
     s = store()
     form(s, 12, clean_report())
@@ -486,12 +504,12 @@ def test_disagreement_unit_fields_and_list_rows():
     assert disagreements(mine, {"b": blind}, "a") == ([], ["b could not read voted"])
 
 
-def test_forms_without_watch_model_analysis_are_not_counted():
+def test_forms_use_other_completed_model_when_watch_model_has_no_analysis():
     s = store()
     form(s, 12, clean_report(), model="someone-else")
     form(s, 13)
     t = tally(s)
-    assert t["overall"]["counted"] == 0 and t["overall"]["unanalysed"] == 2
+    assert t["overall"]["counted"] == 1 and t["overall"]["unanalysed"] == 1
 
 
 def test_removed_form_is_left_out():
@@ -748,6 +766,7 @@ def test_hero_warning_translates_every_current_tally_warning_and_preserves_unkno
         "empty_ballot": "no expected ballot rows - comparable list totals unavailable",
         "national_names_shape": "list_names must be a plain list for a national election",
         "municipal_names_shape": "list_names must map municipality -> names for a municipal election",
+        "council_names_shape": "list_names must map council -> names for a council election",
         "names_count": "list_names has {names} names, forms have {lists} lists - check config",
     }
     start = html.index("function serbianCount")
@@ -996,7 +1015,8 @@ def test_municipal_names_match_latin_cyrillic_and_note_wrong_shape():
 
 
 @pytest.mark.parametrize("etype, scope, note", [("2", "national", None), ("3", "municipal", None),
-                                                ("9", "municipal", "unknown election type - set tally_scope")])
+                                                ("5", "council", None),
+                                                 ("9", "municipal", "unknown election type - set tally_scope")])
 def test_scope_from_election_type_and_override(etype, scope, note):
     from rg2watch.models import Election
     s = store()
@@ -1015,6 +1035,43 @@ def test_no_elections_row_is_unknown_municipal():
     t = build_tally(s, Config(), P, M)
     assert t["scope"] == "municipal" and t["scope_note"] == "unknown election type - set tally_scope"
     assert build_tally(s, Config(tally_scope={P: "national"}), P, M)["scope"] == "national"
+
+
+def test_council_scope_aggregates_each_minority_across_physical_stations():
+    s = store()
+    s.upsert_election(Election(P, "1", "5", "НСНМ", BASE))
+    docs = [
+        Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/h1.pdf", "2026-10-19T20:15", "Мађарски"),
+        Doc("Ада", "2", "Школа", "lbl", 6, BASE + "/h2.pdf", "2026-10-19T20:15", "Мађарски"),
+        Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/r1.pdf", "2026-10-19T20:15", "Ромски"),
+    ]
+    for d in docs:
+        add(s, d)
+        put(s, d, clean_report())
+
+    result = build_tally(s, Config(), P, M, include_station_results=True)
+
+    assert result["scope"] == "council"
+    groups = {row["m"]: row for row in result["munis"]}
+    assert groups["Мађарски"]["counted"] == 2
+    assert groups["Ромски"]["counted"] == 1
+    assert groups["Мађарски"]["all"]["valid"] == 1560
+    assert {row["council"] for row in result["station_results"]} == {"Мађарски", "Ромски"}
+    assert {row["m"] for row in result["station_results"]} == {"Ада"}
+
+
+def test_council_scope_empty_list_names_uses_generated_labels_without_warning():
+    s = store()
+    s.upsert_election(Election(P, "1", "5", "НСНМ", BASE))
+    d = Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/h1.pdf",
+            "2026-10-19T20:15", "Мађарски")
+    add(s, d)
+    put(s, d, clean_report())
+
+    result = build_tally(s, Config(list_names={P: []}), P, M)
+
+    assert result["munis"][0]["names"] == ["List 1", "List 2"]
+    assert result["munis"][0]["names_note"] is None
 
 
 def test_cli_tally_municipal_prints_list_table_per_municipality(tmp_path, capsys):
@@ -1095,6 +1152,7 @@ def test_operator_results_sort_municipality_picker_by_serbian_alphabet():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'const SERBIAN_MUNICIPALITY_COLLATOR = new Intl.Collator("sr-Cyrl")' in html
     assert 'rows = sortHeroMunis(T ? T.munis : [])' in html
+    assert 'sortMunicipalityNames([...new Set(rows.map(r => r.muni))])' in html
     helper = html[html.index("const SERBIAN_MUNICIPALITY_COLLATOR"):html.index("function heroListNames")]
     script = helper + r'''
 const assert = require("assert");
@@ -1103,6 +1161,8 @@ assert.deepEqual(sortHeroMunis(rows).map(row => row.m),
   ["Ада", "Лапово", "Љиг", "Тител", "Ћуприја", "Чока", "Џеп", "Шид"]);
 assert.deepEqual(rows.map(row => row.m),
   ["Љиг", "Ћуприја", "Ада", "Шид", "Лапово", "Тител", "Чока", "Џеп"], "must not mutate tally order");
+assert.deepEqual(sortMunicipalityNames(["Љиг", "Ћићевац", "Ада", "Лапово"]),
+  ["Ада", "Лапово", "Љиг", "Ћићевац"]);
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -1112,10 +1172,55 @@ def test_forms_and_results_share_the_url_municipality_context():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert "function setHeroMunicipality(" in html
-    assert 'setHeroMunicipality(o.m || "", true);' in html
+    assert 'setHeroMunicipality(T && T.scope === "council" ? o.council || "" : o.m || "", true);' in html
     assert '$("hmuni").addEventListener("input", () => setSharedMunicipality($("hmuni").value));' in html
     assert '$("m").value = value;' in html
     assert "redraw();" in html
+
+
+def test_council_result_selector_leaves_change_detection_to_redraw():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'if (T && T.scope === "council") { $("council").value = value; redraw(); return; }' in html
+
+
+def test_unknown_council_selection_uses_placeholder_across_shared_filters():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'const councilName = row => row.council || "(unknown council)";' in html
+    assert 'councilName(r) === sel("council")' in html
+    assert 'rows.map(councilName)' in html
+    assert 'councilName(station) === heroMuni' in html
+    assert 'municipalityByName.get(T.scope === "council" ? councilName(station) : station.m)' in html
+
+
+def test_operator_council_results_label_coverage_as_station_council_combinations():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="hero-coverage-title"' in html
+    assert 'councilScope ? "Обрађене комбинације места и савета"' in html
+    assert 'councilScope ? "комбинација места и савета"' in html
+    assert 'id="tgroup-title"' in html
+    assert 'T.scope === "council" ? "Per national council"' in html
+    assert 'T.scope === "council" ? "National council" : "Municipality"' in html
+
+
+def test_operator_council_station_drilldown_keeps_municipality_geography():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'T.scope === "council" ? station.m + " · "' in html
+    assert 'SERBIAN_MUNICIPALITY_COLLATOR.compare(a.station.m, b.station.m)' in html
+
+
+def test_forms_rows_offer_live_rik_station_document_check_in_a_modal():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<dialog id="rikstationdlg"' in html
+    assert 'button.textContent = "Station docs"' in html
+    assert 'mk("button", null, "chip stationdocsbtn")' in html
+    assert ".stationdocsbtn{display:block" in html
+    assert 'fetch("/rik-station?url=" + encodeURIComponent(row.u)' in html
+    assert 'item.stored ? "Stored locally" : "Missing locally"' in html
 
 
 def test_municipal_unknown_municipality_gets_no_list_totals():

@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS elections(
     parent TEXT PRIMARY KEY, round TEXT, election_type TEXT, title TEXT, url TEXT);
 CREATE TABLE IF NOT EXISTS documents(
     id INTEGER PRIMARY KEY, parent TEXT NOT NULL, municipality TEXT, station_no TEXT,
-    station_name TEXT, station_key TEXT, doc_type INTEGER, label TEXT,
+    station_name TEXT, station_key TEXT, minority TEXT, doc_type INTEGER, label TEXT,
     url TEXT NOT NULL UNIQUE, uploaded_at TEXT, first_seen_at TEXT,
     sha256 TEXT, status TEXT DEFAULT 'new', active INTEGER DEFAULT 1,
     analysis_status TEXT, analysis_attempts INTEGER DEFAULT 0, analysis_next_at REAL,
@@ -139,7 +139,7 @@ def _previous_url(details_json: str | None) -> str | None:
 
 def _doc(row) -> Doc:
     return Doc(row["municipality"], row["station_no"], row["station_name"], row["label"],
-               row["doc_type"], row["url"], row["uploaded_at"])
+               row["doc_type"], row["url"], row["uploaded_at"], row["minority"])
 
 
 def _selected_rg2_urls(rows, prompt_version: str) -> set[str]:
@@ -191,6 +191,9 @@ class Store:
                 self._db.execute("UPDATE analyses SET parent=(SELECT parent FROM documents "
                                  "WHERE documents.id=analyses.document_id)")
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(documents)")}
+        if "minority" not in cols:
+            with self._db:
+                self._db.execute("ALTER TABLE documents ADD COLUMN minority TEXT")
         if "analysis_status" not in cols:
             with self._db:
                 self._db.execute("ALTER TABLE documents ADD COLUMN analysis_status TEXT")
@@ -348,16 +351,21 @@ class Store:
                 f"({','.join('?' * len(types))}) ORDER BY id", (parent, *types)).fetchall()
 
     def decision_round_reports(self, parent: str, model: str,
-                               prompt_version: str) -> list[tuple[sqlite3.Row, dict | None]]:
+                               prompt_version: str, fallback: bool = False
+                               ) -> list[tuple[sqlite3.Row, dict | None]]:
         """Active RG-8/RG-9 documents and their current round-classification report, if any."""
+        model_clause = "" if fallback else "AND x.model=? "
+        order = "ORDER BY x.model=? DESC,x.id DESC" if fallback else "ORDER BY x.id DESC"
+        args = ((prompt_version, model, parent) if fallback else
+                (model, prompt_version, parent))
         with self._lock:
             rows = self._db.execute(
                 "SELECT d.*,a.result_json decision_result_json FROM documents d "
                 "LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
-                "AND x.model=? AND x.prompt_version=? AND x.status='done' "
-                "AND x.result_json IS NOT NULL ORDER BY x.id DESC LIMIT 1) "
+                f"{model_clause}AND x.prompt_version=? AND x.status='done' "
+                f"AND x.result_json IS NOT NULL {order} LIMIT 1) "
                 f"WHERE d.parent=? AND d.active=1 AND d.doc_type IN ({','.join(map(str, DECISION_TYPES))}) "
-                "ORDER BY d.id", (model, prompt_version, parent)).fetchall()
+                "ORDER BY d.id", args).fetchall()
         return [(row, json.loads(row["decision_result_json"]) if row["decision_result_json"] else None)
                 for row in rows]
 
@@ -415,18 +423,19 @@ class Store:
 
     def operator_correction_source(self, url: str, model: str,
                                    prompt_version: str) -> sqlite3.Row | None:
-        """Document plus its preferred current, otherwise newest legacy, successful analysis."""
+        """Document plus the configured model's analysis, or the dominant completed fallback."""
         with self._lock:
             return self._db.execute(
-                "SELECT d.*,a.id analysis_id,a.prompt_version analysis_prompt_version,a.result_json "
-                "FROM documents d "
-                "JOIN analyses a ON a.document_id=d.id WHERE d.url=? AND a.model=? "
-                "AND a.prompt_version LIKE 'v%' AND a.status='done' AND a.result_json IS NOT NULL "
-                "AND a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
-                "AND x.model=? AND x.prompt_version LIKE 'v%' AND x.status='done' "
-                "AND x.result_json IS NOT NULL "
-                "ORDER BY x.prompt_version IS ? DESC,x.id DESC LIMIT 1)",
-                (url, model, model, prompt_version)).fetchone()
+                "SELECT d.*,a.id analysis_id,a.model analysis_model,"
+                "a.prompt_version analysis_prompt_version,a.result_json FROM documents d "
+                "JOIN analyses a ON a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
+                "AND x.prompt_version LIKE 'v%' AND x.status='done' AND x.result_json IS NOT NULL "
+                "ORDER BY x.model=? DESC,(SELECT COUNT(DISTINCT c.document_id) FROM analyses c "
+                "JOIN documents cd ON cd.id=c.document_id WHERE cd.parent=d.parent "
+                "AND c.model=x.model AND c.prompt_version LIKE 'v%' AND c.status='done' "
+                "AND c.result_json IS NOT NULL) DESC,x.model,x.prompt_version IS ? DESC,x.id DESC "
+                "LIMIT 1) WHERE d.url=?",
+                (model, prompt_version, url)).fetchone()
 
     def expected_rows_revision(self, parent: str, model: str) -> tuple[int, int, int]:
         """Cheap election revision for safely caching the ballot row shape."""
@@ -443,14 +452,14 @@ class Store:
         return tuple(row)
 
     def type13_source(self, url: str, model: str, prompt_version: str) -> sqlite3.Row | None:
-        """Type-13 document plus its latest successful analysis for this model and prompt."""
+        """Type-13 document plus the preferred, or otherwise latest, successful analysis."""
         with self._lock:
             return self._db.execute(
-                "SELECT d.*,a.id analysis_id,a.result_json FROM documents d "
+                "SELECT d.*,a.id analysis_id,a.model analysis_model,a.result_json FROM documents d "
                 "LEFT JOIN analyses a ON a.id=(SELECT x.id FROM analyses x WHERE x.document_id=d.id "
-                "AND x.model=? AND x.prompt_version=? AND x.status='done' "
-                "AND x.result_json IS NOT NULL ORDER BY x.id DESC LIMIT 1) "
-                "WHERE d.url=? AND d.doc_type=13", (model, prompt_version, url)).fetchone()
+                "AND x.prompt_version=? AND x.status='done' AND x.result_json IS NOT NULL "
+                "ORDER BY x.model=? DESC,x.id DESC LIMIT 1) "
+                "WHERE d.url=? AND d.doc_type=13", (prompt_version, model, url)).fetchone()
 
     def latest_type13_resolution(self, source_url: str) -> sqlite3.Row | None:
         with self._lock:
@@ -618,12 +627,12 @@ class Store:
                                                  (r["id"],))
                     self._db.execute(
                         "INSERT INTO documents(parent, municipality, station_no, station_name, "
-                        "station_key, doc_type, label, url, uploaded_at, first_seen_at, "
-                        "analysis_status) VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+                        "station_key, minority, doc_type, label, url, uploaded_at, first_seen_at, "
+                        "analysis_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
                         "ON CONFLICT(url) DO UPDATE SET active=1",
                         (parent, d.municipality, d.station_no, d.station_name, d.station_key,
-                         d.doc_type, d.label, d.url, d.uploaded_at, now,
-                          "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES else "skipped"))
+                         d.minority, d.doc_type, d.label, d.url, d.uploaded_at, now,
+                           "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES else "skipped"))
                 row = self._db.execute("SELECT id FROM documents WHERE url=?", (d.url,)).fetchone()
                 self._db.execute(
                     "INSERT INTO events(sweep_id, parent, kind, document_id, station_key, "
@@ -687,6 +696,14 @@ class Store:
                 "SELECT station_no, station_id FROM stations WHERE parent=? AND municipality_id=?",
                 (parent, municipality_id)).fetchall()
         return {r["station_no"]: r["station_id"] for r in rows}
+
+    def station_document_urls(self, parent: str, station_key: str) -> set[str]:
+        """Every document URL ever stored for one station, including replaced/removed versions."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT url FROM documents WHERE parent=? AND station_key=?",
+                (parent, station_key)).fetchall()
+        return {row["url"] for row in rows}
 
     def add_finding(self, parent: str, f: Finding, document_url: str) -> bool:
         with self._lock, self._db:
@@ -1103,20 +1120,25 @@ class Store:
                 (parent, *extra)).fetchone()[0]
 
     def rg7_reports(self, parent: str, model: str, prompt_version: str,
-                    analysed_only: bool = True,
-                    station_key: str | None = None) -> list[tuple[sqlite3.Row, dict | None]]:
+                     analysed_only: bool = True,
+                     station_key: str | None = None,
+                     fallback: bool = False) -> list[tuple[sqlite3.Row, dict | None]]:
         """(document row, report) of every active RG-7 decision of `parent` (of one station with
         `station_key`) in upload order, NULL upload times last; callers order by decision date
         (rules.decision_sort_key). Only those this model analysed, or all with report None."""
         st, args = ("AND d.station_key=? ", (station_key,)) if station_key is not None else ("", ())
+        model_clause = "" if fallback else "a.model=? AND "
+        order = "ORDER BY a.model=? DESC,a.id DESC" if fallback else "ORDER BY a.id DESC"
+        query_args = ((prompt_version, model, parent, *args) if fallback else
+                      (model, prompt_version, parent, *args))
         with self._lock:
             rows = self._db.execute(
                 "SELECT d.*, (SELECT a.result_json FROM analyses a WHERE a.document_id=d.id AND "
-                "a.model=? AND a.prompt_version=? AND a.status='done' AND a.result_json IS NOT NULL "
-                "ORDER BY a.id DESC LIMIT 1) AS rj FROM documents d WHERE d.parent=? AND d.active=1 "
+                f"{model_clause}a.prompt_version=? AND a.status='done' AND a.result_json IS NOT NULL "
+                f"{order} LIMIT 1) AS rj FROM documents d WHERE d.parent=? AND d.active=1 "
                 f"AND d.doc_type IN ({','.join(map(str, RG7_TYPES))}) {st}"
                 "ORDER BY d.uploaded_at IS NULL, d.uploaded_at, d.id",
-                (model, prompt_version, parent, *args)).fetchall()
+                query_args).fetchall()
         return [(r, json.loads(r["rj"]) if r["rj"] else None) for r in rows
                 if r["rj"] or not analysed_only]
 

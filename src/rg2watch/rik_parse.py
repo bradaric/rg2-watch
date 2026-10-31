@@ -14,6 +14,12 @@ _LINK = re.compile(r"<a\s[^>]*href=(['\"])((?:(?!\1)[^<>])*)\1[^>]*>(?:(?!</a>).
 _PAGE = re.compile(r'data-page="(\d+)"')
 _OPTION = re.compile(r'<option\s+value="([^"]*)"[^>]*>(.*?)</option>', re.S)
 _HREF = re.compile(r"<a\s[^>]*href=", re.S)
+_MINORITY_BY_URL = {
+    "https://www.rik.parlament.gov.rs/extfile/sr/election_results/63715b6eb9bc2/@14БУГ_66494ba92e1f7f78d0c0f00ab1deaec7.pdf":
+        "Национални савет БУГАРСКЕ националне мањине",
+    "https://www.rik.parlament.gov.rs/extfile/sr/election_results/637152ec06a83/@25БО_37295f736f26f0f6388efdd4dfe6a48d.pdf":
+        "Национални савет БОШЊАЧКЕ националне мањине",
+}
 
 log = logging.getLogger("rg2watch.rik_parse")
 _warned: set = set()
@@ -50,7 +56,8 @@ def _iso(stamp: str) -> str:
         return raw
 
 
-def _parse_extfile(blob: str, municipality: str, station_no: str, station_name: str, base_url: str):
+def _parse_extfile(blob: str, municipality: str, station_no: str, station_name: str,
+                   base_url: str, minority: str | None = None):
     labels = [(m.start(), _norm(m.group(1))) for m in _LABEL.finditer(blob)]
     links = list(_LINK.finditer(blob))
     hrefs = len(_HREF.findall(blob))
@@ -61,14 +68,17 @@ def _parse_extfile(blob: str, municipality: str, station_no: str, station_name: 
     for m in links:
         preceding = [lbl for pos, lbl in labels if pos < m.start()]
         label = preceding[-1] if preceding else ""
+        url = urljoin(base_url, _html.unescape(m.group(2)))
         yield Doc(
             municipality=municipality,
             station_no=station_no,
             station_name=station_name,
             label=label,
             doc_type=LABEL_TO_TYPE.get(label),
-            url=urljoin(base_url, _html.unescape(m.group(2))),
+            url=url,
             uploaded_at=_iso(m.group(3)),
+            # RIK omits the council on two known NSNM records; prefer any future source value.
+            minority=minority or _MINORITY_BY_URL.get(url),
         )
 
 
@@ -83,6 +93,7 @@ def parse_listing(payload: dict, base_url: str) -> ListingPage:
                 str(rec["election_station_number"]),
                 rec.get("election_station_name", ""),
                 base_url,
+                rec.get("minority") or None,
             ))
     pages = [int(n) for n in _PAGE.findall(payload.get("pagination", ""))]
     max_page = max(pages) if pages else (1 if records else 0)

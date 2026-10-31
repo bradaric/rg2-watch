@@ -19,6 +19,11 @@ class OfficialResultsError(ValueError):
     pass
 
 
+def official_results_supported(election: Election) -> bool:
+    """Whether RIK exposes this election through the national official-results feed."""
+    return election.election_type == "2"
+
+
 def _integer(value) -> int:
     if isinstance(value, bool):
         raise OfficialResultsError("boolean where RIK result number was expected")

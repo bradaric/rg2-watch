@@ -12,12 +12,13 @@ from pathlib import Path
 import anthropic
 
 from .analyze import (ARITHMETIC_PROMPT_VERSION, AnalysisError, AnalysisRefused, AnalysisResult,
-                      OllamaUnavailable, analyze_document, stored_model)
+                      OllamaUnavailable, analyze_document, is_ollama, is_opencode, stored_model)
 from .arithmetic import adoptable_merge
 from .config import Config
 from .fetch import fetch_pdf
 from .models import Doc, Event, Finding
 from .notify import Notifier
+from .opencode_client import (OpenCodeBadRequest, OpenCodeGlobalError, OpenCodeUnavailable)
 from .render import RenderError, render_tiles
 from .rik_client import RikBlocked, RikClient, RikError, RikNotFound, RikUnavailable
 from .rules import decision_sort_key, evaluate_report, evaluate_rg7
@@ -27,7 +28,7 @@ from .store import (ANALYSED_TYPES, DECISION_TYPES, MAX_ANALYSIS_ATTEMPTS, RG7_T
 
 log = logging.getLogger("rg2watch.pipeline")
 
-PROMPT_VERSION = "v10"
+PROMPT_VERSION = "v11"
 RG7_PROMPT_VERSION = "r3"
 DECISION_PROMPT_VERSION = "d1"
 TYPE13_PROMPT_VERSION = "t1"
@@ -42,7 +43,7 @@ REALERT_S = 3600  # while a global pause keeps being extended
 # Errors that fail every form alike (bad key, no access, unknown model): pause all analysis
 # instead of burning each document's attempts.
 GLOBAL_ERRORS = (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
-                 anthropic.NotFoundError)
+                 anthropic.NotFoundError, OpenCodeGlobalError)
 # BadRequest is per document, unless this many different documents in a row hit it
 # (e.g. no credit, an invalid parameter): then it is treated as global.
 BAD_REQUEST_GLOBAL = 3
@@ -58,6 +59,7 @@ OVERLOAD_FORM_MAX = 10  # consecutive overload deferrals of one form before one 
 OVERLOAD_ALERT_AFTER = 5  # consecutive overload failures before a status alert
 _MAX_ERROR = 200
 _RENDER_LOCK = threading.Lock()  # PDFium is not thread-safe
+_SAME_CLIENT = object()
 
 
 def _short(exc: BaseException, limit: int = _MAX_ERROR) -> str:
@@ -66,7 +68,7 @@ def _short(exc: BaseException, limit: int = _MAX_ERROR) -> str:
 
 
 def _is_overload(exc: BaseException) -> bool:
-    if isinstance(exc, (*OVERLOAD_ERRORS, OllamaUnavailable)):
+    if isinstance(exc, (*OVERLOAD_ERRORS, OllamaUnavailable, OpenCodeUnavailable)):
         return True
     body = getattr(exc, "body", None) if isinstance(exc, anthropic.APIStatusError) else None
     error = body.get("error") if isinstance(body, dict) else None
@@ -81,9 +83,13 @@ class AnalysisPipeline:
     def __init__(self, client: RikClient, store: Store, notifier: Notifier, anthropic_client,
                  cfg: Config, on_findings: Callable[[list[Finding]], None], cache_dir: Path,
                  clock: Callable[[], float] = time.time, backlog: bool = False,
-                 municipalities: Collection[str] | None = None):
+                 municipalities: Collection[str] | None = None, sonnet_client=_SAME_CLIENT):
         self.client, self.store, self.notifier = client, store, notifier
-        self.anthropic, self.cfg = anthropic_client, cfg
+        self.analysis = anthropic_client
+        self.anthropic = anthropic_client if sonnet_client is _SAME_CLIENT else sonnet_client
+        self.cfg = cfg
+        self._backend = ("OpenCode" if is_opencode(cfg.model) else
+                         "Ollama" if is_ollama(cfg.model) else "Anthropic")
         self.on_findings, self.cache_dir, self.clock = on_findings, cache_dir, clock
         self.parent = client.election.parent
         self.municipalities = municipalities  # watch --only: analyse only these municipalities
@@ -335,8 +341,8 @@ class AnalysisPipeline:
             self.store.mark_analysis(doc.url, "new", refund=True)
             return None
         try:
-            result = analyze_document(tiles, self.anthropic, self.cfg, kind)
-        except anthropic.BadRequestError as exc:
+            result = analyze_document(tiles, self.analysis, self.cfg, kind)
+        except (anthropic.BadRequestError, OpenCodeBadRequest) as exc:
             self._record_cost(doc, exc, version)
             with self._state:
                 self._bad_requests.add(doc.url)
@@ -453,8 +459,10 @@ class AnalysisPipeline:
                     self.cfg, model=model,
                     price_in_per_mtok=None if stage == "sonnet" else self.cfg.price_in_per_mtok,
                     price_out_per_mtok=None if stage == "sonnet" else self.cfg.price_out_per_mtok)
+                if stage == "sonnet" and self.anthropic is None:
+                    raise AnalysisError("Anthropic credentials unavailable for Sonnet fallback")
                 result = analyze_document(tiles, None if stage == "local" else self.anthropic,
-                                          cfg, "arithmetic")
+                                           cfg, "arithmetic")
                 stored = dataclasses.replace(
                     result, model=requested,
                     report={**result.report, "responding_model": result.model})
@@ -530,12 +538,12 @@ class AnalysisPipeline:
             recovered, self._overload_alerted = self._overload_alerted, False
             self._overloads = 0
         if recovered:
-            log.info("Anthropic answering again")
-            self._status("[rg2-watch] analysis no longer delayed: Anthropic answering again")
+            log.info("%s answering again", self._backend)
+            self._status(f"[rg2-watch] analysis no longer delayed: {self._backend} answering again")
 
     def _overloaded(self, doc: Doc, exc: BaseException) -> None:
-        log.warning("analysis of %s deferred %d s, Anthropic busy: %s", doc.url, OVERLOAD_RETRY_S,
-                    _short(exc))
+        log.warning("analysis of %s deferred %d s, %s busy: %s", doc.url, OVERLOAD_RETRY_S,
+                    self._backend, _short(exc))
         with self._state:
             n = self._form_overloads[doc.url] = self._form_overloads.get(doc.url, 0) + 1
             if n >= OVERLOAD_FORM_MAX:
@@ -554,7 +562,7 @@ class AnalysisPipeline:
             if alert:
                 self._overload_alerted = True
         if alert:
-            self._status("[rg2-watch] analysis delayed: Anthropic overloaded since "
+            self._status(f"[rg2-watch] analysis delayed: {self._backend} overloaded since "
                          f"{_hhmm(self._overloaded_since)}")
 
     def _global_failure(self, doc: Doc, exc: BaseException, probe: bool) -> str:

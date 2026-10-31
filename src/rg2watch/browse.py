@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .analyze import ARITHMETIC_PROMPT_VERSION, stored_model
+from .analysis_selection import preferred_analyses
 from .config import Config
 from .models import DOC_TYPES, Doc
 from .operator_corrections import OperatorCorrections, Type13Corrections
@@ -129,7 +130,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     arows = [a for a in store.browse_analyses(parent, PROMPT_VERSION)
              if a["prompt_version"].startswith("v")]
     report_json = store.analysis_reports([a["id"] for a in arows])
-    selected_model_analyses = [a for a in arows if a["model"] == model]
+    selected_by_doc = preferred_analyses(arows, model, "v")
+    selected_model_analyses = list(selected_by_doc.values())
     classification_reports = report_json
     classifications = {}
     for a in selected_model_analyses:
@@ -152,20 +154,22 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     for a in store.arithmetic_analyses(parent, ARITHMETIC_PROMPT_VERSION):
         arithmetic.setdefault(a["document_id"], []).append(
             {"m": a["model"] or "?", "at": to_belgrade(a["created_at"])})
-    analysed_at = {a["document_id"]: to_belgrade(a["created_at"]) for a in arows
-                   if a["model"] == model and a["prompt_version"] == PROMPT_VERSION}
+    analysed_at = {a["document_id"]: to_belgrade(a["created_at"])
+                   for a in selected_model_analyses if a["prompt_version"] == PROMPT_VERSION}
     elections = {e.parent: e for e in store.elections()}
     reviews = {r["url"]: review_record(r) for r in store.latest_reviews(parent)}
     corrections = {}
     expected_rows_cache = {}
     if latest := store.latest_operator_corrections(parent):
-        service = OperatorCorrections(store, cfg, model,
-                                      expected_rows_cache=expected_rows_cache)
-        current = {a["document_id"] for a in arows if a["model"] == model}
+        services = {}
+        current = set(selected_by_doc)
         for item in latest:
             if item["document_id"] not in current:
                 continue
             try:
+                source_model = selected_by_doc[item["document_id"]]["model"]
+                service = services.setdefault(source_model, OperatorCorrections(
+                    store, cfg, source_model, expected_rows_cache=expected_rows_cache))
                 state = service.state(item["url"])
                 corrections[item["url"]] = {
                     k: state[k] for k in ("status", "reason", "at", "revision")}
@@ -174,8 +178,10 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             except Exception:
                 log.warning("operator correction state of %s could not be read", item["url"], exc_info=True)
     r7: dict[tuple, list[dict]] = {}  # (election, station_key, RG-2 type) -> its RG-7 decisions
-    r7_docs = store.rg7_reports(parent, model, RG7_PROMPT_VERSION, analysed_only=False) if parent else [
-        x for p in elections for x in store.rg7_reports(p, model, RG7_PROMPT_VERSION, analysed_only=False)]
+    r7_docs = store.rg7_reports(
+        parent, model, RG7_PROMPT_VERSION, analysed_only=False, fallback=True) if parent else [
+        x for p in elections for x in store.rg7_reports(
+            p, model, RG7_PROMPT_VERSION, analysed_only=False, fallback=True)]
     r7_found: dict[int, list] = {}
     for f in store.rg7_findings(parent):
         r7_found.setdefault(f["document_id"], []).append([f["rule"], f["severity"], f["summary"]])
@@ -229,7 +235,10 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         location = station_location(main["municipality"] or "", main["station_no"] or "")
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
+            council=main["minority"],
             name=main["station_name"], label=main["label"], doc_type=main["doc_type"],
+            analysis_model=(selected_by_doc[main["id"]]["model"]
+                            if main["id"] in selected_by_doc else None),
             doc_type_label=DOC_TYPES.get(main["doc_type"], main["label"]).replace("RG-", "РГ-", 1),
             state="removed" if not main["active"] else "replaced" if len(ds) > 1 else "current",
             sev=max((SEV_RANK.get(x[1], 0) for x in row["f"]), default=0),

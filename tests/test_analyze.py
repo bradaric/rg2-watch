@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from rg2watch import analyze
-from rg2watch.analyze import ARITHMETIC_SCHEMA, SCHEMA, AnalysisError, AnalysisRefused, analyze_document
+from rg2watch.analyze import (ARITHMETIC_SCHEMA, LIST_NAMES_SCHEMA, PROMPT, SCHEMA, AnalysisError,
+                              AnalysisRefused, analyze_document)
 from rg2watch.config import Config
 from rg2watch.render import Tile
 
@@ -103,6 +104,24 @@ def test_arithmetic_request_only_reads_result_numbers():
 def test_arithmetic_schema_uses_only_anthropic_supported_integer_constraints():
     row = ARITHMETIC_SCHEMA["properties"]["list_votes"]["items"]["properties"]["row"]
     assert row == {"type": "integer"}
+
+
+def test_list_name_request_transcribes_ordered_public_list_names():
+    raw = {"lists": [
+        {"row": 2, "name": " List B ", "confidence": "medium"},
+        {"row": 1, "name": "List A", "confidence": "high"},
+    ], "confidence": "medium", "note": "row 2 blurred"}
+    client = FakeClient(_resp(report=raw))
+
+    result = analyze_document(TILES, client, Config(), "list_names")
+
+    call = client.calls[0]
+    assert call["output_config"]["format"] == {"type": "json_schema", "schema": LIST_NAMES_SCHEMA}
+    assert "official electoral-list names" in call["messages"][0]["content"][-1]["text"]
+    assert result.report["lists"] == [
+        {"row": 1, "name": "List A", "confidence": "high"},
+        {"row": 2, "name": "List B", "confidence": "medium"},
+    ]
 
 
 def test_fallbacks_disabled_omits_params():
@@ -342,11 +361,20 @@ def test_prompt_distinguishes_slashes_from_ones_before_names():
             'row, sum the votes and compare the result with the valid-ballot count. If they differ, '
             're-examine every 1/dash classification. Arithmetic is a reason to look again, not '
             'permission to change a visually clear entry or invent a value. '
-            "A lone slash or dash in item 15 means no remarks (remarks_text_present=false).")
+            "A lone slash or dash in the printed remarks field means no remarks "
+            "(remarks_text_present=false). Do not infer this from the item number: item 15 on "
+            "НСНМ-10/22 is outside voting, while remarks are item 20.")
     assert para in analyze.PROMPT
     assert analyze.PROMPT.index(para) < analyze.PROMPT.index("Never transcribe personal names")
     from rg2watch.pipeline import PROMPT_VERSION
-    assert PROMPT_VERSION == "v10"
+    assert PROMPT_VERSION == "v11"
+
+
+def test_rg2_prompt_treats_nsnm_minutes_as_rg2_despite_the_printed_form_code():
+    assert "НСНМ-10/22" in PROMPT and "NSNM-10/22" in PROMPT
+    assert "internal category" in PROMPT
+    assert "must classify it as rg2" in PROMPT
+    assert "13.1" in PROMPT and "13.4-13.7" in PROMPT
 
 
 def _priced(model, resp_model=None, **cfg):

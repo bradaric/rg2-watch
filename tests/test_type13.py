@@ -266,6 +266,20 @@ def test_manual_type13_correction_works_without_model_analysis():
     assert saved["resolution"] == "rg2_correction"
 
 
+def test_model_change_keeps_manual_type13_state_without_source_analysis():
+    store, target, source = correction_workflow_store()
+    store._db.execute("DELETE FROM analyses WHERE document_id=(SELECT id FROM documents WHERE url=?)",
+                      (source.url,))
+    preferred = "openai/gpt-6.1-terra#none"
+    service = Type13Corrections(store, Config(model="opencode:" + preferred), preferred)
+
+    state = service.state(source.url)
+
+    assert state["target_url"] == target.url
+    assert state["classification"] == "uncertain"
+    assert state["can_edit"] is True
+
+
 def test_browse_attaches_type13_to_matching_rg2_row(tmp_path):
     store, target, source = correction_workflow_store()
 
@@ -285,6 +299,18 @@ def test_browse_attaches_type13_to_matching_rg2_row(tmp_path):
         "can_edit": True,
         "source_token": row["t13"][0]["source_token"],
     }]
+
+
+def test_model_change_keeps_completed_type13_state_available(tmp_path):
+    store, target, source = correction_workflow_store()
+    preferred = "openai/gpt-6.1-terra#none"
+
+    [row] = build_data(store, tmp_path, parent=P,
+                       cfg=Config(model="opencode:" + preferred))["rows"]
+
+    assert row["u"] == target.url
+    assert row["t13"][0]["classification"] == "rg2"
+    assert row["t13"][0]["can_approve"] is True
 
 
 def test_type13_http_reuses_correction_snapshot_contract(tmp_path):

@@ -223,6 +223,21 @@ def test_tally_applies_corrections_and_rechecks_arithmetic():
     assert o["corrected"] == 1
 
 
+def test_model_change_falls_back_to_completed_rg2_and_rg7_reads():
+    s = bstore()
+    station(s, clean_report(), [
+        (rg7([("10.3", 20, 18), ("10.4", 780, 782)]), "2026-10-20T10:00:00Z")],
+        ballots_in_box=nf(800), invalid=nf(20), valid=nf(780),
+        list_votes=[{"row": 1, "field": nf(782)}])
+    preferred = "openai/gpt-6.1-terra#none"
+
+    result = build_tally(s, Config(tally_scope={BP: "national"}), BP, preferred)
+
+    assert result["overall"]["counted"] == 1
+    assert result["overall"]["all"]["invalid"] == 18
+    assert result["overall"]["all"]["valid"] == 782
+
+
 def test_repeat_slot_rg7_classified_original_applies_to_original_rg2():
     s = bstore()
     target = bdoc("/e/rg2-rakovica-5.pdf", no="5", muni="Градска општина Раковица")
@@ -767,14 +782,15 @@ def test_rg7_stays_out_of_rg2_backlog_and_counts_separately(tmp_path):
     assert s.run_summary(BP)["skipped"] == 0
 
 
-def test_page_shows_which_model_read_a_decision(tmp_path):
+def test_page_uses_and_shows_fallback_model_that_read_a_decision(tmp_path):
     s = bstore()
     station(s, clean_report(), [], no="1")
     x = d7("1", url="/e/other.pdf")
     add(s, x)
     put(s, x, NEGOTIN, model="some-other-model", version=RG7_PROMPT_VERSION)
     r7 = build_data(s, tmp_path, cfg=Config(model=M))["rows"][0]["r7"]
-    assert r7[0]["ch"] is None and r7[0]["by"] == ["some-other-model"]
+    assert r7[0]["ch"] == ["10.2 180->178", "10.4 177->175", "list:1 146->144"]
+    assert r7[0]["by"] == ["some-other-model"]
 
 
 def test_rg7_analysed_with_the_rg2_prompt_is_reread_and_bogus_findings_removed(tmp_path, caplog):

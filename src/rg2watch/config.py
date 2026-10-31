@@ -22,7 +22,7 @@ class UnknownPrice(ValueError):
 
 def table_prices(model: str) -> tuple[float, float] | None:
     """Built-in price of a model (dated names like claude-haiku-5-5-2026... match), else None."""
-    if model.startswith("ollama:"):
+    if model.startswith(("ollama:", "opencode:")):
         return (0.0, 0.0)
     for name, price in PRICES.items():
         if model == name or model.startswith(name + "-"):
@@ -48,9 +48,9 @@ class Config:
     probe_cost_guard: bool = True
     watchlist: list[str] = field(default_factory=list)
     only_municipalities: list[str] = field(default_factory=list)
-    # parent -> names of list rows 1..N (national) or {municipality -> names} (municipal)
+    # parent -> names of list rows 1..N (national) or {ballot group -> names} (municipal/council)
     list_names: dict[str, list[str] | dict[str, list[str]]] = field(default_factory=dict)
-    tally_scope: dict[str, str] = field(default_factory=dict)  # parent -> "national" | "municipal"
+    tally_scope: dict[str, str] = field(default_factory=dict)  # national | municipal | council
     ntfy_url: str = "https://ntfy.sh"
     ntfy_topic: str | None = None
     ntfy_findings: bool = False  # push stored findings; operational status alerts are always pushed
@@ -62,7 +62,7 @@ class Config:
     request_timeout_s: float = 20.0
     max_pdf_bytes: int = 50_000_000
     model: str = "claude-haiku-5-5"
-    effort: str = "high"
+    anthropic_effort: str = "high"  # direct Anthropic only; OpenCode uses its model #variant
     fallbacks: bool = True
     analysis_enabled: bool = False  # opt-in: `watch --analyze` also enables it
     max_spend_usd: float = 60.0  # per election (parent)
@@ -117,6 +117,10 @@ def load_config(path: Path | None) -> Config:
     if "sweep_pages_per_tick" in data:  # older name of the per-tick budget
         data.setdefault("tick_request_budget", data["sweep_pages_per_tick"])
         del data["sweep_pages_per_tick"]
+    if "effort" in data:  # older, backend-ambiguous name
+        if "anthropic_effort" in data:
+            raise ValueError("set anthropic_effort, not both effort and anthropic_effort")
+        data["anthropic_effort"] = data.pop("effort")
     known = {f.name for f in fields(Config)}
     unknown = set(data) - known
     if unknown:
@@ -139,7 +143,7 @@ def load_config(path: Path | None) -> Config:
                 isinstance(m, str) and names(n) for m, n in v.items())))
             for k, v in cfg.list_names.items())):
         raise ValueError("list_names must map an election id to a list of strings "
-                         "or to {municipality = list of strings}")
+                         "or to {ballot group = list of strings}")
     for k, v in cfg.list_names.items():  # municipal keys match as Latin or Cyrillic: no two may fold together
         seen: dict[str, str] = {}
         for m in v if isinstance(v, dict) else ():
@@ -147,8 +151,9 @@ def load_config(path: Path | None) -> Config:
                 raise ValueError(f'list_names "{k}": "{seen[f]}" and "{m}" name the same municipality')
             seen[f] = m
     if not (isinstance(cfg.tally_scope, dict) and all(
-            isinstance(k, str) and v in ("national", "municipal") for k, v in cfg.tally_scope.items())):
-        raise ValueError('tally_scope must map an election id to "national" or "municipal"')
+            isinstance(k, str) and v in ("national", "municipal", "council")
+            for k, v in cfg.tally_scope.items())):
+        raise ValueError('tally_scope must map an election id to "national", "municipal" or "council"')
     if cfg.high_push_max < 1 or cfg.high_push_window_s < 1 or cfg.mass_replace_threshold < 1:
         raise ValueError("high_push_max, high_push_window_s and mass_replace_threshold must be >= 1")
     if cfg.browse_interval_s < 0:

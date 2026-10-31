@@ -44,6 +44,19 @@ def test_toml_overrides(tmp_path, monkeypatch):
     assert c.probe_interval_s == 30
 
 
+def test_anthropic_effort_name_and_legacy_alias(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('anthropic_effort = "low"\n')
+    assert load_config(p).anthropic_effort == "low"
+    p.write_text('effort = "medium"\n')
+    assert load_config(p).anthropic_effort == "medium"
+
+    p.write_text('effort = "low"\nanthropic_effort = "high"\n')
+    import pytest
+    with pytest.raises(ValueError, match="effort.*anthropic_effort"):
+        load_config(p)
+
+
 def test_medium_ntfy_can_be_disabled(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("ntfy_medium = false\n", encoding="utf-8")
@@ -103,10 +116,10 @@ def test_only_municipalities_must_be_list_of_strings(tmp_path):
 def test_list_names_and_tally_scope_shapes(tmp_path):
     import pytest
     f = tmp_path / "c.toml"
-    f.write_text('tally_scope = {"1" = "national", "2" = "municipal"}\n'
-                 '[list_names]\n"1" = ["A"]\n"2" = {Beograd = ["X", "Y"]}\n')
+    f.write_text('tally_scope = {"1" = "national", "2" = "municipal", "5" = "council"}\n'
+                  '[list_names]\n"1" = ["A"]\n"2" = {Beograd = ["X", "Y"]}\n')
     c = load_config(f)
-    assert c.tally_scope == {"1": "national", "2": "municipal"}
+    assert c.tally_scope == {"1": "national", "2": "municipal", "5": "council"}
     assert c.list_names == {"1": ["A"], "2": {"Beograd": ["X", "Y"]}}
     for bad in ('[list_names]\n"1" = {B = "x"}', '[list_names]\n"1" = {B = [1]}', '[list_names]\n"1" = 3'):
         f.write_text(bad + "\n")

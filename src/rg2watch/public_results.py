@@ -79,6 +79,7 @@ def _public_station(station: dict) -> dict:
     corrected = station["corrected"]
     return {
         "m": station["m"],
+        **({"council": station["council"]} if station.get("council") else {}),
         "no": station["no"],
         "name": station["name"],
         **({"settlement": station["settlement"]} if "settlement" in station else {}),

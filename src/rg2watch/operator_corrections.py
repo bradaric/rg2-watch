@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, TYPE13_PROMPT_VERSION
+from .analysis_selection import preferred_models
 from .rounds import bind_repeat_round, rg7_applies
 from .rules import _list_zero, decision_sort_key, evaluate_report
 from .store import CorrectionRevisionConflict, _doc
@@ -87,6 +88,15 @@ class OperatorCorrections:
             except Exception:
                 log.exception("browse data could not be refreshed after an operator correction")
 
+    def _source_service(self, url: str):
+        """Use the configured model when present, else bind all correction work to its fallback."""
+        row = self.store.operator_correction_source(url, self.model, PROMPT_VERSION)
+        if row is None or row["analysis_model"] == self.model:
+            return self
+        return OperatorCorrections(
+            self.store, self.cfg, row["analysis_model"], self.on_change,
+            expected_rows_cache=self.expected_rows_cache)
+
     @staticmethod
     def _hash(value) -> str:
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -95,13 +105,17 @@ class OperatorCorrections:
         from .tally import scope_of
         scope = scope_of(self.store, self.cfg, source["parent"])[0]
         revision = self.store.expected_rows_revision(source["parent"], self.model)
-        key = (source["parent"], None if scope == "national" else source["municipality"], revision)
+        group = None if scope == "national" else (
+            source["minority"] if scope == "council" else source["municipality"])
+        key = (source["parent"], group, revision)
         if self.expected_rows_cache is not None and key in self.expected_rows_cache:
             return list(self.expected_rows_cache[key])
         selected = self.store.selected_rg2_urls(source["parent"], self.model, PROMPT_VERSION)
         docs = [d for d in self.store.browse_rows(source["parent"])[0] if d["url"] in selected]
-        if scope != "national":
+        if scope == "municipal":
             docs = [d for d in docs if d["municipality"] == source["municipality"]]
+        elif scope == "council":
+            docs = [d for d in docs if d["minority"] == source["minority"]]
         ids = {d["id"] for d in docs}
         analyses = [a for a in self.store.browse_analyses(source["parent"], PROMPT_VERSION)
                     if a["document_id"] in ids and a["model"] == self.model]
@@ -194,6 +208,9 @@ class OperatorCorrections:
         return out
 
     def state(self, url: str) -> dict:
+        service = self._source_service(url)
+        if service is not self:
+            return service.state(url)
         row, report, raw, expected = self._source(url)
         history_rows = self.store.operator_correction_history(url)
         source_snapshot = snapshot_of(report, expected)
@@ -229,6 +246,9 @@ class OperatorCorrections:
                 "history": self._history(history_rows, raw, source_snapshot)}
 
     def save(self, url: str, snapshot: dict, reason: str, source_token: str) -> dict:
+        service = self._source_service(url)
+        if service is not self:
+            return service.save(url, snapshot, reason, source_token)
         state = self.state(url)
         if source_token != state["source_token"]:
             raise CorrectionConflict("correction source changed; review the new values before saving")
@@ -249,6 +269,9 @@ class OperatorCorrections:
         return self.state(url)
 
     def revoke(self, url: str, reason: str, source_token: str) -> dict:
+        service = self._source_service(url)
+        if service is not self:
+            return service.revoke(url, reason, source_token)
         state = self.state(url)
         if source_token != state["source_token"]:
             raise CorrectionConflict("correction source changed; review it before revoking")
@@ -310,9 +333,19 @@ class Type13Corrections:
         source = self.store.type13_source(source_url, self.model, TYPE13_PROMPT_VERSION)
         if source is None:
             raise ValueError("a RIK-listed type-13 document is required")
+        if source["analysis_model"]:
+            source_model = source["analysis_model"]
+        else:
+            analyses = self.store.browse_analyses(source["parent"], PROMPT_VERSION)
+            models = preferred_models(analyses, self.model)
+            source_model = (self.model if any(a["model"] == self.model for a in analyses)
+                            else models[1] if len(models) > 1 else self.model)
+        operator = (self.operator if source_model == self.model else
+                    OperatorCorrections(self.store, self.cfg, source_model, self.on_change,
+                                        expected_rows_cache=self.operator.expected_rows_cache))
         report = json.loads(source["result_json"]) if source["result_json"] else None
         rounds = self.store.selected_rg2_round_urls(
-            source["parent"], source["station_key"], self.model, PROMPT_VERSION)
+            source["parent"], source["station_key"], source_model, PROMPT_VERSION)
         repeats = {kind: self._uploaded(value[1]) for kind, value in rounds.items() if kind != 6}
         source_at = self._uploaded(source["uploaded_at"])
         if not repeats:
@@ -324,7 +357,7 @@ class Type13Corrections:
         else:
             bound = bind_repeat_round(source_at, repeats)
             target_url = rounds.get(bound, (None, ""))[0] if bound is not None else None
-        target = self.operator.state(target_url) if target_url is not None else None
+        target = operator.state(target_url) if target_url is not None else None
         proposal, mismatches = (self._proposal(target["snapshot"], report)
                                 if target is not None and report is not None else (None, []))
         problem = None
@@ -334,8 +367,9 @@ class Type13Corrections:
             except ValueError as exc:
                 problem = str(exc)
         latest = self.store.latest_type13_resolution(source_url)
-        token = self.operator._hash({
+        token = operator._hash({
             "source_url": source_url,
+            "source_model": source_model,
             "source_active": source["active"],
             "analysis": source["analysis_id"],
             "report": report,
@@ -361,6 +395,7 @@ class Type13Corrections:
             "resolution": latest["action"] if latest else None,
             "revision": latest["id"] if latest else None,
             "target_state": target,
+            "analysis_model": source_model,
         }
 
     @staticmethod
@@ -379,17 +414,20 @@ class Type13Corrections:
             raise ValueError("type-13 correction is not ready for approval")
         values = validate_snapshot(snapshot, state["target_state"]["expected_rows"])
         source = self.store.type13_source(source_url, self.model, TYPE13_PROMPT_VERSION)
-        _, _, target_raw, _ = self.operator._source(state["target_url"])
+        operator = (self.operator if state["analysis_model"] == self.model else
+                    OperatorCorrections(self.store, self.cfg, state["analysis_model"], self.on_change,
+                                        expected_rows_cache=self.operator.expected_rows_cache))
+        _, _, target_raw, _ = operator._source(state["target_url"])
         if target_raw != state["target_state"]["source_revision"]:
             raise CorrectionConflict("correction source changed during save; review the new values")
         try:
             self.store.add_type13_correction(
                 source_url, state["target_url"], values, reason, target_raw, source_token,
-                source["analysis_id"], self.model, TYPE13_PROMPT_VERSION,
+                source["analysis_id"], state["analysis_model"], TYPE13_PROMPT_VERSION,
                 state["target_state"]["revision"], state["revision"])
         except CorrectionRevisionConflict as exc:
             raise CorrectionConflict(str(exc)) from exc
-        self.operator._changed()
+        operator._changed()
         return self.state(source_url)
 
     def resolve(self, source_url: str, action: str, reason: str, source_token: str) -> dict:
@@ -416,12 +454,15 @@ class Type13Corrections:
             raise CorrectionConflict("correction source changed; review it before revoking")
         if state["resolution"] != "rg2_correction" or state["revision"] is None:
             raise ValueError("there is no active type-13 correction to revoke")
-        _, _, target_raw, _ = self.operator._source(state["target_url"])
+        operator = (self.operator if state["analysis_model"] == self.model else
+                    OperatorCorrections(self.store, self.cfg, state["analysis_model"], self.on_change,
+                                        expected_rows_cache=self.operator.expected_rows_cache))
+        _, _, target_raw, _ = operator._source(state["target_url"])
         try:
             self.store.revoke_type13_correction(
                 source_url, reason, target_raw, source_token, state["revision"],
                 state["target_state"]["revision"])
         except CorrectionRevisionConflict as exc:
             raise CorrectionConflict(str(exc)) from exc
-        self.operator._changed()
+        operator._changed()
         return self.state(source_url)

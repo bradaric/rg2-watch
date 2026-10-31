@@ -9,6 +9,7 @@ import anthropic
 from .analyze import AnalysisError, OllamaUnavailable, analyze_document, stored_model
 from .config import Config, model_prices
 from .models import Doc, Event
+from .opencode_client import OpenCodeError
 from .pipeline import GLOBAL_ERRORS, PROMPT_VERSION
 from .render import RenderError, count_tiles, render_tiles
 from .rules import evaluate_report
@@ -148,7 +149,7 @@ def run_eval(labels: list[dict], pdf_dir: Path, store: Store, client, cfg: Confi
                 except Exception:
                     log.error("billed cost $%.3f for %s not recorded", billed, name)
             errors[name] = f"{type(exc).__name__}: {' '.join(str(exc).split())[:200]}"
-            if not isinstance(exc, (AnalysisError, anthropic.APIError)):
+            if not isinstance(exc, (AnalysisError, anthropic.APIError, OpenCodeError)):
                 log.exception("evaluation of %s failed", name)
             continue
         files[name] = {"findings": [{"rule": f.rule, "severity": f.severity, "summary": f.summary}

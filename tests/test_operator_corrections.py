@@ -11,12 +11,14 @@ from rg2watch.browse import STATIC, build_data, build_page
 from rg2watch.config import Config
 from rg2watch.operator_corrections import (CorrectionConflict, OperatorCorrections,
                                            apply_operator_snapshot, validate_snapshot)
+from rg2watch.models import Doc
 from rg2watch.pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
 from rg2watch.server import start_server
 from rg2watch.store import Store
 from rg2watch.tally import build_tally, format_tally
 from test_browse import BASE, P, add, doc, store
 from test_rules import clean_report
+from test_tally import put
 
 
 URL = BASE + "/extfile/operator-correction.pdf"
@@ -68,6 +70,30 @@ def test_selected_repeat_form_supports_operator_numeric_correction():
     assert result["overall"]["all"]["registered"] == 900
 
 
+def test_council_correction_expected_rows_use_only_the_same_council():
+    s = store()
+    hungarian = Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/hungarian.pdf",
+                    "2026-10-19T20:15", "Мађарски")
+    roma = Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/roma.pdf",
+               "2026-10-19T20:15", "Ромски")
+    add(s, hungarian)
+    add(s, roma)
+    put(s, hungarian, clean_report())
+    roma_report = clean_report()
+    roma_report["numbers"]["list_votes"].append({
+        "row": 3,
+        "field": {"value": 0, "original_value": None, "legible": True,
+                  "mark": "clean", "note": ""},
+    })
+    put(s, roma, roma_report)
+
+    service = OperatorCorrections(
+        s, Config(model=MODEL, tally_scope={P: "council"}), MODEL)
+
+    assert service.state(hungarian.url)["expected_rows"] == [1, 2]
+    assert service.state(roma.url)["expected_rows"] == [1, 2, 3]
+
+
 def test_legacy_operator_correction_survives_prompt_upgrade(monkeypatch, tmp_path):
     s = correction_store()
     s.save_analysis(URL, AnalysisResult(clean_report(), 0, 0, 0.0, MODEL, "stop"),
@@ -91,6 +117,34 @@ def test_legacy_operator_correction_survives_prompt_upgrade(monkeypatch, tmp_pat
     row = build_data(s, tmp_path, cfg=cfg)["rows"][0]
     assert row["oc"]["status"] == "active"
     assert row["rec"]["result"]["corrected"] == {"included": True, "reason": None}
+
+
+def test_operator_correction_survives_primary_model_change(tmp_path):
+    s = analysed_store()
+    new_model = "openai/gpt-6.1-terra#none"
+    new_cfg = Config(model="opencode:" + new_model, tally_scope={P: "national"})
+    service = OperatorCorrections(s, new_cfg, new_model)
+    state = service.state(URL)
+    service.save(URL, snapshot(registered=900), "audited correction", state["source_token"])
+
+    tally = build_tally(s, new_cfg, P, new_model)
+    row = build_data(s, tmp_path, cfg=new_cfg)["rows"][0]
+
+    assert tally["overall"]["all"]["registered"] == 900
+    assert row["oc"]["status"] == "active"
+
+
+def test_operator_correction_prefers_configured_model_when_it_exists():
+    s = analysed_store()
+    preferred = "openai/gpt-6.1-terra#none"
+    terra = clean_report()
+    terra["numbers"]["registered"]["value"] = 900
+    s.save_analysis(URL, AnalysisResult(terra, 0, 0, 0.0, preferred, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    state = OperatorCorrections(s, Config(model="opencode:" + preferred), preferred).state(URL)
+
+    assert state["snapshot"]["registered"] == 900
 
 
 def test_operator_correction_rejects_rg2_superseded_by_repeat_round():

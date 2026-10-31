@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import rg2watch.cli as cli
 from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.analyze import AnalysisResult
-from rg2watch.browse import STATIC, STATIC_FILES, build_page
+from rg2watch.browse import STATIC, STATIC_FILES, build_data, build_page
 from rg2watch.cli import main
 from rg2watch.config import Config
 from rg2watch.models import Doc, Election, Event, Finding
@@ -56,6 +56,17 @@ def test_groups_versions_and_states(tmp_path):
     assert by_no["1"]["doc_type"] == 6 and by_no["1"]["doc_type_label"] == "РГ-2"
     assert [v["rik"] for v in by_no["1"]["v"]] == [old.url]
     assert by_no["2"]["state"] == "removed"
+
+
+def test_form_rows_expose_nsnm_council(tmp_path):
+    s = store()
+    d = Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/extfile/nsnm.pdf",
+            "2026-10-19T20:15", "Мађарски")
+    add(s, d)
+
+    data = build_data(s, tmp_path, parent=P)
+
+    assert data["rows"][0]["council"] == "Мађарски"
 
 
 def test_form_rows_include_optional_domestic_and_foreign_settlement_labels(tmp_path):
@@ -183,6 +194,45 @@ def test_successful_legacy_analysis_displays_as_rg2_without_reanalysis(tmp_path)
     assert 'analysis " + ({done: "complete"' in html
 
 
+def test_model_change_uses_completed_analysis_as_read_fallback(tmp_path):
+    s = store()
+    d = doc(BASE + "/e/haiku-complete.pdf")
+    add(s, d)
+    old_model = "claude-haiku-5-5"
+    s.save_analysis(d.url, AnalysisResult(clean_report(), 0, 0, 0, old_model, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs",
+               cfg=Config(model="opencode:openai/gpt-6.1-terra#none"))
+
+    (row,) = rows_of(out)
+    assert row["classification"]["status"] == "confirmed_rg2"
+    assert row["analysis_model"] == old_model
+    data = json.loads((out.parent / "data.json").read_text())
+    assert data["tally"]["overall"]["counted"] == 1
+
+
+def test_configured_model_wins_over_completed_fallback(tmp_path):
+    s = store()
+    d = doc(BASE + "/e/two-models.pdf")
+    add(s, d)
+    s.save_analysis(d.url, AnalysisResult(clean_report(), 0, 0, 0, "claude-haiku-5-5", "stop"),
+                    PROMPT_VERSION, parent=P)
+    terra = clean_report()
+    terra["document_classification"] = {"kind": "other", "evidence": "not polling minutes"}
+    preferred = "openai/gpt-6.1-terra#none"
+    s.save_analysis(d.url, AnalysisResult(terra, 0, 0, 0, preferred, "stop"),
+                    PROMPT_VERSION, parent=P)
+
+    out = tmp_path / "index.html"
+    build_page(s, out, tmp_path / "pdfs", cfg=Config(model="opencode:" + preferred))
+
+    (row,) = rows_of(out)
+    assert row["classification"]["status"] == "quarantined_other"
+    assert row["analysis_model"] == preferred
+
+
 def test_result_inclusion_analysis_status_filter_and_models_column_are_present():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
@@ -205,7 +255,7 @@ def test_result_inclusion_analysis_status_filter_and_models_column_are_present()
     assert '(!sel("ast") || r.ast === sel("ast"))' in html
     assert 'title: "Result inclusion"' in html
     assert 'data: "mods", title: "Models", visible: false' in html
-    assert "d.rgColumns = 3" in html and "d.rgColumns !== 3" in html
+    assert "d.rgColumns = 4" in html and "d.rgColumns !== 4" in html
 
 
 def test_result_inclusion_filter_uses_the_same_five_states_as_the_column():
@@ -227,6 +277,25 @@ assert.equal(resultInclusionStatus(result(null, null)), "not-in-tally");
     assert 'ri === "excluded-filed" ? r.rec.result.filed.included === false' in html
 
 
+def test_local_and_rik_links_share_one_documents_column_and_alert_link_style():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    columns = html[html.index("columns: ["):html.index("]\n  });", html.index("columns: ["))]
+
+    assert 'title: "Documents"' in columns
+    assert 'className: "nw documentcol"' in columns
+    assert 'title: "Local PDF"' not in columns
+    assert 'title: "RIK"' not in columns
+    assert 'link("PDF", local)' in columns
+    assert 'link("RIK", rik)' in columns
+    assert 'stationDocumentsButton(r)' in columns
+    assert '"documentlinks lk"' in columns
+    assert 'links.append(" · ")' not in columns
+    assert '#forms .documentcol{text-align:center!important}' in html
+    assert '.documentlinks{display:flex;justify-content:center;gap:6px}' in html
+    assert '.documentlinks a{margin-left:0}' in html
+    assert '.documentcol .stationdocsbtn{margin:var(--s1) auto 0}' in html
+
+
 def test_document_type_and_decision_status_filters_are_in_their_workflow_sections():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
@@ -244,12 +313,38 @@ def test_document_type_and_decision_status_filters_are_in_their_workflow_section
     assert 'optsOf($("dt"), "all document types"' in html
 
 
+def test_review_filter_and_search_match_latest_review_note():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '<option value="has-note">has note</option>' in html
+    start = html.index("const reviewHasNote =")
+    helpers = html[start:html.index("function keep(r)", start)]
+    script = """
+const assert = require("assert");
+""" + helpers + """
+assert.equal(reviewHasNote(null), false);
+assert.equal(reviewHasNote({n: "   "}), false);
+assert.equal(reviewHasNote({n: "1 glas manjka"}), true);
+assert.equal(reviewTextMatches({_h: "station text"}, {n: "1 Glas Manjka"}, "glas manjka"), true);
+assert.equal(reviewTextMatches({_h: "station text"}, {n: "other"}, "station"), true);
+assert.equal(reviewTextMatches({_h: "station text"}, null, "missing"), false);
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    keep = html[html.index("function keep(r)"):html.index("function stationCellHtml(")]
+    assert 'rf === "has-note" ? reviewHasNote(x)' in keep
+    assert "reviewTextMatches(r, x, q)" in keep
+
+
 def test_common_review_filter_presets_preserve_scope_and_auto_refresh_setting():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert '<div id="presetbar" class="presetbar"' in html
-    assert '<button type="button" data-preset="review-filed">Review excluded as filed</button>' in html
-    assert '<button type="button" data-preset="review-v13">Review V13</button>' in html
+    assert '<button type="button" data-preset="not-counted-no-decision">Not counted, no decision</button>' in html
+    assert '<button type="button" data-preset="review-filed">' not in html
+    assert '<button type="button" data-preset="review-v13">' not in html
+    assert '<option value="review-filed">Excluded as filed</option>' in html
+    assert '<option value="review-v13">No names or signatures (V13)</option>' in html
     assert '<button id="clearfilters" type="button">Clear all filters</button>' in html
     start = html.index("const FILTER_PRESETS =")
     code = html[start:html.index("// rule codes", start)]
@@ -260,6 +355,8 @@ assert.deepEqual(presetControls("review-filed", {{e: "779676", m: "Alpha", auto:
   {{e: "779676", m: "Alpha", auto: false, rv: "todo", ri: "excluded-filed", ast: "done", an: "not"}});
 assert.deepEqual(presetControls("review-v13", {{e: "779676", m: "Alpha", auto: false}}),
   {{e: "779676", m: "Alpha", auto: false, rv: "todo", ast: "done", rules: ["V13"]}});
+assert.deepEqual(presetControls("not-counted-no-decision", {{e: "779676", m: "Alpha", auto: false}}),
+  {{e: "779676", m: "Alpha", auto: false, ri: "not-counted", an: "not"}});
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -278,6 +375,8 @@ def test_review_batch_dropdown_applies_only_agreed_filters():
 const assert = require("assert");
 ''' + presets + controls + r'''
 const expected = {
+  "review-filed": {ri: "excluded-filed", an: "not"},
+  "review-v13": {rules: ["V13"]},
   "review-numbers": {rules: ["V1", "V12"]},
   "review-integrity": {rules: ["V3", "V4", "V5", "V6", "V7", "V9", "V13"]},
   "review-procedure": {rules: ["P1", "P2", "P3"]},
@@ -300,14 +399,15 @@ for (const [name, extra] of Object.entries(expected)) {
   callback();
   assert.equal(els.e.value, "779676"); assert.equal(els.m.value, "Alpha"); assert.equal(els.auto.checked, false);
   assert.equal(els.rv.value, "todo"); assert.equal(els.ast.value, "done");
-  for (const key of ["q", "an", "dt", "mod"]) assert.equal(els[key].value, "");
+  for (const key of ["q", "dt", "mod"]) assert.equal(els[key].value, "");
+  assert.equal(els.an.value, extra.an || "");
   assert.equal(els.sev.value, "0"); assert.equal(els.fl.checked, false); assert.equal(els.dis.checked, false);
   assert.equal(els.nc.value, extra.nc || ""); assert.equal(els.ri.value, extra.ri || "");
-  assert.deepEqual(boxes.filter(x => x.checked).map(x => x.value), extra.rules);
+  assert.deepEqual(boxes.filter(x => x.checked).map(x => x.value).sort(), [...(extra.rules || [])].sort());
   assert.equal(els.reviewbatch.value, "");
 }
-assert.equal(draws, 4);
-callback(); assert.equal(draws, 4); // placeholder is not a filter action
+assert.equal(draws, 6);
+callback(); assert.equal(draws, 6); // placeholder is not a filter action
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -482,7 +582,7 @@ assert(stationCellHtml({muni: "M", no: "1", name: "N", settlement: "<Paris>"}).i
     assert ".stationplace{display:block;color:var(--mut);font-size:12px" in html
 
 
-def test_current_escalation_note_is_available_from_forms_table_pill():
+def test_current_review_note_is_available_from_forms_table_pill_for_every_verdict():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     verdict = html[html.index("function verdictHtml"):html.index("function verdictEl")]
     script = r'''
@@ -501,8 +601,11 @@ assert(noted.includes('tabindex="0"'));
 assert(noted.includes('aria-label="escalate: Проверити &quot;потписе&quot; &lt;сада&gt;"'));
 assert(!verdictHtml({v: "escalate"}).includes("hasnote"));
 assert(!verdictHtml({v: "escalate"}).includes("rvnote-inline"));
-assert(!verdictHtml({v: "ok", n: "checked"}).includes("hasnote"));
-assert(!verdictHtml({v: "ok", n: "checked"}).includes("rvnote-inline"));
+for (const status of ["ok", "unsure"]) {
+  const shown = verdictHtml({v: status, n: "checked"});
+  assert(shown.includes("hasnote"));
+  assert(shown.includes('<span class="rvnote-inline">checked</span>'));
+}
 '''
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -808,6 +911,14 @@ def test_status_for_browse_says_watcher_not_running_with_db_counts(tmp_path):
 def test_page_marks_stale_status():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "STALE_S = 60" in html and "watcher not running / stalled since" in html
+
+
+def test_council_status_describes_station_council_forms_not_physical_stations():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert '"РГ-2 station–council forms"' in html
+    assert 'd.rg2_seen + " seen / " + d.rg2_rik + " listed by RIK"' in html
+    assert '"new forms, last 10 / 60 min"' in html
 
 
 def test_status_refresh_preserves_unchanged_alerts_and_skips_static_repaints():
