@@ -1184,6 +1184,16 @@ def test_council_result_selector_leaves_change_detection_to_redraw():
     assert 'if (T && T.scope === "council") { $("council").value = value; redraw(); return; }' in html
 
 
+def test_unknown_council_selection_uses_placeholder_across_shared_filters():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert 'const councilName = row => row.council || "(unknown council)";' in html
+    assert 'councilName(r) === sel("council")' in html
+    assert 'rows.map(councilName)' in html
+    assert 'councilName(station) === heroMuni' in html
+    assert 'municipalityByName.get(T.scope === "council" ? councilName(station) : station.m)' in html
+
+
 def test_operator_council_results_label_coverage_as_station_council_combinations():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 

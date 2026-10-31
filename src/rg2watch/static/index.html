@@ -148,6 +148,10 @@ table.dataTable td.scol::first-line{font-weight:650}
 .stationplace{display:block;color:var(--mut);font-size:12px;font-weight:400;margin-top:2px}
 table.dataTable td.nw{white-space:nowrap}
 #forms td.nw{font-variant-numeric:tabular-nums}
+#forms .documentcol{text-align:center!important}
+.documentlinks{display:flex;justify-content:center;gap:6px}
+.documentlinks a{margin-left:0}
+.documentcol .stationdocsbtn{margin:var(--s1) auto 0}
 #forms td.models{white-space:normal;max-width:14rem;overflow-wrap:anywhere}
 table.dataTable td.fcol{min-width:24em;width:40%;white-space:normal;overflow-wrap:anywhere}
 table.dataTable th.dt-orderable-none .dt-column-order{display:none}
@@ -1461,6 +1465,7 @@ function prep(r) {
 const txt = () => DataTable.render.text();
 const fmt = () => ({_: d => d, display: d => esc(when(d))});
 const sel = id => $(id).value;
+const councilName = row => row.council || "(unknown council)";
 const reviewHasNote = x => !!(x && (x.n || "").trim());
 const reviewTextMatches = (r, x, q) => !q || r._h.includes(q) ||
   !!(x && (x.n || "").toLowerCase().includes(q));
@@ -1477,7 +1482,7 @@ function keep(r) {
   if (ri && !(ri === "excluded-filed" ? r.rec.result.filed.included === false
     : resultInclusionStatus(r.rec.result) === ri)) return false;
   return reviewTextMatches(r, x, q) && (!sel("m") || r.muni === sel("m"))
-    && (!sel("council") || r.council === sel("council")) && (!sel("e") || r.el === sel("e"))
+    && (!sel("council") || councilName(r) === sel("council")) && (!sel("e") || r.el === sel("e"))
     && (!sel("dt") || String(r.doc_type) === sel("dt"))
     && (!sel("mod") || r._models.has(sel("mod"))) && r._sev >= +sel("sev")
     && (!sel("an") || (r.rec.annulled ? "annulled" : r.rec.undetermined ? "undetermined" : "not") === sel("an"))
@@ -1526,7 +1531,7 @@ function initTable() {
         display: (d, t, r) => verdictHtml(rvOf(r)) + (olderEsc(r).length && (rvOf(r) || {}).v !== "escalate"
           ? '<span class="rv rv-escalate rv-older">older escalated</span>' : "")}},
       {data: "mods", title: "Models", visible: false, className: "models", render: txt(), createdCell: (td, d, r) => { if (r.dis.length) td.classList.add("disagree"); }},
-      {data: null, title: "Documents", className: "nw", render: {
+      {data: null, title: "Documents", className: "nw documentcol", render: {
          _: (d, t, r) => (r.pdf ? 2 : 0) + (r.rik ? 1 : 0), display: () => ""},
        createdCell: (td, d, r) => {
          const local = localHref(r.pdf), rik = rikHref(r.rik), links = mk("div", null, "documentlinks lk");
@@ -1565,7 +1570,8 @@ function applyData(data) {
   rows = D.rows.map(prep);
   setTitle();
   optsOf($("m"), "all municipalities", sortMunicipalityNames([...new Set(rows.map(r => r.muni))]).map(m => [m, m]));
-  const councils = sortMunicipalityNames([...new Set(rows.map(r => r.council).filter(Boolean))]);
+  const councils = sortMunicipalityNames([...new Set(D.tally && D.tally.scope === "council"
+    ? rows.map(councilName) : rows.map(r => r.council).filter(Boolean))]);
   optsOf($("council"), "all national councils", councils.map(c => [c, c]));
   $("council").hidden = !councils.length;
   const parents = [...new Set(rows.map(r => r.el))].sort();
@@ -2200,7 +2206,7 @@ function renderStationResults() {
   if (stationScope !== heroMuni) { stationScope = heroMuni; stationLimit = 100; stationKey = ""; }
   const allScope = !heroMuni, mode = $("tmode").value, viewName = NV();
   let stations = (T.station_results || []).filter(station => allScope ||
-    (T.scope === "council" ? station.council === heroMuni : station.m === heroMuni));
+    (T.scope === "council" ? councilName(station) === heroMuni : station.m === heroMuni));
   if (mode === "cl") stations = stations.filter(station => {
     const filed = station.filed || station.corrected;
     return viewName === "diff" ? station.corrected.clean && filed.clean
@@ -2235,7 +2241,7 @@ function renderStationResults() {
     const corrected = station.corrected, filed = station.filed || corrected,
       chosen = viewName === "filed" ? filed : corrected, source = stationSource(station.id),
       review = stationReview(station.id, source),
-      municipality = municipalityByName.get(T.scope === "council" ? station.council : station.m),
+      municipality = municipalityByName.get(T.scope === "council" ? councilName(station) : station.m),
       listOwner = T.scope !== "national" ? municipality : T,
       correctedTurnout = stationTurnout(corrected), filedTurnout = stationTurnout(filed),
       turnout = diff ? correctedTurnout == null || filedTurnout == null ? null : correctedTurnout - filedTurnout

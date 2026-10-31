@@ -282,6 +282,7 @@ def test_local_and_rik_links_share_one_documents_column_and_alert_link_style():
     columns = html[html.index("columns: ["):html.index("]\n  });", html.index("columns: ["))]
 
     assert 'title: "Documents"' in columns
+    assert 'className: "nw documentcol"' in columns
     assert 'title: "Local PDF"' not in columns
     assert 'title: "RIK"' not in columns
     assert 'link("PDF", local)' in columns
@@ -289,6 +290,10 @@ def test_local_and_rik_links_share_one_documents_column_and_alert_link_style():
     assert 'stationDocumentsButton(r)' in columns
     assert '"documentlinks lk"' in columns
     assert 'links.append(" · ")' not in columns
+    assert '#forms .documentcol{text-align:center!important}' in html
+    assert '.documentlinks{display:flex;justify-content:center;gap:6px}' in html
+    assert '.documentlinks a{margin-left:0}' in html
+    assert '.documentcol .stationdocsbtn{margin:var(--s1) auto 0}' in html
 
 
 def test_document_type_and_decision_status_filters_are_in_their_workflow_sections():
