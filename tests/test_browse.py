@@ -277,17 +277,18 @@ assert.equal(resultInclusionStatus(result(null, null)), "not-in-tally");
     assert 'ri === "excluded-filed" ? r.rec.result.filed.included === false' in html
 
 
-def test_local_and_rik_links_share_one_documents_column():
+def test_local_and_rik_links_share_one_documents_column_and_alert_link_style():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     columns = html[html.index("columns: ["):html.index("]\n  });", html.index("columns: ["))]
 
     assert 'title: "Documents"' in columns
     assert 'title: "Local PDF"' not in columns
     assert 'title: "RIK"' not in columns
-    assert 'link("Local PDF", local)' in columns
-    assert 'link("RIK PDF", rik)' in columns
+    assert 'link("PDF", local)' in columns
+    assert 'link("RIK", rik)' in columns
     assert 'stationDocumentsButton(r)' in columns
-    assert '"documentlinks"' in columns
+    assert '"documentlinks lk"' in columns
+    assert 'links.append(" · ")' not in columns
 
 
 def test_document_type_and_decision_status_filters_are_in_their_workflow_sections():

@@ -1529,9 +1529,9 @@ function initTable() {
       {data: null, title: "Documents", className: "nw", render: {
          _: (d, t, r) => (r.pdf ? 2 : 0) + (r.rik ? 1 : 0), display: () => ""},
        createdCell: (td, d, r) => {
-         const local = localHref(r.pdf), rik = rikHref(r.rik), links = mk("div", null, "documentlinks");
-         if (local) links.append(link("Local PDF", local));
-         if (rik) { if (local) links.append(" · "); links.append(link("RIK PDF", rik)); }
+         const local = localHref(r.pdf), rik = rikHref(r.rik), links = mk("div", null, "documentlinks lk");
+         if (local) links.append(link("PDF", local));
+         if (rik) links.append(link("RIK", rik));
          if (local || rik) td.append(links);
          td.append(stationDocumentsButton(r));
        }}]
