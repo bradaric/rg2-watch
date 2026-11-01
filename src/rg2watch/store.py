@@ -434,6 +434,20 @@ class Store:
                 (parent,)).fetchall()
         return {(row["group_kind"], row["group_key"]): row["revision"] for row in rows}
 
+    def operator_model_coverage(self, parent: str, prompt_version: str) -> dict[str, int]:
+        """Election-wide coverage used by the shared preferred-analysis fallback ordering."""
+        with self._lock:
+            rows = self._db.execute(
+                "WITH chosen AS (SELECT a.model,a.prompt_version FROM analyses a "
+                "JOIN documents d ON d.id=a.document_id WHERE d.parent=? "
+                "AND d.doc_type IN (6,10,15,16) AND a.status='done' AND a.result_json IS NOT NULL "
+                "AND a.id=(SELECT b.id FROM analyses b WHERE b.document_id=a.document_id "
+                "AND b.model IS a.model AND b.status='done' AND b.result_json IS NOT NULL "
+                "ORDER BY b.prompt_version IS ? DESC,b.id DESC LIMIT 1)) "
+                "SELECT model,COUNT(*) coverage FROM chosen WHERE prompt_version LIKE 'v%' "
+                "GROUP BY model", (parent, prompt_version)).fetchall()
+        return {row["model"]: row["coverage"] for row in rows}
+
     def add_classification_override(self, url: str, action: str) -> sqlite3.Row | None:
         if action not in ("confirm_rg2", "quarantine_rg7", "revoke"):
             raise ValueError("classification action must be confirm_rg2, quarantine_rg7 or revoke")

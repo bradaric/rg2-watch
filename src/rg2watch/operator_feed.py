@@ -206,6 +206,7 @@ class OperatorFeed:
         self.store, self.cfg, self.cache_dir = store, cfg, Path(cache_dir)
         self._resource_digest = resource_digest()
         self._cursor_secret = secrets.token_bytes(32)
+        self._model_orders: dict[tuple[str, str, int], list[str]] = {}
 
     def _generation(self, store: Store, parent: str) -> str:
         if store.get_election(parent) is None:
@@ -216,9 +217,21 @@ class OperatorFeed:
         with self.store.read_snapshot() as snapshot:
             return self._generation(snapshot, parent)
 
-    def _rows(self, store: Store, parent: str, kind: str, key: str, revision: int) -> list[dict]:
+    def _model_order(self, store: Store, parent: str, revision: int) -> list[str]:
+        preferred = stored_model(self.cfg.model)
+        cache_key = (parent, preferred, revision)
+        if cache_key not in self._model_orders:
+            coverage = store.operator_model_coverage(parent, PROMPT_VERSION)
+            self._model_orders[cache_key] = [preferred, *sorted(
+                (model for model in coverage if model != preferred),
+                key=lambda model: (-coverage[model], model or ""))]
+        return self._model_orders[cache_key]
+
+    def _rows(self, store: Store, parent: str, kind: str, key: str, revision: int,
+              model_order: list[str]) -> list[dict]:
         view = _GroupStore(store, parent, kind, key)
-        data = build_data(view, self.cache_dir, parent, self.cfg, selective=True)
+        data = build_data(view, self.cache_dir, parent, self.cfg, selective=True,
+                          model_order=model_order)
         for row in data["rows"]:
             row.update(group_kind=kind, group_key=key, changed_revision=revision)
         return data["rows"]
@@ -236,6 +249,8 @@ class OperatorFeed:
                 return {**base, "reset_required": True, "through": revision}
             changes = snapshot.operator_feed_changes(parent, since, MAX_GROUPS + 1)
             if any(row["group_kind"] == "global" for row in changes):
+                self._model_orders = {key: value for key, value in self._model_orders.items()
+                                      if key[0] != parent}
                 return {**base, "reset_required": True, "through": revision}
             selected = changes[:MAX_GROUPS]
             if len(changes) > MAX_GROUPS:
@@ -246,8 +261,9 @@ class OperatorFeed:
             identities = {}
             for row in selected:
                 identities[(row["group_kind"], row["group_key"])] = row["revision"]
+            model_order = self._model_order(snapshot, parent, since)
             for (kind, key), changed in identities.items():
-                rows = self._rows(snapshot, parent, kind, key, changed)
+                rows = self._rows(snapshot, parent, kind, key, changed, model_order)
                 target = base["groups"] if rows else base["tombstones"]
                 target.append({"kind": kind, "key": key, **({"rows": rows} if rows else {})})
             through = max((row["revision"] for row in selected), default=revision)
@@ -284,10 +300,11 @@ class OperatorFeed:
             if state["revision"] < floor:
                 return {"parent": parent, "generation": generation, "revision": revision,
                         "reset_required": True, "rows": [], "cursor": None, "done": False}
+            model_order = self._model_order(snapshot, parent, state["revision"])
             identities = snapshot.operator_group_identities(parent, state.get("after"), BOOTSTRAP_ROWS + 1)
             page, size = [], 0
             for kind, key in identities[:BOOTSTRAP_ROWS]:
-                rows = self._rows(snapshot, parent, kind, key, state["revision"])
+                rows = self._rows(snapshot, parent, kind, key, state["revision"], model_order)
                 blob_size = len(_canonical(rows))
                 if page and size + blob_size > BOOTSTRAP_BYTES:
                     break

@@ -159,7 +159,8 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
 
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                cfg: Config | None = None, interval: int = 0, cache: dict | None = None,
-               timings: dict[str, float] | None = None, selective: bool = False) -> dict:
+               timings: dict[str, float] | None = None, selective: bool = False,
+               model_order: list[str] | None = None) -> dict:
     timings = {} if timings is None else timings
     phase = time.monotonic()
 
@@ -180,7 +181,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
              if a["prompt_version"].startswith("v")]
     report_json = store.analysis_reports([a["id"] for a in arows])
     mark("db_reads")
-    selected_by_doc = preferred_analyses(arows, model, "v")
+    selected_by_doc = preferred_analyses(arows, model, "v", model_order)
     selected_model_analyses = list(selected_by_doc.values())
     classification_reports = report_json
     classifications = {}

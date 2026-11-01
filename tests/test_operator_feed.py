@@ -2,10 +2,13 @@ import json
 
 import pytest
 
+from rg2watch.analyze import AnalysisResult
 from rg2watch.config import Config
 from rg2watch.models import Doc, Election, Event
 from rg2watch.operator_feed import OperatorFeed
 from rg2watch.store import Store
+from rg2watch.pipeline import PROMPT_VERSION
+from test_rules import clean_report
 
 P = "662405"
 
@@ -101,3 +104,24 @@ def test_invalid_bootstrap_cursor_and_unknown_parent_are_controlled(tmp_path):
         feed.bootstrap(P, "not-a-cursor")
     with pytest.raises(KeyError):
         feed.feed("missing", 0)
+
+
+def test_selective_rows_use_election_wide_model_coverage_order(tmp_path):
+    store, _ = setup_feed(tmp_path)
+    docs = [doc(f"https://x/{i}.pdf", no=str(i)) for i in range(1, 4)]
+    for item in docs:
+        add(store, item)
+    # In station 1 the models tie locally, so local ordering would choose "a-model". Across the
+    # election z-model has greater coverage and must be selected, exactly as the full builder does.
+    for item in docs[:2]:
+        store.save_analysis(item.url, AnalysisResult(
+            clean_report(), 0, 0, 0, "a-model", "stop"), PROMPT_VERSION, parent=P)
+    for item in docs:
+        store.save_analysis(item.url, AnalysisResult(
+            clean_report(), 0, 0, 0, "z-model", "stop"), PROMPT_VERSION, parent=P)
+    feed = OperatorFeed(store, Config(model="missing-preferred"), tmp_path / "pdfs")
+
+    page = feed.bootstrap(P)
+    station = next(group for group in page["groups"] if group["key"] == docs[0].station_key)
+
+    assert station["rows"][0]["analysis_model"] == "z-model"
