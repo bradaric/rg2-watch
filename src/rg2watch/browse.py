@@ -119,7 +119,17 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
 
 
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
-               cfg: Config | None = None, interval: int = 0, cache: dict | None = None) -> dict:
+               cfg: Config | None = None, interval: int = 0, cache: dict | None = None,
+               timings: dict[str, float] | None = None) -> dict:
+    timings = {} if timings is None else timings
+    phase = time.monotonic()
+
+    def mark(name: str) -> None:
+        nonlocal phase
+        now = time.monotonic()
+        timings[name] = timings.get(name, 0.0) + now - phase
+        phase = now
+
     cache_dir = Path(cache_dir).resolve()
     cfg = cfg or Config()
     model = stored_model(cfg.model)
@@ -130,6 +140,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     arows = [a for a in store.browse_analyses(parent, PROMPT_VERSION)
              if a["prompt_version"].startswith("v")]
     report_json = store.analysis_reports([a["id"] for a in arows])
+    mark("db_reads")
     selected_by_doc = preferred_analyses(arows, model, "v")
     selected_model_analyses = list(selected_by_doc.values())
     classification_reports = report_json
@@ -158,6 +169,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                    for a in selected_model_analyses if a["prompt_version"] == PROMPT_VERSION}
     elections = {e.parent: e for e in store.elections()}
     reviews = {r["url"]: review_record(r) for r in store.latest_reviews(parent)}
+    mark("selection")
     corrections = {}
     expected_rows_cache = {}
     if latest := store.latest_operator_corrections(parent):
@@ -177,6 +189,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                     corrections[item["url"]]["resolved_rules"] = state["resolved_rules"]
             except Exception:
                 log.warning("operator correction state of %s could not be read", item["url"], exc_info=True)
+    mark("corrections")
     r7: dict[tuple, list[dict]] = {}  # (election, station_key, RG-2 type) -> its RG-7 decisions
     r7_docs = store.rg7_reports(
         parent, model, RG7_PROMPT_VERSION, analysed_only=False, fallback=True) if parent else [
@@ -270,6 +283,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             version["classification"] = {**value, "kind": kind, "evidence": evidence,
                                            "override": override_action in ("confirm_rg2", "quarantine_rg7"),
                                            "override_action": override_action, "status": status}
+    mark("rows")
     try:
         tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
                             cache=None if cache is None else cache.setdefault("tally", {}),
@@ -278,6 +292,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     except Exception:
         log.exception("tally could not be built")
         tally = None
+    mark("tally")
     try:
         for station in (tally or {}).get("station_results", []):
             if coordinates := station_coordinates(station["m"], station["no"]):
@@ -358,6 +373,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             "resolution": state["resolution"], "can_approve": state["can_approve"],
             "can_edit": state["can_edit"], "source_token": state["source_token"],
         })
+    mark("rows")
     return {"db": store.name, "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
             "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally,
             "rules": RULE_INFO}
@@ -381,10 +397,21 @@ def _atomic(path: Path, text: bytes | str) -> None:
         raise
 
 
-def _write_pair(out_dir: Path, name: str, glob: str, data) -> None:
-    blob = _json(data)
+def _remove_obsolete_script(out_dir: Path, name: str, glob: str) -> None:
+    """Remove only a script twin produced by an older rg2watch operator build."""
+    path = out_dir / f"{name}.js"
+    try:
+        if path.is_file() and path.read_bytes().startswith(f"window.{glob} = ".encode()):
+            path.unlink()
+    except OSError:
+        log.warning("obsolete operator script could not be removed: %s", path, exc_info=True)
+
+
+def _write_json(out_dir: Path, name: str, glob: str, data) -> int:
+    blob = _json(data).encode("utf-8")
     _atomic(out_dir / f"{name}.json", blob)
-    _atomic(out_dir / f"{name}.js", f"window.{glob} = {blob};\n")
+    _remove_obsolete_script(out_dir, name, glob)
+    return len(blob)
 
 
 def _data_meta(data: dict) -> dict:
@@ -431,7 +458,7 @@ def write_status(store: Store, out_path: Path, parent: str | None, live: dict | 
     out_dir = Path(out_path).resolve().parent
     parent = default_parent(store, parent)
     out_dir.mkdir(parents=True, exist_ok=True)
-    _write_pair(out_dir, "status", "RG2_STATUS", build_status(store, parent, live, cache_dir))
+    _write_json(out_dir, "status", "RG2_STATUS", build_status(store, parent, live, cache_dir))
 
 
 def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None = None,
@@ -445,16 +472,28 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
     out_dir = Path(out_path).resolve().parent
     out_dir.mkdir(parents=True, exist_ok=True)
     _clean(out_dir)
-    data = build_data(store, cache_dir, parent, cfg, interval, cache)
+    timings: dict[str, float] = {}
+    data = build_data(store, cache_dir, parent, cfg, interval, cache, timings)
     t1 = time.monotonic()
     copy_static(out_dir)
     if Path(out_path).name != "index.html":
         _atomic(Path(out_path), (STATIC / "index.html").read_bytes())
-    _write_pair(out_dir, "data", "RG2_DATA", data)
-    _atomic(out_dir / "data-meta.json", _json(_data_meta(data)))
+    serial = time.monotonic()
+    data_blob = _json(data).encode("utf-8")
+    meta_blob = _json(_data_meta(data)).encode("utf-8")
+    timings["serialization"] = time.monotonic() - serial
+    writes = time.monotonic()
+    _atomic(out_dir / "data.json", data_blob)
+    _remove_obsolete_script(out_dir, "data", "RG2_DATA")
+    _atomic(out_dir / "data-meta.json", meta_blob)
     if with_status:
         write_status(store, out_path, parent, cache_dir=cache_dir)
-    log.info("browse page built: %d form(s), %d second opinion(s); data %.2f s, total %.2f s",
-             len(data["rows"]), sum(len(r["ops"]) for r in data["rows"]), t1 - t0,
-             time.monotonic() - t0)
+    timings["writes"] = time.monotonic() - writes
+    log.info("browse page built: rows=%d opinions=%d bytes=%d "
+             "db_reads=%.3fs selection=%.3fs corrections=%.3fs tally=%.3fs rows=%.3fs "
+             "serialization=%.3fs writes=%.3fs data=%.2fs total=%.2fs",
+             len(data["rows"]), sum(len(r["ops"]) for r in data["rows"]), len(data_blob),
+             *(timings.get(name, 0.0) for name in
+               ("db_reads", "selection", "corrections", "tally", "rows", "serialization", "writes")),
+             t1 - t0, time.monotonic() - t0)
     return len(data["rows"])

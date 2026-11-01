@@ -2657,21 +2657,16 @@ $("clearfilters").addEventListener("click", () => {
 });
 window.addEventListener("hashchange", () => { readHash(); if (table) table.draw(); if (T) renderTally(); });
 
-// ---- loading: fetch() over http, script re-injection from file:// ------------------------
-function inject(name, done) {
-  const s = document.createElement("script");
-  s.src = name + ".js?t=" + Date.now();
-  s.onload = () => { s.remove(); done(); };
-  s.onerror = () => { s.remove(); console.error("loading " + name + ".js failed"); };
-  document.head.append(s);
-}
+// ---- loading: the private operator page is HTTP-only ------------------------------------
 function load(name, global, apply) {
   const run = d => { try { apply(d); } catch (e) { console.error("applying " + name + " failed", e); } };
-  if (HTTP) {
-    fetch(name + ".json?t=" + Date.now(), {cache: "no-store"})
-      .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
-      .then(run, e => console.error("fetching " + name + ".json failed", e));
-  } else inject(name, () => run(window[global]));
+  if (!HTTP) {
+    $("built").textContent = "Open this operator page through http://127.0.0.1 (run rg2watch serve).";
+    return;
+  }
+  fetch(name + ".json?t=" + Date.now(), {cache: "no-store"})
+    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+    .then(run, e => console.error("fetching " + name + ".json failed", e));
 }
 function loadStatus() { load("status", "RG2_STATUS", applyStatus); loadReviews(); }
 let dataBuilt = null;

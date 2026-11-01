@@ -671,10 +671,40 @@ def test_script_close_tag_escaped_in_utf8_files(tmp_path):
     add(s, doc(BASE + "/e/a.pdf", muni="</script><b>x", label="Ћ<!-- y"))
     out = tmp_path / "index.html"
     build_page(s, out, tmp_path / "pdfs")
-    for name in ("data.js", "data.json"):
-        raw = (tmp_path / name).read_bytes()
-        assert "Ћ".encode() in raw and b"</script>" not in raw and b"<!--" not in raw
+    raw = (tmp_path / "data.json").read_bytes()
+    assert "Ћ".encode() in raw and b"</script>" not in raw and b"<!--" not in raw
+    assert not (tmp_path / "data.js").exists()
     assert rows_of(out)[0]["muni"] == "</script><b>x"
+
+
+def test_operator_snapshot_is_json_only_and_file_scheme_is_rejected(tmp_path):
+    s = store()
+    add(s, doc(BASE + "/e/a.pdf"))
+    out = tmp_path / "index.html"
+
+    build_page(s, out, tmp_path / "pdfs")
+
+    assert (tmp_path / "data.json").is_file()
+    assert (tmp_path / "data-meta.json").is_file()
+    assert (tmp_path / "status.json").is_file()
+    assert not (tmp_path / "data.js").exists()
+    assert not (tmp_path / "status.js").exists()
+    html = out.read_text(encoding="utf-8")
+    assert "inject(name" not in html
+    assert "Open this operator page through http://127.0.0.1" in html
+
+
+def test_build_logs_named_phase_timings_and_counts(tmp_path, caplog):
+    s = store()
+    add(s, doc(BASE + "/e/a.pdf"))
+
+    with caplog.at_level("INFO", logger="rg2watch.browse"):
+        build_page(s, tmp_path / "index.html", tmp_path / "pdfs")
+
+    message = next(r.getMessage() for r in caplog.records if "browse page built" in r.getMessage())
+    for phase in ("db_reads", "selection", "corrections", "tally", "rows", "serialization", "writes"):
+        assert phase + "=" in message
+    assert "rows=1" in message and "bytes=" in message
 
 
 def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
@@ -739,7 +769,8 @@ def test_static_files_ship_and_are_copied_only_when_changed(tmp_path):
     for name in STATIC_FILES[1:]:
         assert name in versions and hashlib.sha256((STATIC / name).read_bytes()).hexdigest() in versions
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert "innerHTML" not in html.replace("never innerHTML", "") and "http://" not in html
+    assert "innerHTML" not in html.replace("never innerHTML", "")
+    assert html.count("http://") == 1 and "http://127.0.0.1" in html
     s = store()
     out = tmp_path / "index.html"
     build_page(s, out, tmp_path / "pdfs")
@@ -905,7 +936,7 @@ def test_status_for_browse_says_watcher_not_running_with_db_counts(tmp_path):
     assert st["alerts"][0][1:3] == ["HIGH", "X9"]
     assert st["alerts"][0][7].startswith(BASE)  # document URL: the panel links to the form
     assert st["alerts"][0][8:] == [None, None]
-    assert (tmp_path / "status.js").read_text().startswith("window.RG2_STATUS = {")
+    assert not (tmp_path / "status.js").exists()
 
 
 def test_page_marks_stale_status():
