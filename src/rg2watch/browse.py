@@ -1,9 +1,12 @@
 import hashlib
+import fcntl
 import json
 import logging
 import os
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,6 +30,42 @@ UNKNOWN = "(unknown)"
 STATIC = Path(__file__).parent / "static"
 STATIC_FILES = ("index.html", "jquery.min.js", "dataTables.min.js", "dataTables.dataTables.min.css")
 STALE_TMP_S = 300
+_MEMORY_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_MEMORY_BUILD_LOCKS_GUARD = threading.Lock()
+
+
+class SnapshotBusy(RuntimeError):
+    pass
+
+
+@contextmanager
+def snapshot_build_lock(store: Store, out_path: Path, blocking: bool = False):
+    """One snapshot publisher per database/page pair, across threads and processes."""
+    page = str(Path(out_path).resolve().parent)
+    if store.path == ":memory:":
+        key = store.path + "\0" + page
+        with _MEMORY_BUILD_LOCKS_GUARD:
+            lock = _MEMORY_BUILD_LOCKS.setdefault(key, threading.Lock())
+        if not lock.acquire(blocking=blocking):
+            raise SnapshotBusy("operator snapshot build already running")
+        try:
+            yield
+        finally:
+            lock.release()
+        return
+    db = Path(store.path).resolve()
+    digest = hashlib.sha256((str(db) + "\0" + page).encode()).hexdigest()[:16]
+    lock_path = db.parent / f".{db.name}.{digest}.operator-snapshot.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError as exc:
+            raise SnapshotBusy("operator snapshot build already running") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def _ast(d) -> str:
@@ -492,9 +531,9 @@ def write_status(store: Store, out_path: Path, parent: str | None, live: dict | 
     _write_json(out_dir, "status", "RG2_STATUS", build_status(store, parent, live, cache_dir))
 
 
-def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None = None,
-               cfg: Config | None = None, interval: int = 0, with_status: bool = True,
-               cache: dict | None = None) -> int:
+def _build_page_unlocked(store: Store, out_path: Path, cache_dir: Path, parent: str | None = None,
+                         cfg: Config | None = None, interval: int = 0,
+                         with_status: bool = True, cache: dict | None = None) -> int:
     """Write index.html (+ vendored libraries) and data.js/json next to `out_path`'s directory;
     returns the number of rows. `with_status` also writes status.js/json saying the watcher is not
     running (`watch` has its own status thread and passes False). `cache` keeps evaluated second
@@ -542,3 +581,11 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
                ("db_reads", "selection", "corrections", "tally", "rows", "serialization", "writes")),
              t1 - t0, time.monotonic() - t0)
     return len(data["rows"])
+
+
+def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None = None,
+               cfg: Config | None = None, interval: int = 0, with_status: bool = True,
+               cache: dict | None = None, lock_blocking: bool = False) -> int:
+    with snapshot_build_lock(store, out_path, blocking=lock_blocking):
+        return _build_page_unlocked(
+            store, out_path, cache_dir, parent, cfg, interval, with_status, cache)

@@ -1336,6 +1336,29 @@ def test_serve_always_copies_static(tmp_path, monkeypatch):
     assert (page / "index.html").read_bytes() == (STATIC / "index.html").read_bytes()
 
 
+def test_manual_browse_exits_busy_without_touching_snapshot(tmp_path, capsys):
+    from rg2watch.browse import snapshot_build_lock
+
+    db = tmp_path / "e.sqlite"
+    s = Store(db)
+    s.upsert_election(Election(P, "1", "t", "T", BASE))
+    out = tmp_path / "e" / "index.html"
+    out.parent.mkdir()
+    (out.parent / "data.json").write_text("old", encoding="utf-8")
+
+    with snapshot_build_lock(s, out, blocking=False):
+        assert main(["browse", "--db", str(db)]) != 0
+
+    assert "operator snapshot build already running; try again later" in capsys.readouterr().err
+    assert (out.parent / "data.json").read_text(encoding="utf-8") == "old"
+
+
+def test_view_script_only_validates_and_serves_without_browse():
+    script = (STATIC.parent.parent.parent / "scripts" / "view.sh").read_text(encoding="utf-8")
+    assert "rg2watch browse" not in script
+    assert "require_db" in script and "rg2watch serve" in script
+
+
 def test_page_filters_include_versions_and_models():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "only in" in html and 'r.sev = r._sev' in html and "hashchange" in html
