@@ -54,6 +54,10 @@ To browse stored results after stopping the watcher (no RIK or model API calls):
 scripts/view.sh <id>
 ```
 
+Open the localhost URL it prints. The operator page is HTTP-only: it starts immediately, loads form
+rows in bounded pages, and builds or refreshes the slower tally snapshot in the background. Form
+changes normally appear on the next roughly 10-second poll; this is a target, not an SLA.
+
 ### Enable analysis and phone alerts
 
 For Claude analysis, set `ANTHROPIC_API_KEY` in your shell or an ignored `.env` file.
@@ -78,6 +82,8 @@ See the [operator runbook](docs/runbook.md) for preparation and recovery, and
   disable analysis charges. It is refused on an election database that already contains documents
   unless explicitly forced.
 - The review server binds to localhost. `view.sh` needs an existing election database.
+- “Forms current · tally Updating” means the form rows are newer than the last complete tally; do
+  not treat Numbers or Result inclusion as current until the tally timestamp advances.
 - `scripts/export.sh <id>` (`rg2watch export-results`) creates a sanitized standalone
   unofficial-results snapshot for manual static hosting; it does not upload anything. See
   [Review and sharing](docs/review-and-sharing.md#public-results-snapshot).

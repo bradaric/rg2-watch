@@ -156,6 +156,9 @@ class _GroupStore:
                 f"WHERE c.document_id IN ({self._marks()}) AND c.id=(SELECT MAX(x.id) FROM "
                 "operator_corrections x WHERE x.url=c.url) ORDER BY c.id", self.ids).fetchall()
 
+    def active_type13(self, parent=None):
+        return [row for row in self.docs if row["doc_type"] == 13 and row["active"]]
+
     def rg7_reports(self, parent, model, prompt_version, analysed_only=True,
                     station_key=None, fallback=False):
         ids = [row["id"] for row in self.docs if row["doc_type"] in RG7_TYPES]

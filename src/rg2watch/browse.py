@@ -408,6 +408,32 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         row["todo"] = row["rf"] and row["rv"] is None
         row["t13"] = []
     if selective:
+        rows_by_station: dict[tuple[str, str], list[dict]] = {}
+        for row in rows:
+            source_doc = docs_by_url.get(row["u"])
+            if source_doc is not None and source_doc["station_key"] is not None:
+                rows_by_station.setdefault((row["el"], source_doc["station_key"]), []).append(row)
+        for source in store.active_type13(parent):
+            analysis = store.type13_source(source["url"], model, "t1")
+            try:
+                report = json.loads(analysis["result_json"]) if analysis and analysis["result_json"] else {}
+            except (TypeError, ValueError):
+                report = {}
+            resolution = store.latest_type13_resolution(source["url"])
+            target = max(rows_by_station.get((source["parent"], source["station_key"]), []),
+                         key=lambda item: (item["up"] or "", item["id"]), default=None)
+            if target is None:
+                continue
+            base = elections[source["parent"]].base_url if source["parent"] in elections else None
+            source_version = _version(source, {}, {}, cache_dir, base)
+            target["t13"].append({
+                "u": source["url"], "rik": _rik_link(source["url"], base),
+                "up": source["uploaded_at"], "pdf": source_version["pdf"],
+                "classification": report.get("target", "uncertain"),
+                "evidence": report.get("evidence", ""), "confidence": report.get("confidence"),
+                "resolution": resolution["action"] if resolution else None,
+                "can_approve": False, "can_edit": False, "source_token": "", "updating": True,
+            })
         return {"db": store.name,
                 "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "interval": interval, "elections": {p: e.title for p, e in elections.items()},

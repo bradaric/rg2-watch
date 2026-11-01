@@ -406,7 +406,7 @@ stroke-width:2.5;
 <span id="presettitle" class="filtertitle">Common workflows</span>
 <button type="button" data-preset="not-counted-no-decision">Not counted, no decision</button>
 <label>Review batch <select id="reviewbatch"><option value="">Choose a batch…</option><option value="review-filed">Excluded as filed</option><option value="review-v13">No names or signatures (V13)</option><option value="review-numbers">Altered numbers</option><option value="review-integrity">Signatures &amp; scan integrity</option><option value="review-procedure">Procedural findings</option><option value="review-stats">Statistical flags</option></select></label>
-<div id="presetutils"><label><input type="checkbox" id="auto" checked> auto-refresh</label><button id="clearfilters" type="button">Clear all filters</button></div>
+<div id="presetutils"><label><input type="checkbox" id="auto" checked> auto-refresh</label><button id="reloadsnapshot" type="button">Reload tally snapshot</button><button id="clearfilters" type="button">Clear all filters</button></div>
 </div>
 <div id="filtergroups">
 <div id="scopefilters" class="filtergroup" role="group" aria-labelledby="scopetitle">
@@ -1279,8 +1279,9 @@ function type13Box(x) {
     (x.resolution ? "active" : "none")), " ", linksOf(x));
   if (x.evidence) line.append(mk("span", x.evidence, "mut"));
   if (x.resolution) line.append(mk("span", "resolved: " + x.resolution, "mut"));
+  if (x.updating) line.append(mk("span", "Updating verification…", "mut"));
   box.append(line);
-  if (HTTP) {
+  if (HTTP && !x.updating) {
     const actions = mk("div", null, "t13actions");
     if (x.can_edit) {
       const edit = mk("button", x.can_approve ? "Review correction" : "Enter manually");
@@ -2699,6 +2700,7 @@ $("clearfilters").addEventListener("click", () => {
   setCtl({auto: $("auto").checked});
   redraw();
 });
+$("reloadsnapshot").addEventListener("click", () => loadData());
 window.addEventListener("hashchange", () => { readHash(); if (table) table.draw(); if (T) renderTally(); });
 
 // ---- loading: revisioned forms feed and independent full tally snapshots -----------------

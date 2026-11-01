@@ -183,8 +183,12 @@ WHEN NEW.status='done' AND NEW.result_json IS NOT NULL BEGIN
       CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
     FROM operator_feed_meta m JOIN documents d ON d.id=NEW.document_id WHERE m.id=1;
   INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
-    SELECT revision,NEW.parent,'global','*' FROM operator_feed_meta
-    WHERE id=1 AND NEW.prompt_version LIKE 'v%';
+    SELECT m.revision,d.parent,'global','*' FROM operator_feed_meta m
+    JOIN documents d ON d.id=NEW.document_id
+    WHERE m.id=1 AND NEW.prompt_version LIKE 'v%' AND NOT EXISTS (
+      SELECT 1 FROM analyses old WHERE old.document_id=NEW.document_id
+      AND old.model IS NEW.model AND old.prompt_version LIKE 'v%' AND old.status='done'
+      AND old.result_json IS NOT NULL AND old.id<>NEW.id);
 END;""")
     sql.append("""
 CREATE TRIGGER IF NOT EXISTS operator_feed_analyses_delete AFTER DELETE ON analyses
@@ -195,8 +199,12 @@ WHEN OLD.status='done' AND OLD.result_json IS NOT NULL BEGIN
       CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
     FROM operator_feed_meta m JOIN documents d ON d.id=OLD.document_id WHERE m.id=1;
   INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
-    SELECT revision,OLD.parent,'global','*' FROM operator_feed_meta
-    WHERE id=1 AND OLD.prompt_version LIKE 'v%';
+    SELECT m.revision,d.parent,'global','*' FROM operator_feed_meta m
+    JOIN documents d ON d.id=OLD.document_id
+    WHERE m.id=1 AND OLD.prompt_version LIKE 'v%' AND NOT EXISTS (
+      SELECT 1 FROM analyses kept WHERE kept.document_id=OLD.document_id
+      AND kept.model IS OLD.model AND kept.prompt_version LIKE 'v%' AND kept.status='done'
+      AND kept.result_json IS NOT NULL);
 END;""")
     sql.append("""
 CREATE TRIGGER IF NOT EXISTS operator_feed_findings_update AFTER UPDATE OF rule,severity,summary,details_json
