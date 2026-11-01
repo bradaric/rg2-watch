@@ -14,6 +14,7 @@ from .analyze import ARITHMETIC_PROMPT_VERSION, stored_model
 from .browse import STATIC, build_data
 from .config import Config
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
+from .rules import RULE_INFO
 from .store import ANALYSED_TYPES, RG7_TYPES, Store
 
 PROTOCOL_VERSION = 1
@@ -65,12 +66,10 @@ def resource_digest() -> str:
 
 def generation_token(store: Store, cfg: Config, parent: str, resources: str | None = None) -> str:
     election = store.get_election(parent)
-    if election is None:
-        raise KeyError(parent)
     db_uuid, _, _ = store.operator_feed_state(parent)
     config = {name: getattr(cfg, name) for name in sorted(GENERATION_CONFIG_FIELDS)}
     value = {"db": db_uuid, "parent": parent, "protocol": PROTOCOL_VERSION,
-             "config": config, "election": election.__dict__,
+             "config": config, "election": election.__dict__ if election is not None else None,
              "resources": resources or resource_digest()}
     return hashlib.sha256(_canonical(value)).hexdigest()
 
@@ -206,6 +205,8 @@ class OperatorFeed:
         self._cursor_secret = secrets.token_bytes(32)
 
     def _generation(self, store: Store, parent: str) -> str:
+        if store.get_election(parent) is None:
+            raise KeyError(parent)
         return generation_token(store, self.cfg, parent, self._resource_digest)
 
     def generation(self, parent: str) -> str:
@@ -297,4 +298,5 @@ class OperatorFeed:
                     "generation": generation, "revision": state["revision"],
                     "reset_required": False, "groups": page, "cursor": next_cursor,
                     "done": done, "election": {"title": election.title},
-                    "rules_version": PROTOCOL_VERSION}
+                    "rules_version": PROTOCOL_VERSION, "rules": RULE_INFO,
+                    "interval": self.cfg.browse_interval_s}

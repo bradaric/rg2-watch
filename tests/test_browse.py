@@ -277,6 +277,39 @@ assert.equal(resultInclusionStatus(result(null, null)), "not-in-tally");
     assert 'ri === "excluded-filed" ? r.rec.result.filed.included === false' in html
 
 
+def test_operator_group_merge_is_tagged_and_never_regresses_newer_rows():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function groupTag(")
+    code = html[start:html.index("function applyFeedGroups(", start)]
+    script = f"""
+const assert = require("assert");
+{code}
+const row = (kind, key, type, revision, id) => ({{group_kind: kind, group_key: key,
+  doc_type: type, changed_revision: revision, id}});
+let current = [row("station", "A", 6, 5, 1), row("station", "A", 10, 5, 2),
+  row("document", "9", 6, 3, 9), row("station", "B", 6, 8, 3)];
+current = mergeGroupState(current,
+  [{{kind: "station", key: "A", rows: [row("station", "A", 6, 7, 4)]}}], []);
+assert.deepEqual(current.map(x => x.id), [9, 3, 4]);
+current = mergeGroupState(current,
+  [{{kind: "station", key: "B", rows: [row("station", "B", 6, 7, 30)]}}], []);
+assert.deepEqual(current.map(x => x.id), [9, 3, 4]); // stale feed cannot replace revision 8
+current = mergeGroupState(current, [], [{{kind: "document", key: "9"}}]);
+assert.deepEqual(current.map(x => x.id), [3, 4]);
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_operator_page_bootstraps_and_polls_feed_without_overlapping_requests():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'fetch("operator-bootstrap?parent="' in html
+    assert 'fetch("operator-feed?parent="' in html
+    assert "if (feedBusy) return" in html
+    assert "generation !== feedGeneration" in html
+    assert '"reconnecting"' in html and '"auto-refresh paused"' in html
+
+
 def test_local_and_rik_links_share_one_documents_column_and_alert_link_style():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     columns = html[html.index("columns: ["):html.index("]\n  });", html.index("columns: ["))]
@@ -560,8 +593,9 @@ def test_collapsed_station_results_defer_card_rendering_and_initial_tally_render
     assert '$("stationresults").addEventListener("toggle"' in station
 
     apply = html[html.index("function applyData("):html.index("// ---- results")]
-    assert apply.count("renderTally();") == 1
+    assert apply.count("renderTally();") == 2  # one initial path and one non-destructive refresh path
     assert "const first = !table;" in apply
+    assert "table.clear().rows.add(rows)" not in apply
 
 
 def test_forms_table_renders_settlement_on_a_small_separate_line():

@@ -1235,23 +1235,14 @@ function retryCorrectionData(url, state, attempt) {
   if (attempt < 60) setTimeout(() => waitForCorrectionData(url, state, attempt + 1), 1000);
 }
 function waitForCorrectionData(url, state, attempt = 0) {
-  fetch("data-meta.json?t=" + Date.now(), {cache: "no-store"})
-    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
-    .then(meta => {
-      if (!correctionMetaReady(meta, url, state)) { retryCorrectionData(url, state, attempt); return null; }
-      return fetch("data.json?t=" + Date.now(), {cache: "no-store"})
-        .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)));
-    })
-    .then(data => {
-      if (!data) return;
-      if (correctionStateInData(data, url, state) && applyCorrectionData(data, url)) dataBuilt = data.built;
-      else retryCorrectionData(url, state, attempt);
-    }, e => {
-      retryCorrectionData(url, state, attempt);
-      if (attempt >= 60) console.error("refreshing corrected totals failed", e);
-    });
+  pollFeed(true); loadData();
+  const row = rows.find(item => [item, ...(item.v || [])].some(v => v.u === url &&
+    v.oc && v.oc.revision === state.revision));
+  if (row && row.rec.status !== "updating" && tallyRevision >= (row.changed_revision || 0)) return;
+  retryCorrectionData(url, state, attempt);
+  if (attempt >= 60) console.error("refreshing corrected totals is still pending");
 }
-function refreshType13Data() { dataBuilt = null; loadData(); }
+function refreshType13Data() { pollFeed(true); loadData(); }
 function submitCorrection(action) {
   const reason = $("ocreason").value, request = {url: ocUrl, action, reason, source_token: ocState.source_token};
   if (action === "correction") request.snapshot = ocReadSnapshot();
@@ -1279,7 +1270,7 @@ function resolveType13(x, action) {
   if (!reason || !reason.trim()) return;
   ocFetch("type13", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
     body: JSON.stringify({url: x.u, action, reason, source_token: x.source_token})})
-    .then(() => { dataBuilt = null; loadData(); }, e => alert("Type-13 resolution was not saved: " + e.message));
+    .then(() => { pollFeed(true); loadData(); }, e => alert("Type-13 resolution was not saved: " + e.message));
 }
 
 function type13Box(x) {
@@ -1563,7 +1554,62 @@ function optsOf(sel2, first, items) {
   for (const [v, t] of items) sel2.append(new Option(t, v));
   sel2.value = [...sel2.options].some(o => o.value === keepv) ? keepv : "";
 }
+function groupTag(row) { return row.group_kind + "\0" + row.group_key; }
+function mergeGroupState(current, groups, tombstones) {
+  const incoming = new Map(groups.map(group => [group.kind + "\0" + group.key, group.rows || []]));
+  const removed = new Set(tombstones.map(group => group.kind + "\0" + group.key));
+  const currentRevision = new Map();
+  for (const row of current) currentRevision.set(groupTag(row),
+    Math.max(currentRevision.get(groupTag(row)) || 0, row.changed_revision || 0));
+  const accepted = new Map();
+  for (const [tag, values] of incoming) {
+    const revision = Math.max(0, ...values.map(row => row.changed_revision || 0));
+    const old = current.filter(row => groupTag(row) === tag);
+    const freshTally = revision === (currentRevision.get(tag) || 0) &&
+      old.some(row => row.rec && row.rec.status === "updating") &&
+      values.some(row => row.rec && row.rec.status !== "updating");
+    if (revision > (currentRevision.get(tag) || 0) || freshTally) accepted.set(tag, values);
+  }
+  const out = current.filter(row => !removed.has(groupTag(row)) && !accepted.has(groupTag(row)));
+  for (const values of accepted.values()) out.push(...values);
+  return out;
+}
+function applyFeedGroups(groups, tombstones = []) {
+  const prepared = groups.map(group => ({...group, rows: (group.rows || []).map(prep)}));
+  const tags = new Set([...prepared, ...tombstones].map(group => group.kind + "\0" + group.key));
+  const shown = new Set();
+  if (table) table.rows().every(function () {
+    if (tags.has(groupTag(this.data())) && this.child.isShown())
+      shown.add(groupTag(this.data()) + "\0" + this.data().doc_type);
+  });
+  const before = rows;
+  rows = mergeGroupState(rows, prepared, tombstones);
+  D.rows = rows;
+  if (!table) return;
+  table.rows((index, data) => tags.has(groupTag(data))).remove();
+  const additions = rows.filter(row => tags.has(groupTag(row)) && !before.includes(row));
+  table.rows.add(additions).draw(false);
+  table.rows().every(function () {
+    if (shown.has(groupTag(this.data()) + "\0" + this.data().doc_type))
+      this.child(child(this.data())).show();
+  });
+}
 function applyData(data) {
+  if (table) {
+    if (feedGeneration && data.generation !== feedGeneration) { beginBootstrap(true); return; }
+    D = {...D, ...data, rows};
+    const grouped = new Map();
+    for (const row of data.rows || []) {
+      const tag = groupTag(row);
+      if (!grouped.has(tag)) grouped.set(tag, {kind: row.group_kind, key: row.group_key, rows: []});
+      grouped.get(tag).rows.push(row);
+    }
+    applyFeedGroups([...grouped.values()]);
+    T = data.tally; tallyRevision = data.snapshot_revision || 0;
+    renderTally();
+    $("built").textContent = "tally built " + epoch(Date.parse(data.built) / 1000);
+    return;
+  }
   D = data;
   renderLegend();
   if (S) renderStatus();  // alert rule codes get their descriptions
@@ -1593,15 +1639,13 @@ function applyData(data) {
   $("rulesbox").hidden = !$("rules").children.length;
   rulesSummary();
   T = D.tally;
+  feedGeneration = data.generation || feedGeneration;
+  feedRevision = Math.max(feedRevision, data.snapshot_revision || 0);
+  tallyRevision = data.snapshot_revision || 0;
   $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
   const first = !table;
   if (first) { readHash(); initTable(); }
   renderTally();
-  if (first) return;
-  const shown = new Set();
-  table.rows().every(function () { if (this.child.isShown()) shown.add(this.data().id); });
-  table.clear().rows.add(rows).draw(false);
-  table.rows().every(function () { if (shown.has(this.data().id)) this.child(child(this.data())).show(); });
 }
 
 // ---- results (unofficial tally) -----------------------------------------------------------
@@ -2657,11 +2701,11 @@ $("clearfilters").addEventListener("click", () => {
 });
 window.addEventListener("hashchange", () => { readHash(); if (table) table.draw(); if (T) renderTally(); });
 
-// ---- loading: the private operator page is HTTP-only ------------------------------------
+// ---- loading: revisioned forms feed and independent full tally snapshots -----------------
 function load(name, global, apply) {
   const run = d => { try { apply(d); } catch (e) { console.error("applying " + name + " failed", e); } };
   if (!HTTP) {
-    $("built").textContent = "Open this operator page through http://127.0.0.1 (run rg2watch serve).";
+    $("built").textContent = "Operator page requires localhost HTTP.";
     return;
   }
   fetch(name + ".json?t=" + Date.now(), {cache: "no-store"})
@@ -2670,8 +2714,75 @@ function load(name, global, apply) {
 }
 function loadStatus() { load("status", "RG2_STATUS", applyStatus); loadReviews(); }
 let dataBuilt = null;
+let feedGeneration = null, feedRevision = 0, tallyRevision = 0, feedBusy = false;
+let bootstrapBusy = false, nextTallyAt = 0;
+function operatorParent() {
+  return (S && S.parent) || (D.rows[0] && D.rows[0].el) || Object.keys(D.elections || {})[0] || null;
+}
+function feedState(text) { $("built").textContent = text; }
+function beginBootstrap(clear = false, cursor = null) {
+  if (bootstrapBusy || !HTTP) return;
+  const parent = operatorParent();
+  if (!parent) { feedState("reconnecting"); setTimeout(() => beginBootstrap(clear), 1000); return; }
+  if (clear) {
+    feedGeneration = null; feedRevision = tallyRevision = 0; T = null;
+    if (table) applyFeedGroups([], [...new Map(rows.map(row => [groupTag(row),
+      {kind: row.group_kind, key: row.group_key}])).values()]);
+  }
+  bootstrapBusy = true; feedState("loading forms…");
+  fetch("operator-bootstrap?parent=" + encodeURIComponent(parent) +
+    (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""), {cache: "no-store"})
+    .then(response => response.ok ? response.json() : Promise.reject(new Error("HTTP " + response.status)))
+    .then(page => {
+      bootstrapBusy = false;
+      if (page.reset_required) { setTimeout(() => beginBootstrap(true), 500); return; }
+      if (feedGeneration && page.generation !== feedGeneration) { beginBootstrap(true); return; }
+      feedGeneration = page.generation; feedRevision = page.revision;
+      if (!table) applyData({db: page.db, parent, generation: page.generation,
+        snapshot_revision: 0, built: "", interval: page.interval,
+        elections: {[parent]: page.election.title}, rows: page.groups.flatMap(group => group.rows),
+        tally: null, rules: page.rules || {}});
+      else applyFeedGroups(page.groups);
+      if (page.cursor) beginBootstrap(false, page.cursor);
+      else { feedState("forms current · tally Updating"); pollFeed(true); }
+    }, error => { bootstrapBusy = false; feedState("reconnecting");
+      console.error("operator bootstrap failed", error); setTimeout(() => beginBootstrap(clear, cursor), 2000); });
+}
+function pollFeed(force = false) {
+  if (feedBusy) return;
+  if (!force && $("auto") && !$("auto").checked) { feedState("auto-refresh paused"); return; }
+  const parent = operatorParent();
+  if (!parent || !feedGeneration) { beginBootstrap(false); return; }
+  feedBusy = true;
+  fetch("operator-feed?parent=" + encodeURIComponent(parent) + "&since=" + feedRevision,
+    {cache: "no-store"})
+    .then(response => response.ok ? response.json() : Promise.reject(new Error("HTTP " + response.status)))
+    .then(change => {
+      feedBusy = false;
+      if (change.generation !== feedGeneration || change.reset_required) { beginBootstrap(true); return; }
+      applyFeedGroups(change.groups || [], change.tombstones || []);
+      feedRevision = change.through;
+      feedState(change.more ? "catching up…" : "forms current · tally " +
+        (tallyRevision >= feedRevision ? "current" : "Updating"));
+      if (change.more) pollFeed(true);
+    }, error => { feedBusy = false; feedState("reconnecting"); console.error("operator feed failed", error); });
+}
 function loadData() {
-  load("data", "RG2_DATA", d => { if (d && d.built !== dataBuilt) { applyData(d); dataBuilt = d.built; } });
+  if (!HTTP) { feedState("Open this operator page through http://127.0.0.1 (run rg2watch serve)."); return; }
+  Promise.all([
+    fetch("data.json?t=" + Date.now(), {cache: "no-store"}),
+    fetch("data-meta.json?t=" + Date.now(), {cache: "no-store"})
+  ]).then(async ([dataResponse, metaResponse]) => {
+    if (dataResponse.status === 404 || metaResponse.status === 404) { beginBootstrap(false); return null; }
+    if (!dataResponse.ok || !metaResponse.ok) throw new Error("snapshot HTTP error");
+    const data = await dataResponse.json(), meta = await metaResponse.json();
+    if (data.snapshot_id !== meta.snapshot_id || data.generation !== meta.generation ||
+        data.snapshot_revision !== meta.snapshot_revision) throw new Error("snapshot pair mismatch");
+    if (feedGeneration && data.generation !== feedGeneration) { beginBootstrap(true); return null; }
+    if (data.built !== dataBuilt) { applyData(data); dataBuilt = data.built; }
+    return data;
+  }).catch(error => { console.error("fetching tally snapshot failed", error);
+    if (!table) beginBootstrap(false); else feedState("forms current · tally stale"); });
 }
 loadStatus();
 setInterval(loadStatus, STATUS_EVERY_MS);
@@ -2679,8 +2790,10 @@ setInterval(tickStatus, 5000);
 // first load always; later loads only while auto-refresh is on, at the period given by the data (0 = off)
 loadData();
 function loop() {
-  if (!table || ($("auto").checked && D.interval > 0)) loadData();
-  setTimeout(loop, Math.max(5, D.interval || 10) * 1000);
+  pollFeed(false);
+  const now = Date.now();
+  if (D.interval > 0 && now >= nextTallyAt) { nextTallyAt = now + D.interval * 1000; loadData(); }
+  setTimeout(loop, 10000);
 }
 setTimeout(loop, 10000);
 setInterval(loadOfficialResults, 60000);

@@ -245,7 +245,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         key = d["station_key"] if d["station_key"] is not None else ("id", d["id"])
         groups.setdefault((d["parent"], key, d["doc_type"]), []).append(d)
     rows = []
-    for (par, _, _), ds in groups.items():
+    for (par, group_key, _), ds in groups.items():
         ds.sort(key=lambda d: (d["uploaded_at"] or "", d["id"]), reverse=True)
         main = next((d for d in ds if d["active"]), ds[0])
         base = elections[par].base_url if par in elections else None
@@ -254,6 +254,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         location = station_location(main["municipality"] or "", main["station_no"] or "")
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
+            group_kind="document" if isinstance(group_key, tuple) else "station",
+            group_key=str(group_key[1]) if isinstance(group_key, tuple) else group_key,
             council=main["minority"],
             name=main["station_name"], label=main["label"], doc_type=main["doc_type"],
             analysis_model=(selected_by_doc[main["id"]]["model"]
@@ -509,8 +511,10 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
         from .operator_feed import generation_token
         data["generation"] = generation_token(snapshot, cfg or Config(), snapshot_parent)
         data["snapshot_revision"] = snapshot_revision
+        group_revisions = snapshot.operator_group_revisions(snapshot_parent)
         for row in data["rows"]:
-            row["changed_revision"] = snapshot_revision
+            row["changed_revision"] = group_revisions.get(
+                (row["group_kind"], row["group_key"]), 0)
         data["snapshot_id"] = hashlib.sha256(_json({
             "generation": data["generation"], "revision": snapshot_revision,
             "built": data["built"], "rows": [row["id"] for row in data["rows"]],

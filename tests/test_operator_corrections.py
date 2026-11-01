@@ -721,13 +721,11 @@ def test_page_has_refresh_safe_themed_operator_correction_dialog():
     assert "dataBuilt = null;" not in success
     assert "function waitForCorrectionData(" in html
     wait = html[html.index("function waitForCorrectionData("):html.index("function submitCorrection(")]
-    assert wait.index('fetch("data-meta.json') < wait.index('fetch("data.json')
-    assert "correctionMetaReady(meta, url, state)" in wait
-    assert "applyCorrectionData(data, url)" in wait
-    assert "applyData(data)" not in wait
-    apply = html[html.index("function applyCorrectionData("):html.index("function waitForCorrectionData(")]
-    assert "row.remove();" in apply and "table.row.add(fresh)" in apply
-    assert "table.clear()" not in apply
+    assert "pollFeed(true); loadData();" in wait
+    assert 'row.rec.status !== "updating"' in wait
+    assert "tallyRevision >= (row.changed_revision || 0)" in wait
+    assert "correctionMetaReady(meta, url, state)" not in wait
+    assert "applyCorrectionData(data, url)" not in wait
     assert "v.oc.revision === state.revision" in html
     assert '$("ocdlg").close();' in success
     assert '$("ocdlg").close();' not in failure

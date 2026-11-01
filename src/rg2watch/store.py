@@ -418,6 +418,14 @@ class Store:
                 (parent, after_kind, after_kind, after_key, limit)).fetchall()
         return [(row["kind"], row["key"]) for row in rows]
 
+    def operator_group_revisions(self, parent: str) -> dict[tuple[str, str], int]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT group_kind,group_key,MAX(revision) revision FROM operator_feed_changes "
+                "WHERE parent=? AND group_kind<>'global' GROUP BY group_kind,group_key",
+                (parent,)).fetchall()
+        return {(row["group_kind"], row["group_key"]): row["revision"] for row in rows}
+
     def add_classification_override(self, url: str, action: str) -> sqlite3.Row | None:
         if action not in ("confirm_rg2", "quarantine_rg7", "revoke"):
             raise ValueError("classification action must be confirm_rg2, quarantine_rg7 or revoke")
