@@ -119,23 +119,34 @@ snapshot.
 
 `scripts/benchmark_operator_impact.py` additionally uses `FakeRik` behind `httpx.MockTransport` and
 `FakeAnthropic`; all databases and PDFs are generated under `/tmp/opencode`, so there are no RIK or
-model network calls. It compares identical local work with and without a deliberately continuous
-snapshot-plus-empty-feed loop:
+model network calls. Each case starts from a newly generated 8,253-station, 8,459-document database.
+The fake RIK lists the same 8,253 stations and document URLs as SQLite. The loaded case overlaps the
+workload with continuous full election-sized snapshots and a second loop that alternates reviews for
+53 stations and consumes their real selective feed payloads.
 
 | Simulated workload | Baseline | With snapshot/feed load |
 |---|---:|---:|
-| watcher tick p50 | 5.23 ms | 8.07 ms |
-| watcher tick p95 | 7.34 ms | 11.59 ms |
-| one-worker analysis p50 | 351.38 ms | 354.65 ms |
-| one-worker analysis p95 | 357.79 ms | 365.13 ms |
-| analysis throughput | 2.839 forms/s | 2.813 forms/s |
+| watcher tick p50 | 1,873.48 ms | 4,091.28 ms |
+| watcher tick p95 | 2,226.10 ms | 6,975.09 ms |
+| one-worker analysis p50 | 366.92 ms | 448.26 ms |
+| one-worker analysis p95 | 570.51 ms | 737.37 ms |
+| analysis throughput | 2.614 forms/s | 1.970 forms/s |
 
-The watcher result covers 30 local ticks after bootstrapping a 36-station fake RIK fixture; 15 full
-snapshots and feed polls completed concurrently. The analysis result covers 12 locally rendered
-900×1200 PDFs and 12 immediate fake-model responses; 803 small full snapshots and feed polls ran
-concurrently. This is a safe contention simulation, not a claim about live RIK latency, paid-model
-latency, multiple production workers, or election-night hardware. Those live-environment effects
-remain intentionally unmeasured because the live watcher/database could not be touched.
+The watcher result covers 30 sustained-backlog ticks using the production default 40-request budget
+and a fake clock advancing 60 seconds per sample. During the loaded run, 10 complete 8,253-station
+snapshots took 8.12–15.15 seconds, while 72 feeds returned 3,816 changed groups. The analysis result
+adds 12 locally rendered 900×1200 PDFs to another copy of the election-sized database and processes
+12 immediate fake-model responses on one real `AnalysisPipeline._loop` worker thread. Its loaded run
+overlapped one 7.99-second full snapshot and 32 feeds returning 1,115 changed groups.
+
+This intentionally CPU/SQLite-heavy local simulation shows material contention: watcher p95 rose
+4.75 seconds and fake-worker throughput fell 24.6%. It does not establish production impact because
+`MockTransport` has no RIK network wait, fake model responses return immediately, only one analysis
+worker is measured, and hardware scheduling differs. In particular, the watcher numbers emphasize
+local parsing and database work that real request latency may interleave differently. Live RIK/model
+latency, multiple production workers, election-night hardware, and a safe production load policy
+remain unmeasured because the live watcher/database could not be touched. The result therefore does
+not justify running full snapshots continuously; production retains its existing background cadence.
 
 Reproduction commands for the added measurements:
 
