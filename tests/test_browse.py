@@ -7,6 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+import pytest
 import rg2watch.cli as cli
 from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.analyze import AnalysisResult
@@ -1351,6 +1352,30 @@ def test_manual_browse_exits_busy_without_touching_snapshot(tmp_path, capsys):
 
     assert "operator snapshot build already running; try again later" in capsys.readouterr().err
     assert (out.parent / "data.json").read_text(encoding="utf-8") == "old"
+
+
+def test_incompatible_running_generation_cannot_publish_sequentially(tmp_path):
+    from rg2watch.browse import (SnapshotGenerationConflict, snapshot_generation_lease)
+    from rg2watch.operator_feed import generation_token
+
+    db = tmp_path / "e.sqlite"
+    s = Store(db)
+    s.upsert_election(Election(P, "1", "t", "T", BASE))
+    add(s, doc(BASE + "/e/a.pdf"))
+    out = tmp_path / "e" / "index.html"
+    first_cfg = Config(model="claude-haiku-5-5")
+    second_cfg = Config(model="claude-sonnet-5-5")
+    build_page(s, out, tmp_path / "pdfs", P, first_cfg)
+    before = (out.parent / "data.json").read_bytes()
+
+    first_generation = generation_token(s, first_cfg, P)
+    with snapshot_generation_lease(s, out, first_generation):
+        with pytest.raises(SnapshotGenerationConflict):
+            build_page(s, out, tmp_path / "pdfs", P, second_cfg)
+
+    assert (out.parent / "data.json").read_bytes() == before
+    build_page(s, out, tmp_path / "pdfs", P, second_cfg)
+    assert json.loads((out.parent / "data.json").read_text())["generation"] != first_generation
 
 
 def test_view_script_only_validates_and_serves_without_browse():

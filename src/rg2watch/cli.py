@@ -18,8 +18,9 @@ import httpx
 from .analyze import (AnalysisError, OllamaUnavailable, analyze_document, is_ollama, is_opencode,
                       parse_opencode_model, stored_model)
 from .batch import ARITHMETIC_PROMPT_VERSION, ADHOC, describe_estimate, run_batch, select_forms
-from .browse import (SnapshotBusy, build_page, copy_static, default_parent, record_review,
-                     review_record, reviews_payload, write_status)
+from .browse import (SnapshotBusy, SnapshotGenerationConflict, build_page, copy_static,
+                     default_parent, record_review, review_record, reviews_payload,
+                     snapshot_generation_lease, write_status)
 from .config import Config, UnknownPrice, load_config, model_prices
 from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
 from .evaluate import PARENT as EVAL_PARENT
@@ -33,7 +34,7 @@ from .opencode_client import OpenCodeClient, OpenCodeError
 from .official_results import (OfficialResultsClient, official_results_supported,
                                write_official_results)
 from .operator_corrections import OperatorCorrections, Type13Corrections
-from .operator_feed import OperatorFeed
+from .operator_feed import OperatorFeed, generation_token
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from .public_results import write_public_results
 from .render import RenderError, render_tiles
@@ -340,7 +341,15 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
                correction_change=None, rik_client: RikClient | None = None):
     """Serve the page on `port`, else the next free port up to +10; None when none is free."""
     case_api = _publication_api(store, cfg) if cfg is not None else None
-    feed = OperatorFeed(store, cfg or Config(), cache_dir)
+    effective_cfg = cfg or Config()
+    feed = OperatorFeed(store, effective_cfg, cache_dir)
+    generation_lease = None
+    try:
+        parent = default_parent(store, None)
+        generation_lease = snapshot_generation_lease(
+            store, page_dir / "index.html", generation_token(store, effective_cfg, parent))
+    except SnapshotGenerationConflict:
+        log.error("incompatible operator snapshot generation is active; serving without publishing")
     if cfg is not None:
         expected_rows_cache = {}
         refresh = correction_change or (lambda: _background_snapshot(
@@ -386,6 +395,15 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
         server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
                                correction_api, classification_api, type13_api, station_api, feed)
         if server is not None:
+            server.generation_lease = generation_lease
+            if generation_lease is not None and hasattr(server, "server_close"):
+                close_server = server.server_close
+                def close_with_generation_lease():
+                    lease, server.generation_lease = server.generation_lease, None
+                    if lease is not None:
+                        lease.close()
+                    close_server()
+                server.server_close = close_with_generation_lease
             if p != port:
                 log.warning("port %d busy, using %d", port, p)
             return server
@@ -393,6 +411,8 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
         case_api.close()
     if station_api is not None:
         station_api.close()
+    if generation_lease is not None:
+        generation_lease.close()
     log.warning("no free web port in %d-%d", port, port + PORT_TRIES - 1)
     return None
 

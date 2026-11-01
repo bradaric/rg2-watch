@@ -32,10 +32,24 @@ STATIC_FILES = ("index.html", "jquery.min.js", "dataTables.min.js", "dataTables.
 STALE_TMP_S = 300
 _MEMORY_BUILD_LOCKS: dict[str, threading.Lock] = {}
 _MEMORY_BUILD_LOCKS_GUARD = threading.Lock()
+_MEMORY_GENERATIONS: dict[str, dict[str, int]] = {}
 
 
 class SnapshotBusy(RuntimeError):
     pass
+
+
+class SnapshotGenerationConflict(SnapshotBusy):
+    pass
+
+
+def _snapshot_lock_path(store: Store, out_path: Path) -> Path | None:
+    if store.path == ":memory:":
+        return None
+    page = str(Path(out_path).resolve().parent)
+    db = Path(store.path).resolve()
+    digest = hashlib.sha256((str(db) + "\0" + page).encode()).hexdigest()[:16]
+    return db.parent / f".{db.name}.{digest}.operator-snapshot.lock"
 
 
 @contextmanager
@@ -53,9 +67,7 @@ def snapshot_build_lock(store: Store, out_path: Path, blocking: bool = False):
         finally:
             lock.release()
         return
-    db = Path(store.path).resolve()
-    digest = hashlib.sha256((str(db) + "\0" + page).encode()).hexdigest()[:16]
-    lock_path = db.parent / f".{db.name}.{digest}.operator-snapshot.lock"
+    lock_path = _snapshot_lock_path(store, out_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as fh:
         try:
@@ -66,6 +78,74 @@ def snapshot_build_lock(store: Store, out_path: Path, blocking: bool = False):
             yield
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+class _GenerationLease:
+    def __init__(self, fh=None, release=None):
+        self.fh, self.release = fh, release
+
+    def close(self) -> None:
+        if self.fh is not None:
+            fh, self.fh = self.fh, None
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            fh.close()
+        if self.release is not None:
+            release, self.release = self.release, None
+            release()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+def snapshot_generation_lease(store: Store, out_path: Path, generation: str) -> _GenerationLease:
+    """Hold one active snapshot generation; reject a different concurrently running process."""
+    if not isinstance(generation, str) or len(generation) != 64:
+        raise ValueError("invalid operator snapshot generation")
+    base = _snapshot_lock_path(store, out_path)
+    if base is None:
+        key = str(Path(out_path).resolve().parent)
+        with _MEMORY_BUILD_LOCKS_GUARD:
+            active = _MEMORY_GENERATIONS.setdefault(key, {})
+            if any(token != generation and count for token, count in active.items()):
+                raise SnapshotGenerationConflict("incompatible operator snapshot generation is active")
+            active[generation] = active.get(generation, 0) + 1
+
+        def release() -> None:
+            with _MEMORY_BUILD_LOCKS_GUARD:
+                active[generation] -= 1
+                if not active[generation]:
+                    del active[generation]
+        return _GenerationLease(release=release)
+
+    base.parent.mkdir(parents=True, exist_ok=True)
+    own_path = base.with_name(base.name + f".generation.{generation}.lock")
+    own = own_path.open("a+")
+    fcntl.flock(own, fcntl.LOCK_SH)
+    prefix = base.name + ".generation."
+    try:
+        for path in base.parent.glob(base.name + ".generation.*.lock"):
+            token = path.name[len(prefix):-len(".lock")]
+            if token == generation:
+                continue
+            other = path.open("a+")
+            try:
+                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                other.close()
+                raise SnapshotGenerationConflict(
+                    "incompatible operator snapshot generation is active") from exc
+            else:
+                fcntl.flock(other, fcntl.LOCK_UN)
+                other.close()
+                path.unlink(missing_ok=True)
+    except BaseException:
+        fcntl.flock(own, fcntl.LOCK_UN)
+        own.close()
+        raise
+    return _GenerationLease(fh=own)
 
 
 def _ast(d) -> str:
@@ -614,5 +694,10 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
                cfg: Config | None = None, interval: int = 0, with_status: bool = True,
                cache: dict | None = None, lock_blocking: bool = False) -> int:
     with snapshot_build_lock(store, out_path, blocking=lock_blocking):
-        return _build_page_unlocked(
-            store, out_path, cache_dir, parent, cfg, interval, with_status, cache)
+        from .operator_feed import generation_token
+        with store.read_snapshot() as snapshot:
+            snapshot_parent = default_parent(snapshot, parent)
+            generation = generation_token(snapshot, cfg or Config(), snapshot_parent)
+        with snapshot_generation_lease(store, out_path, generation):
+            return _build_page_unlocked(
+                store, out_path, cache_dir, parent, cfg, interval, with_status, cache)
