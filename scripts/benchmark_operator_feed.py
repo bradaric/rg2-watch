@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build and benchmark a disposable election-sized operator database; never accepts an input DB."""
 import argparse
+import cProfile
 import json
 import logging
 import resource
@@ -26,6 +27,36 @@ from rg2watch.store import Store  # noqa: E402
 def percentile(values, fraction):
     ordered = sorted(values)
     return ordered[max(0, int(len(ordered) * fraction) - 1)]
+
+
+def profiled_feed_stages(feed, store, parent: str, count: int, samples: int) -> dict:
+    """Separate SQLite C-call time without adding timing fields to protocol responses."""
+    values = []
+    since = store.operator_feed_state(parent)[1]
+    for sample in range(samples):
+        for i in range(1, count + 1):
+            store.set_review(f"https://example.invalid/{i}.pdf",
+                             "ok" if sample % 2 else "unsure", f"profile {sample}")
+        profile = cProfile.Profile()
+        started = time.perf_counter()
+        profile.enable()
+        payload = feed.feed(parent, since)
+        profile.disable()
+        total = time.perf_counter() - started
+        sqlite_time = sum(entry.inlinetime for entry in profile.getstats()
+                          if ("sqlite3.Connection" in str(entry.code)
+                              or "sqlite3.Cursor" in str(entry.code))
+                          and any(name in str(entry.code) for name in
+                                  ("execute", "fetchone", "fetchall")))
+        started = time.perf_counter()
+        json.dumps(payload)
+        serialization = time.perf_counter() - started
+        values.append((total, sqlite_time, max(0, total - sqlite_time), serialization))
+        since = payload["through"]
+    names = ("profiled_total", "sqlite_execute_fetch", "python_remainder", "json_serialization")
+    return {name: {"p50_ms": statistics.median([row[index] for row in values]) * 1000,
+                   "p95_ms": percentile([row[index] for row in values], .95) * 1000}
+            for index, name in enumerate(names)}
 
 
 def fixture(root: Path, stations: int) -> tuple[Store, str]:
@@ -127,6 +158,7 @@ def main() -> None:
 
     feed = OperatorFeed(store, cfg, root / "pdfs")
     feed_results = []
+    feed_stages = {}
     payload_paths = {}
     for count in (0, 1, 10, 53):
         durations, sizes = [], []
@@ -148,6 +180,7 @@ def main() -> None:
         feed_results.append({"groups": count, "p50_ms": statistics.median(durations) * 1000,
                              "p95_ms": percentile(durations, .95) * 1000,
                              "mean_bytes": statistics.mean(sizes), "max_bytes": max(sizes)})
+        feed_stages[count] = profiled_feed_stages(feed, store, parent, count, args.samples)
 
     write_latencies, wal_sizes = [], []
     finished = threading.Event()
@@ -178,6 +211,7 @@ def main() -> None:
                           "max_rss_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
                           "json_bytes": (out.parent / "data.json").stat().st_size},
         "feed": feed_results,
+        "feed_profiled_stages": feed_stages,
         "concurrent_ingestion": {
             "writes": len(write_latencies),
             "write_p95_ms": percentile(write_latencies, .95) * 1000 if write_latencies else None,
