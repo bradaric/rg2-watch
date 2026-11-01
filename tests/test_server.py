@@ -98,6 +98,41 @@ def test_live_rik_station_endpoint_is_same_origin_and_exact(tmp_path):
         server.server_close()
 
 
+def test_operator_feed_endpoints_are_same_origin_read_only_and_exact(tmp_path):
+    class Feed:
+        def feed(self, parent, since):
+            if parent == "missing":
+                raise KeyError(parent)
+            return {"parent": parent, "through": since, "generation": "g", "groups": []}
+
+        def bootstrap(self, parent, cursor=None):
+            return {"parent": parent, "cursor": cursor, "generation": "g", "groups": []}
+
+    server = start_server(tmp_path, tmp_path, 0, operator_feed=Feed())
+    same = {"Sec-Fetch-Site": "same-origin"}
+    try:
+        status, content_type, body, _ = req(
+            server, "/operator-feed?parent=662405&since=7", headers=same)
+        assert status == 200 and content_type == "application/json"
+        assert json.loads(body)["through"] == 7
+        assert req(server, "/operator-feed?parent=662405&since=-1", headers=same)[0] == 400
+        assert req(server, "/operator-feed?parent=missing&since=0", headers=same)[0] == 404
+        assert req(server, "/operator-feed?parent=x&since=0&extra=1", headers=same)[0] == 400
+        assert req(server, "/operator-feed?parent=x&since=0",
+                   headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
+        assert req(server, "/operator-feed?parent=x&since=0")[0] == 403
+
+        status, _, body, _ = req(server, "/operator-bootstrap?parent=662405", headers=same)
+        assert status == 200 and json.loads(body)["cursor"] is None
+        status, _, body, _ = req(
+            server, "/operator-bootstrap?parent=662405&cursor=opaque", headers=same)
+        assert status == 200 and json.loads(body)["cursor"] == "opaque"
+        assert req(server, "/operator-bootstrap?parent=x&cursor=a&cursor=b", headers=same)[0] == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_serves_allow_listed_files(srv):
     s, ct, body, r = req(srv, "/")
     assert s == 200 and body == b"<html>page</html>" and ct.startswith("text/html")

@@ -393,13 +393,30 @@ class Store:
         return meta["db_uuid"], meta["revision"], floor["floor"] if floor else 0
 
     def operator_feed_changes(self, parent: str, since: int, limit: int = 200) -> list[sqlite3.Row]:
-        if not isinstance(since, int) or since < 0 or not 1 <= limit <= 200:
+        if not isinstance(since, int) or since < 0 or not 1 <= limit <= 201:
             raise ValueError("invalid operator feed range")
         with self._lock:
             return self._db.execute(
                 "SELECT revision,parent,group_kind,group_key FROM operator_feed_changes "
                 "WHERE parent=? AND revision>? ORDER BY revision,group_kind,group_key LIMIT ?",
                 (parent, since, limit)).fetchall()
+
+    def operator_group_identities(self, parent: str, after: list[str] | None = None,
+                                  limit: int = 101) -> list[tuple[str, str]]:
+        """Deterministic tagged RG-2 groups for bounded bootstrap pages."""
+        if not 1 <= limit <= 201:
+            raise ValueError("invalid bootstrap page size")
+        after_kind, after_key = after if after is not None else ("", "")
+        if not all(isinstance(value, str) for value in (after_kind, after_key)):
+            raise ValueError("invalid bootstrap cursor position")
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT CASE WHEN station_key IS NULL THEN 'document' ELSE 'station' END kind,"
+                "CASE WHEN station_key IS NULL THEN CAST(id AS TEXT) ELSE station_key END key "
+                "FROM documents WHERE parent=? AND doc_type IN (6,10,15,16) GROUP BY kind,key "
+                "HAVING kind>? OR (kind=? AND key>?) ORDER BY kind,key LIMIT ?",
+                (parent, after_kind, after_kind, after_key, limit)).fetchall()
+        return [(row["kind"], row["key"]) for row in rows]
 
     def add_classification_override(self, url: str, action: str) -> sqlite3.Row | None:
         if action not in ("confirm_rg2", "quarantine_rg7", "revoke"):

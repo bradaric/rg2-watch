@@ -120,7 +120,7 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
 
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                cfg: Config | None = None, interval: int = 0, cache: dict | None = None,
-               timings: dict[str, float] | None = None) -> dict:
+               timings: dict[str, float] | None = None, selective: bool = False) -> dict:
     timings = {} if timings is None else timings
     phase = time.monotonic()
 
@@ -177,6 +177,12 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         current = set(selected_by_doc)
         for item in latest:
             if item["document_id"] not in current:
+                continue
+            if selective:
+                corrections[item["url"]] = {
+                    "status": "active" if item["action"] == "correction" else "revoked",
+                    "reason": item["reason"], "at": to_belgrade(item["created_at"]),
+                    "revision": item["id"], "verification": "Updating"}
                 continue
             try:
                 source_model = selected_by_doc[item["document_id"]]["model"]
@@ -285,10 +291,14 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                                            "override_action": override_action, "status": status}
     mark("rows")
     try:
+        if selective:
+            raise LookupError("selective rows do not build a tally")
         tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
                             cache=None if cache is None else cache.setdefault("tally", {}),
                             docs=docs, arows=arows, expected_rows_cache=expected_rows_cache,
                             include_station_results=True, report_json=report_json)
+    except LookupError:
+        tally = None
     except Exception:
         log.exception("tally could not be built")
         tally = None
@@ -313,6 +323,18 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     rec = {x["id"]: {k: x[k] for k in ("status", "rules", "details", "gap", "result")}
            for x in (tally or {}).pop("reconciliation", [])}
     for row in rows:
+        if selective:
+            reason = "Updating"
+            row["tally_state"] = "updating"
+            row["correctable"] = False
+            row["rec"] = {"status": "updating", "rules": [], "details": [reason], "gap": 0,
+                          "result": {"corrected": {"included": None, "reason": reason},
+                                     "filed": {"included": None, "reason": reason}},
+                          "decision_warnings": [], "decision_notices": [],
+                          "annulled": None, "undetermined": None}
+            row["resolved"] = []
+            row["t13"] = []
+            continue
         cstatus = row["classification"]["status"]
         row["tally_state"] = ("selected" if row["id"] in selected_ids else
                               "quarantined" if cstatus.startswith("quarantined_") else
@@ -344,6 +366,11 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             finding[0] not in INFORMATIONAL_RULES for finding in row["f"])
         row["todo"] = row["rf"] and row["rv"] is None
         row["t13"] = []
+    if selective:
+        return {"db": store.name,
+                "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "interval": interval, "elections": {p: e.title for p, e in elections.items()},
+                "rows": rows, "tally": None, "rules": RULE_INFO}
     type13 = Type13Corrections(store, cfg, model, expected_rows_cache=expected_rows_cache)
     rows_by_url = {row["u"]: row for row in rows}
     rows_by_station: dict[tuple[str, str], list[dict]] = {}
@@ -421,7 +448,9 @@ def _data_meta(data: dict) -> dict:
             correction = version.get("oc")
             if correction and correction.get("revision") is not None:
                 corrections[version["u"]] = correction["revision"]
-    return {"built": data["built"], "corrections": corrections}
+    return {"built": data["built"], "generation": data.get("generation"),
+            "snapshot_revision": data.get("snapshot_revision"),
+            "snapshot_id": data.get("snapshot_id"), "corrections": corrections}
 
 
 def _clean(out_dir: Path) -> None:
@@ -477,9 +506,15 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
         snapshot_parent = default_parent(snapshot, parent)
         _, snapshot_revision, _ = snapshot.operator_feed_state(snapshot_parent)
         data = build_data(snapshot, cache_dir, parent, cfg, interval, cache, timings)
+        from .operator_feed import generation_token
+        data["generation"] = generation_token(snapshot, cfg or Config(), snapshot_parent)
         data["snapshot_revision"] = snapshot_revision
         for row in data["rows"]:
             row["changed_revision"] = snapshot_revision
+        data["snapshot_id"] = hashlib.sha256(_json({
+            "generation": data["generation"], "revision": snapshot_revision,
+            "built": data["built"], "rows": [row["id"] for row in data["rows"]],
+        }).encode()).hexdigest()
     t1 = time.monotonic()
     copy_static(out_dir)
     if Path(out_path).name != "index.html":

@@ -1,0 +1,103 @@
+import json
+
+import pytest
+
+from rg2watch.config import Config
+from rg2watch.models import Doc, Election, Event
+from rg2watch.operator_feed import OperatorFeed
+from rg2watch.store import Store
+
+P = "662405"
+
+
+def doc(url="https://x/a.pdf", no="1", doc_type=6):
+    return Doc("Сечањ", no, "ОШ", "lbl", doc_type, url, "2026-10-19T20:15")
+
+
+def setup_feed(tmp_path):
+    store = Store(tmp_path / "e.sqlite")
+    store.upsert_election(Election(P, "1", "national", "Election", "https://x"))
+    return store, OperatorFeed(store, Config(), tmp_path / "pdfs")
+
+
+def add(store, value, kind="added", previous=None):
+    store.apply_events(P, store.start_sweep(P, "rg2"), [Event(kind, value, previous)])
+
+
+def test_bootstrap_is_paged_tagged_and_selective_rows_are_tally_stale(tmp_path):
+    store, feed = setup_feed(tmp_path)
+    add(store, doc())
+
+    page = feed.bootstrap(P)
+
+    assert page["done"] is True and page["cursor"] is None
+    assert len(page["generation"]) == 64
+    assert [(group["kind"], group["key"]) for group in page["groups"]] == [
+        ("station", "Сечањ|1")]
+    row = page["groups"][0]["rows"][0]
+    assert row["group_kind"] == "station" and row["group_key"] == "Сечањ|1"
+    assert row["rec"]["status"] == "updating"
+    assert row["rec"]["result"]["corrected"]["included"] is None
+
+
+def test_feed_is_bounded_incremental_and_returns_tombstones(tmp_path):
+    store, feed = setup_feed(tmp_path)
+    first = doc()
+    add(store, first)
+    since = store.operator_feed_state(P)[1]
+    store.set_review(first.url, "ok", "checked")
+
+    changed = feed.feed(P, since)
+
+    assert changed["reset_required"] is False and changed["through"] > since
+    assert changed["groups"][0]["rows"][0]["rv"]["v"] == "ok"
+    assert json.dumps(changed).count(first.url) < 5
+
+    since = changed["through"]
+    with store._lock, store._db:
+        store._db.execute("DELETE FROM documents WHERE url=?", (first.url,))
+    removed = feed.feed(P, since)
+    assert removed["groups"] == []
+    assert removed["tombstones"] == [{"kind": "station", "key": first.station_key}]
+
+
+def test_feed_rejects_stale_future_and_global_revisions(tmp_path):
+    store, feed = setup_feed(tmp_path)
+    add(store, doc())
+    current = store.operator_feed_state(P)[1]
+    assert feed.feed(P, current + 1)["reset_required"] is True
+
+    with store._lock, store._db:
+        store._db.execute("UPDATE operator_feed_floors SET floor=? WHERE parent=?", (current, P))
+    assert feed.feed(P, current - 1)["reset_required"] is True
+
+    with store._lock, store._db:
+        store._db.execute("UPDATE operator_feed_meta SET revision=revision+1")
+        revision = store._db.execute("SELECT revision FROM operator_feed_meta").fetchone()[0]
+        store._db.execute("INSERT INTO operator_feed_changes VALUES(?,?,?,?)",
+                          (revision, P, "global", "*"))
+    assert feed.feed(P, current)["reset_required"] is True
+
+
+def test_generation_changes_for_config_and_database_but_not_empty_poll(tmp_path):
+    store, feed = setup_feed(tmp_path)
+    add(store, doc())
+    current = store.operator_feed_state(P)[1]
+    first = feed.feed(P, current)
+    assert feed.feed(P, current)["generation"] == first["generation"]
+
+    feed.cfg.list_names = {P: ["A"]}
+    assert feed.feed(P, current)["generation"] != first["generation"]
+
+    other = Store(tmp_path / "other.sqlite")
+    other.upsert_election(Election(P, "1", "national", "Election", "https://x"))
+    other_feed = OperatorFeed(other, Config(), tmp_path / "pdfs")
+    assert other_feed.generation(P) != first["generation"]
+
+
+def test_invalid_bootstrap_cursor_and_unknown_parent_are_controlled(tmp_path):
+    _, feed = setup_feed(tmp_path)
+    with pytest.raises(ValueError, match="cursor"):
+        feed.bootstrap(P, "not-a-cursor")
+    with pytest.raises(KeyError):
+        feed.feed("missing", 0)

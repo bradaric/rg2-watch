@@ -761,8 +761,10 @@ def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
     data = json.loads((tmp_path / "data.json").read_text(encoding="utf-8"))
     meta_path = tmp_path / "data-meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert meta == {"built": data["built"], "corrections": {}}
-    assert meta_path.stat().st_size < 200
+    assert meta == {"built": data["built"], "generation": data["generation"],
+                    "snapshot_revision": data["snapshot_revision"],
+                    "snapshot_id": data["snapshot_id"], "corrections": {}}
+    assert meta_path.stat().st_size < 500
 
 
 def test_atomic_write_leaves_no_temp_and_keeps_old_on_failure(tmp_path, monkeypatch):

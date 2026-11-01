@@ -33,6 +33,7 @@ from .opencode_client import OpenCodeClient, OpenCodeError
 from .official_results import (OfficialResultsClient, official_results_supported,
                                write_official_results)
 from .operator_corrections import OperatorCorrections, Type13Corrections
+from .operator_feed import OperatorFeed
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from .public_results import write_public_results
 from .render import RenderError, render_tiles
@@ -339,6 +340,7 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
                correction_change=None, rik_client: RikClient | None = None):
     """Serve the page on `port`, else the next free port up to +10; None when none is free."""
     case_api = _publication_api(store, cfg) if cfg is not None else None
+    feed = OperatorFeed(store, cfg or Config(), cache_dir)
     if cfg is not None:
         expected_rows_cache = {}
         refresh = correction_change or (lambda: build_page(
@@ -383,7 +385,7 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
 
     for p in range(port, min(port + PORT_TRIES, 65536)):
         server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
-                               correction_api, classification_api, type13_api, station_api)
+                               correction_api, classification_api, type13_api, station_api, feed)
         if server is not None:
             if p != port:
                 log.warning("port %d busy, using %d", port, p)
