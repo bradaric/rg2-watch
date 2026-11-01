@@ -81,6 +81,42 @@ def test_operator_feed_aborted_write_emits_no_revision():
     assert s.operator_feed_state(P)[1] == before
 
 
+def test_operator_group_revision_survives_journal_pruning():
+    s = store()
+    value = doc("https://x/persisted-revision.pdf")
+    s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", value)])
+    revision = s.operator_feed_state(P)[1]
+    assert s.operator_group_revisions(P)[("station", value.station_key)] == revision
+
+    # Pruning removes replay history, not the durable last-changed marker used by full snapshots.
+    with s._lock, s._db:
+        s._db.execute("DELETE FROM operator_feed_changes WHERE parent=?", (P,))
+
+    assert s.operator_group_revisions(P)[("station", value.station_key)] == revision
+
+
+def test_type13_retarget_invalidates_source_old_and_new_target_groups():
+    s = store()
+    source = doc("https://x/type13.pdf", no="1", dt=13)
+    old_target = doc("https://x/old-target.pdf", no="2")
+    new_target = doc("https://x/new-target.pdf", no="3")
+    s.apply_events(P, s.start_sweep(P, "rare"), [
+        Event("added", source), Event("added", old_target), Event("added", new_target)])
+    s.add_type13_resolution(source.url, old_target.url, "uncertain", "first", "token-1",
+                            None, None)
+    previous = s.latest_type13_resolution(source.url)
+    before = s.operator_feed_state(P)[1]
+
+    s.add_type13_resolution(source.url, new_target.url, "other_decision", "retarget", "token-2",
+                            None, previous["id"])
+
+    changed = {(row["group_kind"], row["group_key"])
+               for row in s.operator_feed_changes(P, before, 20)}
+    assert changed == {("station", source.station_key),
+                       ("station", old_target.station_key),
+                       ("station", new_target.station_key)}
+
+
 def test_added_then_known():
     s = store()
     d = doc()

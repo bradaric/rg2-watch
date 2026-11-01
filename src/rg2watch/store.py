@@ -122,6 +122,10 @@ CREATE TABLE IF NOT EXISTS operator_feed_changes(
     group_kind TEXT NOT NULL CHECK(group_kind IN ('station','document','global')),
     group_key TEXT NOT NULL,
     UNIQUE(revision,parent,group_kind,group_key));
+CREATE TABLE IF NOT EXISTS operator_feed_group_revisions(
+    parent TEXT NOT NULL, group_kind TEXT NOT NULL, group_key TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    PRIMARY KEY(parent,group_kind,group_key));
 """
 
 
@@ -223,8 +227,11 @@ CREATE TRIGGER IF NOT EXISTS operator_feed_type13_insert AFTER INSERT ON type13_
   INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
     SELECT m.revision,d.parent,CASE WHEN d.station_key IS NULL THEN 'document' ELSE 'station' END,
       CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
-    FROM operator_feed_meta m JOIN documents d
-      ON d.id IN (NEW.source_document_id,NEW.target_document_id) WHERE m.id=1;
+    FROM operator_feed_meta m JOIN documents d ON d.id IN (
+      NEW.source_document_id,NEW.target_document_id,
+      (SELECT target_document_id FROM type13_resolutions
+       WHERE source_url=NEW.source_url AND id<NEW.id ORDER BY id DESC LIMIT 1))
+    WHERE m.id=1;
 END;""")
     sql.append(f"""
 CREATE TRIGGER IF NOT EXISTS operator_feed_prune AFTER INSERT ON operator_feed_changes BEGIN
@@ -236,6 +243,13 @@ CREATE TRIGGER IF NOT EXISTS operator_feed_prune AFTER INSERT ON operator_feed_c
     ON CONFLICT(parent) DO UPDATE SET floor=MAX(floor,excluded.floor);
   DELETE FROM operator_feed_changes WHERE parent=NEW.parent
     AND revision <= (SELECT floor FROM operator_feed_floors WHERE parent=NEW.parent);
+END;""")
+    sql.append("""
+CREATE TRIGGER IF NOT EXISTS operator_feed_group_revision
+AFTER INSERT ON operator_feed_changes WHEN NEW.group_kind<>'global' BEGIN
+  INSERT INTO operator_feed_group_revisions(parent,group_kind,group_key,revision)
+    VALUES(NEW.parent,NEW.group_kind,NEW.group_key,NEW.revision)
+    ON CONFLICT(parent,group_kind,group_key) DO UPDATE SET revision=MAX(revision,excluded.revision);
 END;""")
     return "\n".join(sql)
 
@@ -362,6 +376,17 @@ class Store:
             with self._db:
                 self._db.execute("ALTER TABLE publications ADD COLUMN viber_reason TEXT")
         self._db.executescript(INDEXES)
+        self._db.execute(
+            "INSERT INTO operator_feed_group_revisions(parent,group_kind,group_key,revision) "
+            "SELECT parent,group_kind,group_key,MAX(revision) FROM operator_feed_changes "
+            "WHERE group_kind<>'global' GROUP BY parent,group_kind,group_key "
+            "ON CONFLICT(parent,group_kind,group_key) DO UPDATE SET "
+            "revision=MAX(revision,excluded.revision)")
+        triggers = self._db.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'operator_feed_%'"
+        ).fetchall()
+        for trigger in triggers:
+            self._db.execute(f'DROP TRIGGER "{trigger["name"]}"')
         self._db.executescript(_operator_feed_triggers())
         self.case_locks = CaseLocks(path)
 
@@ -429,8 +454,8 @@ class Store:
     def operator_group_revisions(self, parent: str) -> dict[tuple[str, str], int]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT group_kind,group_key,MAX(revision) revision FROM operator_feed_changes "
-                "WHERE parent=? AND group_kind<>'global' GROUP BY group_kind,group_key",
+                "SELECT group_kind,group_key,revision FROM operator_feed_group_revisions "
+                "WHERE parent=?",
                 (parent,)).fetchall()
         return {(row["group_kind"], row["group_key"]): row["revision"] for row in rows}
 
