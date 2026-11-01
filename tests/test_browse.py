@@ -295,6 +295,9 @@ assert.deepEqual(current.map(x => x.id), [9, 3, 4]);
 current = mergeGroupState(current,
   [{{kind: "station", key: "B", rows: [row("station", "B", 6, 7, 30)]}}], []);
 assert.deepEqual(current.map(x => x.id), [9, 3, 4]); // stale feed cannot replace revision 8
+const beforeStale = current, afterStale = mergeGroupState(current,
+  [{{kind: "station", key: "B", rows: [row("station", "B", 6, 7, 31)]}}], []);
+assert.deepEqual(changedGroupTags(beforeStale, afterStale, new Set(["station\\0B"])), []);
 current = mergeGroupState(current, [], [{{kind: "document", key: "9"}}]);
 assert.deepEqual(current.map(x => x.id), [3, 4]);
 """

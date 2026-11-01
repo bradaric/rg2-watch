@@ -1575,6 +1575,13 @@ function mergeGroupState(current, groups, tombstones) {
   for (const values of accepted.values()) out.push(...values);
   return out;
 }
+function changedGroupTags(before, after, candidates) {
+  const values = (all, tag) => all.filter(row => groupTag(row) === tag);
+  return [...candidates].filter(tag => {
+    const oldRows = values(before, tag), newRows = values(after, tag);
+    return oldRows.length !== newRows.length || oldRows.some((row, index) => row !== newRows[index]);
+  });
+}
 function applyFeedGroups(groups, tombstones = []) {
   const prepared = groups.map(group => ({...group, rows: (group.rows || []).map(prep)}));
   const tags = new Set([...prepared, ...tombstones].map(group => group.kind + "\0" + group.key));
@@ -1583,12 +1590,13 @@ function applyFeedGroups(groups, tombstones = []) {
     if (tags.has(groupTag(this.data())) && this.child.isShown())
       shown.add(groupTag(this.data()) + "\0" + this.data().doc_type);
   });
-  const before = rows;
-  rows = mergeGroupState(rows, prepared, tombstones);
+  const before = rows, merged = mergeGroupState(rows, prepared, tombstones);
+  const changedTags = new Set(changedGroupTags(before, merged, tags));
+  rows = merged;
   D.rows = rows;
-  if (!table) return;
-  table.rows((index, data) => tags.has(groupTag(data))).remove();
-  const additions = rows.filter(row => tags.has(groupTag(row)) && !before.includes(row));
+  if (!table || !changedTags.size) return;
+  table.rows((index, data) => changedTags.has(groupTag(data))).remove();
+  const additions = rows.filter(row => changedTags.has(groupTag(row)));
   table.rows.add(additions).draw(false);
   table.rows().every(function () {
     if (shown.has(groupTag(this.data()) + "\0" + this.data().doc_type))
