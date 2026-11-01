@@ -382,11 +382,6 @@ class Store:
             "WHERE group_kind<>'global' GROUP BY parent,group_kind,group_key "
             "ON CONFLICT(parent,group_kind,group_key) DO UPDATE SET "
             "revision=MAX(revision,excluded.revision)")
-        triggers = self._db.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'operator_feed_%'"
-        ).fetchall()
-        for trigger in triggers:
-            self._db.execute(f'DROP TRIGGER "{trigger["name"]}"')
         self._db.executescript(_operator_feed_triggers())
         self.case_locks = CaseLocks(path)
 

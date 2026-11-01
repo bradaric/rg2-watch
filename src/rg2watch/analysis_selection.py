@@ -16,6 +16,7 @@ def preferred_analyses(rows, preferred_model: str, prompt_prefix: str | None = N
     rows = [row for row in rows
             if prompt_prefix is None or row["prompt_version"].startswith(prompt_prefix)]
     order = model_order or preferred_models(rows, preferred_model)
+    order = [*order, *sorted({row["model"] for row in rows} - set(order), key=lambda x: x or "")]
     rank = {model: i for i, model in enumerate(order)}
     selected = {}
     for row in rows:
