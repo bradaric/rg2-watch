@@ -473,7 +473,13 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
     out_dir.mkdir(parents=True, exist_ok=True)
     _clean(out_dir)
     timings: dict[str, float] = {}
-    data = build_data(store, cache_dir, parent, cfg, interval, cache, timings)
+    with store.read_snapshot() as snapshot:
+        snapshot_parent = default_parent(snapshot, parent)
+        _, snapshot_revision, _ = snapshot.operator_feed_state(snapshot_parent)
+        data = build_data(snapshot, cache_dir, parent, cfg, interval, cache, timings)
+        data["snapshot_revision"] = snapshot_revision
+        for row in data["rows"]:
+            row["changed_revision"] = snapshot_revision
     t1 = time.monotonic()
     copy_static(out_dir)
     if Path(out_path).name != "index.html":

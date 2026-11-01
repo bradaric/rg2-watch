@@ -707,6 +707,50 @@ def test_build_logs_named_phase_timings_and_counts(tmp_path, caplog):
     assert "rows=1" in message and "bytes=" in message
 
 
+def test_full_build_uses_one_sqlite_snapshot_and_feed_catches_concurrent_change(
+        tmp_path, monkeypatch):
+    path = tmp_path / "e.sqlite"
+    s = Store(path)
+    s.upsert_election(Election(P, "1", "t", "Title", BASE))
+    old = doc(BASE + "/e/old.pdf")
+    add(s, old)
+    pre_revision = s.operator_feed_state(P)[1]
+    entered, release = threading.Event(), threading.Event()
+    original = cli.build_page.__globals__["build_tally"]
+
+    def paused(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setitem(cli.build_page.__globals__, "build_tally", paused)
+    out = tmp_path / "page" / "index.html"
+    errors = []
+    thread = threading.Thread(target=lambda: _capture_error(
+        errors, lambda: build_page(s, out, tmp_path / "pdfs", parent=P)))
+    thread.start()
+    assert entered.wait(5)
+    writer = Store(path)
+    new = doc(BASE + "/e/new.pdf", up="2026-10-19T21:00")
+    add(writer, new, "replaced", old.url)
+    release.set()
+    thread.join(10)
+    assert not thread.is_alive() and errors == []
+
+    data = json.loads((out.parent / "data.json").read_text())
+    assert data["snapshot_revision"] == pre_revision
+    assert [row["u"] for row in data["rows"]] == [old.url]
+    assert any(change["revision"] > pre_revision
+               for change in writer.operator_feed_changes(P, pre_revision))
+
+
+def _capture_error(errors, fn):
+    try:
+        fn()
+    except BaseException as exc:
+        errors.append(exc)
+
+
 def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
     s = store()
     add(s, doc(BASE + "/e/a.pdf"))

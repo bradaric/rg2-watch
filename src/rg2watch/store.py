@@ -5,6 +5,7 @@ import threading
 import time
 import unicodedata
 from collections.abc import Collection
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -40,7 +41,13 @@ CREATE INDEX IF NOT EXISTS reviews_url ON reviews(url, id);
 CREATE INDEX IF NOT EXISTS operator_corrections_url ON operator_corrections(url, id);
 CREATE INDEX IF NOT EXISTS classification_overrides_url ON classification_overrides(url, id);
 CREATE INDEX IF NOT EXISTS type13_resolutions_url ON type13_resolutions(source_url, id);
+CREATE INDEX IF NOT EXISTS operator_feed_changes_parent_revision
+    ON operator_feed_changes(parent, revision);
+CREATE INDEX IF NOT EXISTS operator_feed_changes_group
+    ON operator_feed_changes(parent, group_kind, group_key, revision);
 """  # after the migrations: older DBs lack some of these columns until then
+
+OPERATOR_FEED_WINDOW = 10_000
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS elections(
@@ -106,7 +113,123 @@ CREATE TABLE IF NOT EXISTS ai_draft_costs(
     id INTEGER PRIMARY KEY, parent TEXT NOT NULL, url TEXT NOT NULL, model TEXT NOT NULL,
     input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cost_usd REAL NOT NULL,
     status TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS operator_feed_meta(
+    id INTEGER PRIMARY KEY CHECK(id=1), db_uuid TEXT NOT NULL, revision INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS operator_feed_floors(
+    parent TEXT PRIMARY KEY, floor INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS operator_feed_changes(
+    revision INTEGER NOT NULL, parent TEXT NOT NULL,
+    group_kind TEXT NOT NULL CHECK(group_kind IN ('station','document','global')),
+    group_key TEXT NOT NULL,
+    UNIQUE(revision,parent,group_kind,group_key));
 """
+
+
+def _operator_feed_triggers() -> str:
+    """SQLite keeps invalidations in the same transaction as every visible data mutation."""
+    identity_new = ("NEW.parent,CASE WHEN NEW.station_key IS NULL THEN 'document' ELSE 'station' END,"
+                    "CASE WHEN NEW.station_key IS NULL THEN CAST(NEW.id AS TEXT) ELSE NEW.station_key END")
+    identity_old = ("OLD.parent,CASE WHEN OLD.station_key IS NULL THEN 'document' ELSE 'station' END,"
+                    "CASE WHEN OLD.station_key IS NULL THEN CAST(OLD.id AS TEXT) ELSE OLD.station_key END")
+    doc_lookup_new = ("d.parent,CASE WHEN d.station_key IS NULL THEN 'document' ELSE 'station' END,"
+                      "CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END")
+
+    def invalidate(name: str, timing: str, table: str, select_identity: str,
+                   when: str = "", extra: str = "") -> str:
+        condition = f" WHEN {when}" if when else ""
+        return f"""
+CREATE TRIGGER IF NOT EXISTS {name} {timing} ON {table}{condition} BEGIN
+  UPDATE operator_feed_meta SET revision=revision+1 WHERE id=1;
+  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
+    SELECT m.revision,{select_identity} FROM operator_feed_meta m
+    {('JOIN documents d ON d.id=' + extra) if extra else ''} WHERE m.id=1;
+END;"""
+
+    changed = " OR ".join(
+        f"OLD.{column} IS NOT NEW.{column}" for column in (
+            "parent", "municipality", "station_no", "station_name", "station_key", "minority",
+            "doc_type", "label", "url", "uploaded_at", "first_seen_at", "active",
+            "analysis_status", "analysis_next_at", "analysis_error"))
+    sql = [
+        invalidate("operator_feed_documents_insert", "AFTER INSERT", "documents", identity_new),
+        invalidate("operator_feed_documents_delete", "AFTER DELETE", "documents", identity_old),
+        f"""
+CREATE TRIGGER IF NOT EXISTS operator_feed_documents_update AFTER UPDATE ON documents
+WHEN {changed} BEGIN
+  UPDATE operator_feed_meta SET revision=revision+1 WHERE id=1;
+  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
+    SELECT revision,{identity_old} FROM operator_feed_meta WHERE id=1;
+  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
+    SELECT revision,{identity_new} FROM operator_feed_meta WHERE id=1;
+END;""",
+    ]
+    for table, fk in (("findings", "NEW.document_id"),
+                      ("reviews", "NEW.document_id"),
+                      ("operator_corrections", "NEW.document_id"),
+                      ("classification_overrides", "NEW.document_id")):
+        sql.append(invalidate(f"operator_feed_{table}_insert", "AFTER INSERT", table,
+                              doc_lookup_new, extra=fk))
+    for table, fk in (("findings", "OLD.document_id"),):
+        sql.append(invalidate(f"operator_feed_{table}_delete", "AFTER DELETE", table,
+                              doc_lookup_new, extra=fk))
+    # A successful read changes its group. RG-2 reads also conservatively request a reset because
+    # their model coverage can reorder the election-wide fallback preference.
+    sql.append("""
+CREATE TRIGGER IF NOT EXISTS operator_feed_analyses_insert AFTER INSERT ON analyses
+WHEN NEW.status='done' AND NEW.result_json IS NOT NULL BEGIN
+  UPDATE operator_feed_meta SET revision=revision+1 WHERE id=1;
+  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
+    SELECT m.revision,d.parent,CASE WHEN d.station_key IS NULL THEN 'document' ELSE 'station' END,
+      CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
+    FROM operator_feed_meta m JOIN documents d ON d.id=NEW.document_id WHERE m.id=1;
+  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
+    SELECT revision,NEW.parent,'global','*' FROM operator_feed_meta
+    WHERE id=1 AND NEW.prompt_version LIKE 'v%';
+END;""")
+    sql.append("""
+CREATE TRIGGER IF NOT EXISTS operator_feed_analyses_delete AFTER DELETE ON analyses
+WHEN OLD.status='done' AND OLD.result_json IS NOT NULL BEGIN
+  UPDATE operator_feed_meta SET revision=revision+1 WHERE id=1;
+  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
+    SELECT m.revision,d.parent,CASE WHEN d.station_key IS NULL THEN 'document' ELSE 'station' END,
+      CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
+    FROM operator_feed_meta m JOIN documents d ON d.id=OLD.document_id WHERE m.id=1;
+  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
+    SELECT revision,OLD.parent,'global','*' FROM operator_feed_meta
+    WHERE id=1 AND OLD.prompt_version LIKE 'v%';
+END;""")
+    sql.append("""
+CREATE TRIGGER IF NOT EXISTS operator_feed_findings_update AFTER UPDATE OF rule,severity,summary,details_json
+ON findings WHEN OLD.rule IS NOT NEW.rule OR OLD.severity IS NOT NEW.severity
+  OR OLD.summary IS NOT NEW.summary OR OLD.details_json IS NOT NEW.details_json BEGIN
+  UPDATE operator_feed_meta SET revision=revision+1 WHERE id=1;
+  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
+    SELECT m.revision,d.parent,CASE WHEN d.station_key IS NULL THEN 'document' ELSE 'station' END,
+      CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
+    FROM operator_feed_meta m JOIN documents d ON d.id=NEW.document_id WHERE m.id=1;
+END;""")
+    # Type-13 records affect both the source group and, when present, the selected target group.
+    sql.append("""
+CREATE TRIGGER IF NOT EXISTS operator_feed_type13_insert AFTER INSERT ON type13_resolutions BEGIN
+  UPDATE operator_feed_meta SET revision=revision+1 WHERE id=1;
+  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
+    SELECT m.revision,d.parent,CASE WHEN d.station_key IS NULL THEN 'document' ELSE 'station' END,
+      CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
+    FROM operator_feed_meta m JOIN documents d
+      ON d.id IN (NEW.source_document_id,NEW.target_document_id) WHERE m.id=1;
+END;""")
+    sql.append(f"""
+CREATE TRIGGER IF NOT EXISTS operator_feed_prune AFTER INSERT ON operator_feed_changes BEGIN
+  INSERT INTO operator_feed_floors(parent,floor)
+    SELECT NEW.parent,COALESCE(MAX(revision),0) FROM operator_feed_changes
+    WHERE parent=NEW.parent AND revision NOT IN (
+      SELECT DISTINCT revision FROM operator_feed_changes WHERE parent=NEW.parent
+      ORDER BY revision DESC LIMIT {OPERATOR_FEED_WINDOW})
+    ON CONFLICT(parent) DO UPDATE SET floor=MAX(floor,excluded.floor);
+  DELETE FROM operator_feed_changes WHERE parent=NEW.parent
+    AND revision <= (SELECT floor FROM operator_feed_floors WHERE parent=NEW.parent);
+END;""")
+    return "\n".join(sql)
 
 
 def clean_note(note: str | None) -> str | None:
@@ -169,15 +292,27 @@ def _selected_rg2_urls(rows, prompt_version: str) -> set[str]:
 
 
 class Store:
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, read_only: bool = False):
         self.path = str(path)
         self.name = Path(path).stem if str(path) != ":memory:" else "memory"  # which DB (page banner)
-        self._db = sqlite3.connect(str(path), check_same_thread=False)
+        self._read_only = read_only
+        if read_only:
+            if self.path == ":memory:":
+                raise ValueError("a separate read-only Store cannot use :memory:")
+            uri = "file:" + Path(path).resolve().as_posix() + "?mode=ro"
+            self._db = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        else:
+            self._db = sqlite3.connect(str(path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._lock = threading.Lock()
+        if read_only:
+            self.case_locks = CaseLocks(path)
+            return
         if str(path) != ":memory:":
             self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(SCHEMA)
+        self._db.execute("INSERT OR IGNORE INTO operator_feed_meta(id,db_uuid,revision) "
+                         "VALUES(1,lower(hex(randomblob(16))),0)")
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(events)")}
         if "previous_url" not in cols:
             with self._db:
@@ -219,15 +354,52 @@ class Store:
             with self._db:
                 self._db.execute("ALTER TABLE publications ADD COLUMN viber_reason TEXT")
         self._db.executescript(INDEXES)
+        self._db.executescript(_operator_feed_triggers())
         self.case_locks = CaseLocks(path)
 
     def close(self) -> None:
         with self._lock:
             self._db.close()
 
+    @contextmanager
+    def read_snapshot(self):
+        """A dedicated, consistent SQLite read transaction for a complete operator snapshot."""
+        owned = self.path != ":memory:"
+        snapshot = Store(self.path, read_only=True) if owned else self
+        try:
+            with snapshot._lock:
+                snapshot._db.execute("BEGIN")
+                # Establish the WAL read view before any caller data reads.
+                snapshot._db.execute("SELECT revision FROM operator_feed_meta WHERE id=1").fetchone()
+            yield snapshot
+        finally:
+            with snapshot._lock:
+                if snapshot._db.in_transaction:
+                    snapshot._db.rollback()
+            if owned:
+                snapshot.close()
+
     def _write(self, sql: str, args=()):
         with self._lock, self._db:
             return self._db.execute(sql, args)
+
+    def operator_feed_state(self, parent: str) -> tuple[str, int, int]:
+        """Stable database UUID, durable high-water and oldest valid `since` for an election."""
+        with self._lock:
+            meta = self._db.execute(
+                "SELECT db_uuid,revision FROM operator_feed_meta WHERE id=1").fetchone()
+            floor = self._db.execute(
+                "SELECT floor FROM operator_feed_floors WHERE parent=?", (parent,)).fetchone()
+        return meta["db_uuid"], meta["revision"], floor["floor"] if floor else 0
+
+    def operator_feed_changes(self, parent: str, since: int, limit: int = 200) -> list[sqlite3.Row]:
+        if not isinstance(since, int) or since < 0 or not 1 <= limit <= 200:
+            raise ValueError("invalid operator feed range")
+        with self._lock:
+            return self._db.execute(
+                "SELECT revision,parent,group_kind,group_key FROM operator_feed_changes "
+                "WHERE parent=? AND revision>? ORDER BY revision,group_kind,group_key LIMIT ?",
+                (parent, since, limit)).fetchall()
 
     def add_classification_override(self, url: str, action: str) -> sqlite3.Row | None:
         if action not in ("confirm_rg2", "quarantine_rg7", "revoke"):
