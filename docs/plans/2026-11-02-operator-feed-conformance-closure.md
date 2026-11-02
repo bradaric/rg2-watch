@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: Use subagent-driven-development (if subagents available) or executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close all seven outstanding operator-feed conformance findings with reproduction-gated fixes and real migration, browser, paging, HTTP, invalidation and benchmark evidence.
+**Goal:** Eliminate the demonstrated stale-snapshot browser race and prove the production reset/merge/tally lifecycle through one integrated harness; retain broader evidence work as a non-blocking verification backlog.
 
 **Architecture:** Every finding receives a deterministic failing reproduction through the real component boundary before implementation changes. Browser tests execute the actual asynchronous loader and DataTables state; SQLite migration tests use separate processes and observable transaction boundaries; bootstrap/feed tests use real pagination and HTTP serialization. Existing source election data remains immutable: projection migrations rebuild only derived operator-feed tables from disposable `documents` and `analyses` fixtures.
 
@@ -11,6 +11,8 @@
 ---
 
 **Baseline and safety:** Work on `dev` at/after `703a28319fbce68cfa556348710ace510478de3c`; do not create or use a worktree. Controlling prior plans are `docs/plans/2026-11-02-operator-feed-review-fixes.md` and `docs/plans/2026-11-02-operator-feed-conformance-followup.md`. Do not push, deploy, open/migrate the live election DB, restart the live watcher, or call live RIK/model services. Migration and benchmarks use disposable DBs only. Projection migration may drop/rebuild **only** `operator_model_winners`, `operator_model_counts`, their metadata and triggers; it must not delete/update source `documents`, `analyses`, reviews, findings, corrections or election data. Before any later live migration: stop here, require a verified backup and separate explicit authorization.
+
+**Approved scope amendment (2026-11-02):** After repeated reviews expanded the release gate into exhaustive proof permutations, the operator approved a scope freeze. Plan conformance now requires **only Chunk 1**: (a) epoch-fence every snapshot-failure path, including 404, and (b) execute production `loadData`, `beginBootstrap`, `applyData`, `applyFeedGroups`, reset and DataTables-owned row state in one controlled asynchronous test. Chunks 2–4 are an explicitly deferred, non-blocking verification backlog; they are useful confidence work but absence of any listed permutation is not a conformance defect and does not imply a product bug. Previously completed disposable migration/paging/HTTP/feed/invalidation tests and benchmarks remain retained. Deployment remains separately blocked on operator approval, backup and an operational migration rehearsal.
 
 **Required execution discipline:** Use @test-driven-development and @systematic-debugging. For each task: add the exact reproduction, run it and capture the expected failure, make the smallest implementation change, rerun focused tests, inspect the diff, then commit only that task. Source-string assertions and isolated helper tests do not satisfy a requirement for asynchronous, DataTables, process, HTTP or SQLite-snapshot behavior. If a requested deterministic harness is impossible with installed tooling, stop and report the blocker rather than substituting weaker evidence silently.
 
@@ -47,7 +49,14 @@
 - [ ] Fence failure callbacks with request epoch/sequence exactly as success callbacks: an old failed request cannot invalidate a newer accepted tally. Keep one request in flight and coalesce to at most one follow-up.
 - [ ] Run the new harness tests, existing merge/reset tests, then `uv run pytest -q tests/test_browse.py tests/test_review.py tests/test_operator_corrections.py tests/test_type13.py tests/test_server.py`. Inspect that no source-string-only test substitutes for the real loader tests. Commit this fix separately.
 
-## Chunk 2: Complete projection and process migration proof
+## Deferred verification backlog (non-blocking; not part of plan conformance)
+
+The following original Chunks 2–4 are retained as future verification ideas and historical context.
+They are not implementation requirements under the approved scope amendment and must not be used as
+an open-ended release gate. Promote an item into a new cleared plan only when a concrete defect,
+operational risk, or explicit operator request justifies it.
+
+### Original Chunk 2: Complete projection and process migration proof
 
 ### Task 3: Complete NULL/empty/named projection mutation parity
 
@@ -67,7 +76,7 @@
 - [ ] Add failed-A case: inject failure after projection rebuild but before marker/commit; observer continues to see old committed state, A rolls back, B acquires lock and performs one correct rebuild, final counts/triggers match legacy query, source tables unchanged.
 - [ ] Run each process test repeatedly (e.g. `pytest ... --count` only if plugin exists; otherwise parameterize 3 iterations) and the full Store suite. If current SQLite timeout behavior fails, make the smallest explicit busy-timeout/retry change and test it. Replace neither proof with the existing pre-migration thread barrier. Commit separately.
 
-## Chunk 3: Real bootstrap, HTTP and feed races
+### Original Chunk 3: Real bootstrap, HTTP and feed races
 
 ### Task 5: Complete 102-group deterministic paging matrix
 
@@ -94,7 +103,7 @@
 - [ ] Through the real browser/DataTables harness, apply stale row after newer tombstone, stale tombstone after newer row, equal-revision duplicates, revision-11 recreation, an older full snapshot, and actual `table.rows().remove()`. Registry persists across normal redraw/snapshot and clears only on genuine epoch reset.
 - [ ] Run red-first tests and focused feed/browser suites; fix only demonstrated defects and commit separately.
 
-## Chunk 4: Complete invalidation and end-to-end conformance evidence
+### Original Chunk 4: Complete invalidation and end-to-end conformance evidence
 
 ### Task 8: Build the full invalidation matrix without redundant fixtures
 

@@ -2869,6 +2869,7 @@ function loadData() {
     fetch("data.json?t=" + Date.now(), {cache: "no-store"}),
     fetch("data-meta.json?t=" + Date.now(), {cache: "no-store"})
   ]).then(async ([dataResponse, metaResponse]) => {
+    if (epochStarted !== bootstrapEpoch) return null;
     if (dataResponse.status === 404 || metaResponse.status === 404) {
       if (!table) beginBootstrap(false);
       else { invalidateTally(); feedState("forms current · tally stale"); }

@@ -460,6 +460,83 @@ const pair = () => [response(200, {{generation:"g", model_order_signature:"o",
     assert result.returncode == 0, result.stderr
 
 
+def test_old_snapshot_404_cannot_invalidate_new_epoch_tally_through_real_lifecycle():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    merge = html[html.index("function groupTag("):html.index(
+        "// ---- results", html.index("function groupTag("))]
+    loading = html[html.index("let feedGeneration ="):html.index(
+        "loadStatus();", html.index("let feedGeneration ="))]
+    script = f"""
+const assert = require("assert");
+const HTTP = true;
+let S = {{parent:"p"}}, D = {{rows:[], elections:{{p:"Election"}}}}, rows = [];
+let T = null, tableRows = [], table = null;
+const built = {{textContent:""}};
+const $ = id => id === "built" ? built : (id === "auto" ? {{checked:true}} : {{}});
+const prep = value => value;
+const child = () => null;
+const renderTally = () => {{}};
+const epoch = () => "now";
+const console = {{error: () => {{}}}};
+function rowsFn(selector) {{
+  const indexes = tableRows.map((value, index) => [value,index]).filter(([value,index]) =>
+    !selector || selector(index, value)).map(([,index]) => index);
+  return {{
+    every(fn) {{ indexes.forEach(index => fn.call({{
+      data(next) {{ if (arguments.length) tableRows[index] = next; return tableRows[index]; }},
+      child: {{isShown: () => false, show: () => {{}}}}
+    }})); return this; }},
+    remove() {{ for (const index of [...indexes].reverse()) tableRows.splice(index, 1); return this; }},
+    draw() {{ return this; }}
+  }};
+}}
+rowsFn.add = additions => {{ tableRows.push(...additions); return {{draw: () => table}}; }};
+table = {{rows: rowsFn}};
+{merge}
+{loading}
+let resolveData, resolveMeta;
+const oldData = new Promise(resolve => resolveData = resolve);
+const oldMeta = new Promise(resolve => resolveMeta = resolve);
+let snapshotFetches = 0;
+const response = (status, body) => ({{status, ok: status >= 200 && status < 300,
+  json: () => Promise.resolve(body)}});
+async function fetch(url) {{
+  if (url.startsWith("data.json")) {{ snapshotFetches++; return oldData; }}
+  if (url.startsWith("data-meta.json")) return oldMeta;
+  if (url.startsWith("operator-bootstrap")) return response(200, {{db:"d", parent:"p",
+    generation:"g2", model_order_signature:"o2", revision:5, reset_required:false,
+    groups:[{{kind:"station", key:"A", rows:[{{id:1, el:"p", group_kind:"station",
+      group_key:"A", doc_type:6, changed_revision:5, rec:{{status:"updating"}}}}]}}],
+    cursor:null, election:{{title:"Election"}}, rules:{{}}, interval:120}});
+  if (url.startsWith("operator-feed")) return response(200, {{generation:"g2",
+    model_order_signature:"o2", through:5, more:false, reset_required:false,
+    groups:[], tombstones:[]}});
+  throw new Error("unexpected fetch " + url);
+}}
+(async () => {{
+  feedGeneration = "g1"; feedOrderSignature = "o1";
+  rows = [{{id:1, el:"p", group_kind:"station", group_key:"A", doc_type:6,
+    changed_revision:4, rec:{{status:"ok"}}}}]; D.rows = rows; tableRows = [...rows];
+  const old = loadData();
+  beginBootstrap(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(feedGeneration, "g2");
+  assert.equal(tableRows.length, 1, "real bootstrap/applyFeedGroups must restore row");
+  applyData({{generation:"g2", model_order_signature:"o2", snapshot_revision:6,
+    snapshot_id:"new", built:"2026-11-02T00:00:00Z", rows:[{{...tableRows[0],
+    changed_revision:5, rec:{{status:"ok"}}}}], tally:{{newer:true}}}}, true);
+  assert.deepEqual(T, {{newer:true}});
+  resolveData(response(404, {{}})); resolveMeta(response(404, {{}}));
+  await old;
+  assert.deepEqual(T, {{newer:true}}, "old-epoch 404 must not invalidate newer tally");
+  assert.equal(tallyRevision, 6);
+  assert.equal(tableRows[0].rec.status, "ok");
+}})().catch(error => {{ process.stderr.write(String(error.stack || error)); process.exit(1); }});
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_snapshot_acceptance_is_monotonic_and_epoch_scoped():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     start = html.index("function snapshotDecision(")
