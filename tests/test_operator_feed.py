@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 
@@ -196,6 +197,49 @@ def test_bootstrap_skips_post_start_group_and_feed_replays_true_revision(tmp_pat
     assert changed["rows"][0]["changed_revision"] == changed_revision
 
 
+def test_bootstrap_102_groups_replays_insert_delete_move_and_review(tmp_path):
+    store, feed = setup_feed(tmp_path)
+    documents = [doc(f"https://x/matrix-{number}.pdf", no=f"{number:03d}")
+                 for number in range(1, 106)]
+    for value in documents:
+        add(store, value)
+
+    first = feed.bootstrap(P)
+    assert len(first["groups"]) == 100 and first["cursor"]
+    start = first["revision"]
+    inserted = doc("https://x/matrix-new.pdf", no="000")
+    add(store, inserted)
+    store.set_review(documents[101].url, "ok", "between pages")
+    with store._lock, store._db:
+        store._db.execute("DELETE FROM documents WHERE url=?", (documents[102].url,))
+        store._db.execute("UPDATE documents SET station_key=NULL WHERE url=?", (documents[100].url,))
+
+    identities = {(group["kind"], group["key"]) for group in first["groups"]}
+    cursor = first["cursor"]
+    while cursor:
+        page = feed.bootstrap(P, cursor)
+        assert page["reset_required"] is False
+        identities.update((group["kind"], group["key"]) for group in page["groups"])
+        cursor = page["cursor"]
+
+    since = start
+    while True:
+        change = feed.feed(P, since)
+        assert change["reset_required"] is False
+        for group in change["groups"]:
+            identities.add((group["kind"], group["key"]))
+        for tombstone in change["tombstones"]:
+            identities.discard((tombstone["kind"], tombstone["key"]))
+        since = change["through"]
+        if not change["more"]:
+            break
+
+    assert identities == set(store.operator_group_identities(P, limit=201))
+    with store._lock, store._db:
+        store._db.execute("UPDATE operator_feed_floors SET floor=? WHERE parent=?", (since, P))
+    assert feed.bootstrap(P, first["cursor"])["reset_required"] is True
+
+
 def test_bootstrap_returns_one_lossless_oversized_soft_group_and_rejects_hard_limit(
         tmp_path, monkeypatch):
     store, feed = setup_feed(tmp_path)
@@ -212,3 +256,52 @@ def test_bootstrap_returns_one_lossless_oversized_soft_group_and_rejects_hard_li
     monkeypatch.setattr(feed, "_rows", lambda *_args: [{"payload": "x" * 2_050_000}])
     with pytest.raises(OperatorGroupTooLarge):
         feed.bootstrap(P)
+
+
+def test_feed_pinned_snapshot_replays_same_group_commit(tmp_path, monkeypatch):
+    store, feed = setup_feed(tmp_path)
+    value = doc("https://x/pinned.pdf")
+    add(store, value)
+    since = store.operator_feed_state(P)[1]
+    store.set_review(value.url, "ok", "at T")
+    revision_t = store.operator_feed_state(P)[1]
+
+    selected = threading.Event()
+    release = threading.Event()
+    original = Store.operator_feed_changes
+    blocked = False
+
+    def pause_after_selection(self, parent, cursor, limit):
+        nonlocal blocked
+        rows = original(self, parent, cursor, limit)
+        if self._read_only and not blocked:
+            blocked = True
+            selected.set()
+            assert release.wait(5)
+        return rows
+
+    monkeypatch.setattr(Store, "operator_feed_changes", pause_after_selection)
+    result = {}
+
+    def read_feed():
+        result.update(feed.feed(P, since))
+
+    thread = threading.Thread(target=read_feed)
+    thread.start()
+    assert selected.wait(5)
+    writer = Store(store.path)
+    try:
+        writer.set_review(value.url, "escalate", "at T+1")
+        revision_next = writer.operator_feed_state(P)[1]
+    finally:
+        writer.close()
+        release.set()
+    thread.join(5)
+    assert not thread.is_alive()
+    row = result["groups"][0]["rows"][0]
+    assert result["through"] == revision_t
+    assert row["changed_revision"] == revision_t and row["rv"]["v"] == "ok"
+
+    replay = feed.feed(P, revision_t)
+    row = replay["groups"][0]["rows"][0]
+    assert row["changed_revision"] == revision_next and row["rv"]["v"] == "escalate"
