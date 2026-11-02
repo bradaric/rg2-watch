@@ -11,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .analyze import ARITHMETIC_PROMPT_VERSION, stored_model
+from .analysis_selection import model_tie_key
 from .browse import STATIC, build_data
 from .config import Config
 from .pipeline import RG7_PROMPT_VERSION
@@ -86,7 +87,7 @@ def effective_model_order(store: Store, cfg: Config, parent: str) -> tuple[list[
     coverage = store.operator_model_counts(parent)
     order = [preferred, *sorted(
         (model for model in coverage if model != preferred),
-        key=lambda model: (-coverage[model], model or ""))]
+        key=lambda model: (-coverage[model], *model_tie_key(model)))]
     return order, hashlib.sha256(_canonical(order)).hexdigest()
 
 

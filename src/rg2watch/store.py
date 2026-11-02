@@ -49,7 +49,7 @@ CREATE INDEX IF NOT EXISTS operator_feed_changes_group
 """  # after the migrations: older DBs lack some of these columns until then
 
 OPERATOR_FEED_WINDOW = 10_000
-OPERATOR_MODEL_PROJECTION_VERSION = "1"
+OPERATOR_MODEL_PROJECTION_VERSION = "2"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS elections(
@@ -260,8 +260,10 @@ def _operator_model_projection_triggers() -> list[tuple[str, str]]:
     prompt = "'" + PROMPT_VERSION.replace("'", "''") + "'"
     eligible = _ANALYSED
     pick_new = f"""
-      INSERT OR IGNORE INTO operator_model_winners(document_id,model,parent,selected_analysis_id)
-      SELECT d.id,a.model,d.parent,a.id FROM documents d JOIN analyses a ON a.id=(
+      INSERT OR IGNORE INTO operator_model_winners(
+        document_id,model_is_null,model_value,parent,selected_analysis_id)
+      SELECT d.id,a.model IS NULL,COALESCE(a.model,''),d.parent,a.id
+      FROM documents d JOIN analyses a ON a.id=(
         SELECT b.id FROM analyses b WHERE b.document_id=d.id AND b.model IS NEW.model
           AND b.status='done' AND b.result_json IS NOT NULL
         ORDER BY b.prompt_version IS {prompt} DESC,b.id DESC LIMIT 1)
@@ -269,8 +271,9 @@ def _operator_model_projection_triggers() -> list[tuple[str, str]]:
     pick_old = pick_new.replace("NEW.model", "OLD.model").replace(
         "NEW.document_id", "OLD.document_id")
     pick_document = f"""
-      INSERT OR IGNORE INTO operator_model_winners(document_id,model,parent,selected_analysis_id)
-      SELECT d.id,a.model,d.parent,a.id FROM documents d JOIN analyses a
+      INSERT OR IGNORE INTO operator_model_winners(
+        document_id,model_is_null,model_value,parent,selected_analysis_id)
+      SELECT d.id,a.model IS NULL,COALESCE(a.model,''),d.parent,a.id FROM documents d JOIN analyses a
         ON a.document_id=d.id AND a.status='done' AND a.result_json IS NOT NULL
         AND a.id=(SELECT b.id FROM analyses b WHERE b.document_id=d.id AND b.model IS a.model
           AND b.status='done' AND b.result_json IS NOT NULL
@@ -280,35 +283,42 @@ def _operator_model_projection_triggers() -> list[tuple[str, str]]:
         ("operator_model_winners_count_insert", """
          CREATE TRIGGER operator_model_winners_count_insert AFTER INSERT ON operator_model_winners
          BEGIN
-           INSERT INTO operator_model_counts(parent,model,coverage) VALUES(NEW.parent,NEW.model,1)
-           ON CONFLICT(parent,model) DO UPDATE SET coverage=coverage+1;
+           INSERT INTO operator_model_counts(parent,model_is_null,model_value,coverage)
+             VALUES(NEW.parent,NEW.model_is_null,NEW.model_value,1)
+           ON CONFLICT(parent,model_is_null,model_value) DO UPDATE SET coverage=coverage+1;
          END"""),
         ("operator_model_winners_count_delete", """
          CREATE TRIGGER operator_model_winners_count_delete AFTER DELETE ON operator_model_winners
          BEGIN
-           DELETE FROM operator_model_counts WHERE parent=OLD.parent AND model IS OLD.model
-             AND coverage=1;
+           DELETE FROM operator_model_counts WHERE parent=OLD.parent
+             AND model_is_null=OLD.model_is_null AND model_value=OLD.model_value
+              AND coverage=1;
            UPDATE operator_model_counts SET coverage=coverage-1
-             WHERE parent=OLD.parent AND model IS OLD.model;
+             WHERE parent=OLD.parent AND model_is_null=OLD.model_is_null
+             AND model_value=OLD.model_value;
          END"""),
         ("operator_model_analyses_insert", f"""
          CREATE TRIGGER operator_model_analyses_insert AFTER INSERT ON analyses BEGIN
-           DELETE FROM operator_model_winners
-             WHERE document_id=NEW.document_id AND model IS NEW.model;
+            DELETE FROM operator_model_winners
+              WHERE document_id=NEW.document_id AND model_is_null=(NEW.model IS NULL)
+              AND model_value=COALESCE(NEW.model,'');
            {pick_new};
          END"""),
         ("operator_model_analyses_delete", f"""
          CREATE TRIGGER operator_model_analyses_delete AFTER DELETE ON analyses BEGIN
-           DELETE FROM operator_model_winners
-             WHERE document_id=OLD.document_id AND model IS OLD.model;
+            DELETE FROM operator_model_winners
+              WHERE document_id=OLD.document_id AND model_is_null=(OLD.model IS NULL)
+              AND model_value=COALESCE(OLD.model,'');
            {pick_old};
          END"""),
         ("operator_model_analyses_update", f"""
          CREATE TRIGGER operator_model_analyses_update AFTER UPDATE ON analyses BEGIN
-           DELETE FROM operator_model_winners
-             WHERE document_id=OLD.document_id AND model IS OLD.model;
-           DELETE FROM operator_model_winners
-             WHERE document_id=NEW.document_id AND model IS NEW.model;
+            DELETE FROM operator_model_winners
+              WHERE document_id=OLD.document_id AND model_is_null=(OLD.model IS NULL)
+              AND model_value=COALESCE(OLD.model,'');
+            DELETE FROM operator_model_winners
+              WHERE document_id=NEW.document_id AND model_is_null=(NEW.model IS NULL)
+              AND model_value=COALESCE(NEW.model,'');
            {pick_old};
            {pick_new};
          END"""),
@@ -473,12 +483,15 @@ class Store:
                 "id INTEGER PRIMARY KEY CHECK(id=1),marker TEXT NOT NULL)")
             self._db.execute(
                 "CREATE TABLE IF NOT EXISTS operator_model_winners("
-                "document_id INTEGER NOT NULL,model TEXT,parent TEXT NOT NULL,"
-                "selected_analysis_id INTEGER NOT NULL,PRIMARY KEY(document_id,model))")
+                "document_id INTEGER NOT NULL,model_is_null INTEGER NOT NULL "
+                "CHECK(model_is_null IN (0,1)),model_value TEXT NOT NULL,parent TEXT NOT NULL,"
+                "selected_analysis_id INTEGER NOT NULL,"
+                "PRIMARY KEY(document_id,model_is_null,model_value))")
             self._db.execute(
                 "CREATE TABLE IF NOT EXISTS operator_model_counts("
-                "parent TEXT NOT NULL,model TEXT,coverage INTEGER NOT NULL,"
-                "PRIMARY KEY(parent,model))")
+                "parent TEXT NOT NULL,model_is_null INTEGER NOT NULL "
+                "CHECK(model_is_null IN (0,1)),model_value TEXT NOT NULL,coverage INTEGER NOT NULL,"
+                "PRIMARY KEY(parent,model_is_null,model_value))")
             current = self._db.execute(
                 "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()
             installed = {row[0] for row in self._db.execute(
@@ -487,20 +500,32 @@ class Store:
             if current is None or current[0] != marker or not expected <= installed:
                 for name, _ in triggers:
                     self._db.execute(f"DROP TRIGGER IF EXISTS {name}")
-                self._db.execute("DELETE FROM operator_model_counts")
-                self._db.execute("DELETE FROM operator_model_winners")
+                self._db.execute("DROP TABLE IF EXISTS operator_model_counts")
+                self._db.execute("DROP TABLE IF EXISTS operator_model_winners")
+                self._db.execute(
+                    "CREATE TABLE operator_model_winners(document_id INTEGER NOT NULL,"
+                    "model_is_null INTEGER NOT NULL CHECK(model_is_null IN (0,1)),"
+                    "model_value TEXT NOT NULL,parent TEXT NOT NULL,selected_analysis_id INTEGER NOT NULL,"
+                    "PRIMARY KEY(document_id,model_is_null,model_value))")
+                self._db.execute(
+                    "CREATE TABLE operator_model_counts(parent TEXT NOT NULL,"
+                    "model_is_null INTEGER NOT NULL CHECK(model_is_null IN (0,1)),"
+                    "model_value TEXT NOT NULL,coverage INTEGER NOT NULL,"
+                    "PRIMARY KEY(parent,model_is_null,model_value))")
                 prompt = PROMPT_VERSION
                 self._db.execute(
-                    "INSERT INTO operator_model_winners(document_id,model,parent,selected_analysis_id) "
-                    "SELECT d.id,a.model,d.parent,a.id FROM documents d JOIN analyses a "
+                    "INSERT INTO operator_model_winners(document_id,model_is_null,model_value,parent,"
+                    "selected_analysis_id) SELECT d.id,a.model IS NULL,COALESCE(a.model,''),d.parent,a.id "
+                    "FROM documents d JOIN analyses a "
                     "ON a.document_id=d.id AND a.status='done' AND a.result_json IS NOT NULL "
                     "AND a.id=(SELECT b.id FROM analyses b WHERE b.document_id=d.id "
                     "AND b.model IS a.model AND b.status='done' AND b.result_json IS NOT NULL "
                     "ORDER BY b.prompt_version IS ? DESC,b.id DESC LIMIT 1) "
                     f"WHERE d.doc_type IN ({_ANALYSED}) AND a.prompt_version LIKE 'v%'", (prompt,))
                 self._db.execute(
-                    "INSERT INTO operator_model_counts(parent,model,coverage) "
-                    "SELECT parent,model,COUNT(*) FROM operator_model_winners GROUP BY parent,model")
+                    "INSERT INTO operator_model_counts(parent,model_is_null,model_value,coverage) "
+                    "SELECT parent,model_is_null,model_value,COUNT(*) FROM operator_model_winners "
+                    "GROUP BY parent,model_is_null,model_value")
                 for _, sql in triggers:
                     self._db.execute(sql)
                 self._db.execute(
@@ -602,12 +627,14 @@ class Store:
                 "GROUP BY model", (parent, prompt_version)).fetchall()
         return {row["model"]: row["coverage"] for row in rows}
 
-    def operator_model_counts(self, parent: str) -> dict[str, int]:
+    def operator_model_counts(self, parent: str) -> dict[str | None, int]:
         """Projected election/model coverage; bounded by the number of stored models."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT model,coverage FROM operator_model_counts WHERE parent=?", (parent,)).fetchall()
-        return {row["model"]: row["coverage"] for row in rows}
+                "SELECT model_is_null,model_value,coverage FROM operator_model_counts "
+                "WHERE parent=? ORDER BY model_is_null,model_value", (parent,)).fetchall()
+        return {(None if row["model_is_null"] else row["model_value"]): row["coverage"]
+                for row in rows}
 
     def add_classification_override(self, url: str, action: str) -> sqlite3.Row | None:
         if action not in ("confirm_rg2", "quarantine_rg7", "revoke"):

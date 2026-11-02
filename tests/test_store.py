@@ -127,6 +127,37 @@ def test_operator_model_projection_matches_legacy_selection_and_direct_sql():
     assert s.operator_model_counts("other") == {"m": 1}
 
 
+def test_operator_model_projection_keeps_null_and_empty_models_distinct():
+    s = store()
+    documents = [doc(f"https://x/null-model-{i}.pdf", no=str(i)) for i in range(1, 3)]
+    for value in documents:
+        s.apply_events(P, s.start_sweep(P, "projection-null"), [Event("added", value)])
+
+    with s._lock, s._db:
+        for document_id in (1, 2):
+            s._db.execute(
+                "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+                "VALUES(?,NULL,?,'{}','done',?)", (document_id, PROMPT_VERSION, P))
+        s._db.execute(
+            "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+            "VALUES(1,'',?,'{}','done',?)", (PROMPT_VERSION, P))
+
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {
+        None: 2, "": 1}
+
+    with s._lock, s._db:
+        null_analysis = s._db.execute(
+            "SELECT id FROM analyses WHERE document_id=1 AND model IS NULL").fetchone()[0]
+        s._db.execute("UPDATE analyses SET model='named' WHERE id=?", (null_analysis,))
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {
+        None: 1, "": 1, "named": 1}
+
+    with s._lock, s._db:
+        s._db.execute("UPDATE analyses SET model=NULL,document_id=2 WHERE id=?", (null_analysis,))
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {
+        None: 1, "": 1}
+
+
 def test_prompt_version_has_one_dependency_neutral_owner():
     import rg2watch.operator_feed as operator_feed
     import rg2watch.pipeline as pipeline

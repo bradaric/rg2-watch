@@ -1564,7 +1564,10 @@ function mergeGroupState(current, groups, tombstones) {
   const removed = new Set();
   for (const group of tombstones) {
     const tag = group.kind + "\0" + group.key;
-    const revision = group.changed_revision == null ? (groupRevisions.get(tag) || 0) + 1 : group.changed_revision;
+    if (group.changed_revision == null) {
+      console.error("ignoring operator tombstone without changed_revision", group); continue;
+    }
+    const revision = group.changed_revision;
     if (revision > (groupRevisions.get(tag) || 0)) {
       groupRevisions.set(tag, revision); deletedGroupRevisions.add(tag); removed.add(tag);
     }
@@ -1612,6 +1615,13 @@ function applyFeedGroups(groups, tombstones = []) {
     if (shown.has(groupTag(this.data()) + "\0" + this.data().doc_type))
       this.child(child(this.data())).show();
   });
+}
+function clearRenderedGroups() {
+  if (table) table.rows().remove().draw(false);
+  rows = [];
+  D.rows = rows;
+  groupRevisions.clear();
+  deletedGroupRevisions.clear();
 }
 function applyData(data, acceptTally = false) {
   if (table) {
@@ -2738,7 +2748,7 @@ function load(name, global, apply) {
 }
 function loadStatus() { load("status", "RG2_STATUS", applyStatus); loadReviews(); }
 let feedGeneration = null, feedOrderSignature = null, feedRevision = 0, tallyRevision = 0, feedBusy = false;
-let bootstrapBusy = false, nextTallyAt = 0;
+let bootstrapBusy = false, bootstrapResetPending = false, bootstrapTerminal = false, nextTallyAt = 0;
 let bootstrapEpoch = 0, snapshotLoadPromise = null, snapshotLoadQueued = false;
 let acceptedSnapshot = {generation: null, order: null, revision: -1, id: null};
 function operatorParent() {
@@ -2746,17 +2756,16 @@ function operatorParent() {
 }
 function feedState(text) { $("built").textContent = text; }
 function beginBootstrap(clear = false, cursor = null) {
-  if (bootstrapBusy || !HTTP) return;
-  const parent = operatorParent();
-  if (!parent) { feedState("reconnecting"); setTimeout(() => beginBootstrap(clear), 1000); return; }
+  if (!HTTP || bootstrapTerminal) return;
   if (clear) {
     bootstrapEpoch++;
     feedGeneration = null; feedRevision = tallyRevision = 0; T = null;
-    feedOrderSignature = null; groupRevisions.clear(); deletedGroupRevisions.clear();
+    feedOrderSignature = null; clearRenderedGroups();
     acceptedSnapshot = {generation: null, order: null, revision: -1, id: null};
-    if (table) applyFeedGroups([], [...new Map(rows.map(row => [groupTag(row),
-      {kind: row.group_kind, key: row.group_key}])).values()]);
-  }
+    if (bootstrapBusy) { bootstrapResetPending = true; return; }
+  } else if (bootstrapBusy) return;
+  const parent = operatorParent();
+  if (!parent) { feedState("reconnecting"); setTimeout(() => beginBootstrap(clear), 1000); return; }
   bootstrapBusy = true; feedState("loading forms…");
   const epochStarted = bootstrapEpoch;
   fetch("operator-bootstrap?parent=" + encodeURIComponent(parent) +
@@ -2771,7 +2780,10 @@ function beginBootstrap(clear = false, cursor = null) {
     })
     .then(page => {
       bootstrapBusy = false;
-      if (epochStarted !== bootstrapEpoch) return;
+      if (epochStarted !== bootstrapEpoch) {
+        if (bootstrapResetPending) { bootstrapResetPending = false; beginBootstrap(false); }
+        return;
+      }
       if (page.reset_required) { setTimeout(() => beginBootstrap(true), 500); return; }
       if (feedGeneration && (page.generation !== feedGeneration ||
           page.model_order_signature !== feedOrderSignature)) { beginBootstrap(true); return; }
@@ -2786,7 +2798,12 @@ function beginBootstrap(clear = false, cursor = null) {
       if (page.cursor) beginBootstrap(false, page.cursor);
       else { feedState("forms current · tally Updating"); pollFeed(true); }
     }, error => { bootstrapBusy = false;
+      if (epochStarted !== bootstrapEpoch) {
+        if (bootstrapResetPending) { bootstrapResetPending = false; beginBootstrap(false); }
+        return;
+      }
       if (error.bootstrapTerminal) {
+        bootstrapTerminal = true;
         feedState("forms unavailable: one group exceeds 2 MB; reduce that group and reload");
         console.error("operator bootstrap stopped", error); return;
       }

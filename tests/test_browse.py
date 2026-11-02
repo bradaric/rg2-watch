@@ -339,6 +339,13 @@ def test_operator_page_bootstraps_and_polls_feed_without_overlapping_requests():
     assert '"reconnecting"' in html and '"auto-refresh paused"' in html
 
 
+def test_operator_reset_clears_rendered_rows_without_synthetic_tombstones():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "function clearRenderedGroups()" in html
+    assert "applyFeedGroups([]," not in html
+    assert "(groupRevisions.get(tag) || 0) + 1" not in html
+
+
 def test_snapshot_acceptance_is_monotonic_and_epoch_scoped():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     start = html.index("function snapshotDecision(")

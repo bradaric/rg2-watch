@@ -6,6 +6,7 @@ from rg2watch.analyze import AnalysisResult, stored_model
 from rg2watch.config import Config
 from rg2watch.models import Doc, Election, Event
 from rg2watch.operator_feed import OperatorFeed, OperatorGroupTooLarge
+from rg2watch.analysis_selection import preferred_models
 from rg2watch.store import Store
 from rg2watch.pipeline import PROMPT_VERSION
 from test_rules import clean_report
@@ -151,6 +152,24 @@ def test_effective_model_order_signature_only_changes_when_order_changes(tmp_pat
     reordered = feed.feed(P, store.operator_feed_state(P)[1])["model_order_signature"]
     assert reordered != tied
     assert feed.bootstrap(P)["model_order_signature"] == reordered
+
+
+def test_equal_coverage_model_order_places_empty_before_named_and_null_last(tmp_path):
+    store, _ = setup_feed(tmp_path)
+    documents = [doc(f"https://x/tie-{i}.pdf", no=str(i)) for i in range(1, 4)]
+    for value in documents:
+        add(store, value)
+    with store._lock, store._db:
+        for document_id, model in enumerate((None, "", "named"), 1):
+            store._db.execute(
+                "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+                "VALUES(?,?,?,'{}','done',?)", (document_id, model, PROMPT_VERSION, P))
+
+    rows = store._db.execute("SELECT model FROM analyses ORDER BY id DESC").fetchall()
+    assert preferred_models(rows, "preferred") == ["preferred", "", "named", None]
+    order, _ = __import__("rg2watch.operator_feed", fromlist=["effective_model_order"]).effective_model_order(
+        store, Config(model="preferred"), P)
+    assert order == ["preferred", "", "named", None]
 
 
 def test_bootstrap_skips_post_start_group_and_feed_replays_true_revision(tmp_path, monkeypatch):
