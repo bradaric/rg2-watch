@@ -7,6 +7,7 @@ import socket
 import pytest
 
 from rg2watch.server import start_server
+from rg2watch.operator_feed import OperatorGroupTooLarge
 
 H = hashlib.sha256(b"x").hexdigest()
 
@@ -106,6 +107,8 @@ def test_operator_feed_endpoints_are_same_origin_read_only_and_exact(tmp_path):
             return {"parent": parent, "through": since, "generation": "g", "groups": []}
 
         def bootstrap(self, parent, cursor=None):
+            if parent == "too-large":
+                raise OperatorGroupTooLarge("hidden report contents")
             return {"parent": parent, "cursor": cursor, "generation": "g", "groups": []}
 
     server = start_server(tmp_path, tmp_path, 0, operator_feed=Feed())
@@ -128,6 +131,11 @@ def test_operator_feed_endpoints_are_same_origin_read_only_and_exact(tmp_path):
             server, "/operator-bootstrap?parent=662405&cursor=opaque", headers=same)
         assert status == 200 and json.loads(body)["cursor"] == "opaque"
         assert req(server, "/operator-bootstrap?parent=x&cursor=a&cursor=b", headers=same)[0] == 400
+        status, _, body, _ = req(server, "/operator-bootstrap?parent=too-large", headers=same)
+        assert status == 413
+        assert json.loads(body) == {"error": "operator_group_too_large",
+                                    "recovery": "reduce the tagged group before retrying bootstrap"}
+        assert b"hidden report contents" not in body
     finally:
         server.shutdown()
         server.server_close()

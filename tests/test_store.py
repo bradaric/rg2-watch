@@ -163,6 +163,47 @@ def test_projection_migration_rebuilds_prompt_dependent_winners_and_triggers(tmp
     assert "'v8'" in trigger_sql and "'v11'" not in trigger_sql
     assert reopened.operator_model_counts(P) == reopened.operator_model_coverage(P, "v8")
 
+
+def test_projection_migration_serializes_two_openers(tmp_path, monkeypatch):
+    path = tmp_path / "concurrent-projection.sqlite"
+    seed = Store(path)
+    seed.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    value = doc("https://x/concurrent-model.pdf")
+    seed.apply_events(P, seed.start_sweep(P, "projection"), [Event("added", value)])
+    seed.save_analysis(value.url, AnalysisResult(
+        clean_report(), 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    with seed._lock, seed._db:
+        seed._db.execute("DELETE FROM operator_model_projection_meta")
+        seed._db.execute("DELETE FROM operator_model_counts")
+        seed._db.execute("DELETE FROM operator_model_winners")
+    seed.close()
+
+    barrier = threading.Barrier(2)
+    original = Store._migrate_operator_model_projection
+
+    def synchronized(self):
+        barrier.wait(timeout=5)
+        return original(self)
+
+    monkeypatch.setattr(Store, "_migrate_operator_model_projection", synchronized)
+    opened, errors = [], []
+
+    def run():
+        try:
+            opened.append(Store(path))
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert [item.operator_model_counts(P) for item in opened] == [{"m": 1}, {"m": 1}]
+    for item in opened:
+        item.close()
+
 def test_type13_retarget_invalidates_source_old_and_new_target_groups():
     s = store()
     source = doc("https://x/type13.pdf", no="1", dt=13)

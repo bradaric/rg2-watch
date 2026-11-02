@@ -5,7 +5,7 @@ import pytest
 from rg2watch.analyze import AnalysisResult, stored_model
 from rg2watch.config import Config
 from rg2watch.models import Doc, Election, Event
-from rg2watch.operator_feed import OperatorFeed
+from rg2watch.operator_feed import OperatorFeed, OperatorGroupTooLarge
 from rg2watch.store import Store
 from rg2watch.pipeline import PROMPT_VERSION
 from test_rules import clean_report
@@ -175,3 +175,21 @@ def test_bootstrap_skips_post_start_group_and_feed_replays_true_revision(tmp_pat
     replay = feed.feed(P, start)
     changed = next(group for group in replay["groups"] if group["key"] == docs[1].station_key)
     assert changed["rows"][0]["changed_revision"] == changed_revision
+
+
+def test_bootstrap_returns_one_lossless_oversized_soft_group_and_rejects_hard_limit(
+        tmp_path, monkeypatch):
+    store, feed = setup_feed(tmp_path)
+    for number in (1, 2):
+        add(store, doc(f"https://x/large-{number}.pdf", no=str(number)))
+    soft_row = [{"payload": "x" * 1_050_000}]
+    monkeypatch.setattr(feed, "_rows", lambda *_args: soft_row)
+
+    first = feed.bootstrap(P)
+    assert len(first["groups"]) == 1 and first["cursor"] is not None
+    second = feed.bootstrap(P, first["cursor"])
+    assert len(second["groups"]) == 1 and second["done"] is True
+
+    monkeypatch.setattr(feed, "_rows", lambda *_args: [{"payload": "x" * 2_050_000}])
+    with pytest.raises(OperatorGroupTooLarge):
+        feed.bootstrap(P)

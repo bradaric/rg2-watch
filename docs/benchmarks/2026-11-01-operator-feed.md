@@ -148,6 +148,35 @@ latency, multiple production workers, election-night hardware, and a safe produc
 remain unmeasured because the live watcher/database could not be touched. The result therefore does
 not justify running full snapshots continuously; production retains its existing background cadence.
 
+## 2026-11-02 review-fix rerun
+
+The order-signature/projection and monotonic paging changes were rerun with the same generated
+8,253-station fixture and 20 samples per feed size. The disposable artifacts were written under
+`/tmp/opencode`; no election database, watcher, RIK endpoint, or model endpoint was accessed.
+
+| Changed groups | p50 | p95 | Mean JSON | Maximum JSON |
+|---:|---:|---:|---:|---:|
+| 0 | 0.58 ms | 0.61 ms | 350 B | 350 B |
+| 1 | 2.13 ms | 2.19 ms | 1,916 B | 1,920 B |
+| 10 | 10.50 ms | 10.71 ms | 16,085 B | 16,116 B |
+| 53 | 52.01 ms | 69.68 ms | 84,352 B | 84,541 B |
+
+Three warm full snapshots took 6.236, 6.238, and 6.305 seconds (p50 6.238 seconds), and the
+concurrent-ingestion case completed 458 writes at 15.28 ms p95 with a 4,169,472-byte maximum WAL.
+The resulting snapshot was 14,319,074 bytes. A separate 200-insert model-counter measurement had
+0.090 ms p50 and 0.269 ms p95 transaction cost. Its traced order lookup was exactly:
+`SELECT model,coverage FROM operator_model_counts WHERE parent=?`; it did not read `analyses` or
+`documents`.
+
+The simulated impact rerun measured watcher p50/p95 at 1,811.76/2,107.74 ms baseline and
+3,902.03/6,652.46 ms with continuous snapshot/feed load. One-worker analysis p50/p95 was
+346.09/364.13 ms baseline and 436.01/967.50 ms loaded; throughput changed from 2.868 to
+2.037 forms/s. As above, this deliberately CPU-heavy fake workload is contention evidence, not a
+production claim or authorization to increase snapshot frequency. Bootstrap replay/restart and hard
+oversize behavior are deterministic protocol tests rather than useful latency measurements: changed
+post-start groups are skipped then replayed, signature/floor changes restart, and a >2 MB tagged
+group terminates with typed HTTP 413 instead of retrying or dropping rows.
+
 Reproduction commands for the added measurements:
 
 ```sh

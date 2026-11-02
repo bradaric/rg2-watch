@@ -154,7 +154,8 @@ logout:
 | "PDF downloads blocked" | RIK refusing downloads (consecutive 401/403), or at least 10 cumulative download deferrals | Nothing; downloads recover automatically. A 401/403 streak pauses downloads; an HTTP 404 instead breaks that streak. Listing changes are still detected. |
 | Forms stuck as failed (X2/D3/X1, LOW) | Analysis gave up on them | After fixing the cause: `uv run --env-file .env rg2watch requeue --parent <parent> --failed`, then keep `watch --analyze` running. |
 | Watch started without `--analyze` | Forms recorded, not analysed | Restart with `--analyze`, and `uv run rg2watch requeue --parent <parent> --skipped`. |
-| Page says “reconnecting” | Feed timeout, expired journal history, restored DB or generation change | Leave it open: it retries and re-bootstraps. If it persists, reload the localhost URL and inspect the `serve`/`watch` terminal. |
+| Page says “reconnecting” | Feed timeout, expired journal history, restored DB, generation change, or effective model-order signature change | Leave it open: it retries and re-bootstraps. If it persists, reload the localhost URL and inspect the `serve`/`watch` terminal. |
+| Forms unavailable: one group exceeds 2 MB | One complete tagged station/document group exceeds the hard response limit | This is terminal for that bootstrap cursor (automatic retries stop). Inspect the local server log, reduce/archive the exceptional duplicate versions in a controlled maintenance window, then reload. Do not treat missing forms as current. |
 | Forms current, tally stale/Updating | Full snapshot is absent, failed, busy or behind the feed | Keep the page open. `watch`/`serve` retries on `browse_interval_s`; run `rg2watch browse` manually only if no builder is active. |
 
 Each election has its own page folder (`data/election-<id>/`, next to `data/election-<id>.sqlite`), so
