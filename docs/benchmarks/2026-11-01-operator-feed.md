@@ -190,3 +190,40 @@ UV_ENV_FILE= uv run python scripts/benchmark_operator_impact.py
 PLAYWRIGHT_CORE=/home/sasa/.local/share/mise/installs/npm-playwright/1.64.1/node_modules/.mise/playwright-core@1.64.1/node_modules/playwright-core \
   node scripts/benchmark_operator_browser.js /tmp/opencode/rg2watch-election-benchmark-7zelg0ev/page
 ```
+
+## 2026-11-02 conformance-closure rerun
+
+After the tally-recovery and deterministic race coverage changes, the disposable 8,253-station /
+8,459-document benchmark was run again with no live database, RIK, or model access.
+
+| Changed groups | p50 | p95 | Mean JSON |
+|---:|---:|---:|---:|
+| 0 | 0.61 ms | 0.65 ms | 350 B |
+| 1 | 2.19 ms | 2.33 ms | 1,916 B |
+| 10 | 10.64 ms | 11.02 ms | 16,085 B |
+| 53 | 53.39 ms | 68.96 ms | 84,352 B |
+
+Warm full snapshots took 6.191, 6.163, and 6.245 seconds (p50 6.191 seconds). Concurrent
+ingestion completed 461 writes at 15.37 ms p95 with a 4,169,472-byte maximum WAL. The generated
+snapshot was 14,319,074 bytes. The same real local page was loaded in system Chromium with 8,253
+rows: 1/10/53-group redraw p95 was 280.1/293.4/317.9 ms synchronously and
+303.7/314.8/342.5 ms at the next paint.
+
+The fake watcher/analysis contention rerun measured watcher p50/p95 at 1,851.23/2,176.76 ms
+baseline and 3,960.87/6,781.66 ms under continuous snapshot/feed load. One-worker fake analysis
+p50/p95 was 366.46/383.14 ms baseline and 462.11/927.54 ms loaded; throughput changed from 2.707
+to 1.986 forms/s. This deliberately CPU-heavy local simulation is evidence of material contention,
+not a production-impact estimate or authorization to increase full-snapshot frequency. Human visual
+inspection and live-system behavior remain unverified.
+
+Commands and retained output for this rerun:
+
+```sh
+RG2W_LIVE_API= uv run python scripts/benchmark_operator_feed.py \
+  --output /tmp/opencode/operator-feed-closure.json
+RG2W_LIVE_API= uv run python scripts/benchmark_operator_impact.py \
+  > /tmp/opencode/operator-impact-closure.json
+PLAYWRIGHT_CORE=/home/sasa/.local/share/mise/installs/npm-playwright/1.64.1/node_modules/.mise/playwright-core@1.64.1/node_modules/playwright-core \
+  node scripts/benchmark_operator_browser.js /tmp/opencode/rg2watch-election-benchmark-v9ijj_yi/page \
+  > /tmp/opencode/operator-browser-closure.json
+```
