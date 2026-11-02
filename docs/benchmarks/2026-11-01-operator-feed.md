@@ -177,6 +177,12 @@ oversize behavior are deterministic protocol tests rather than useful latency me
 post-start groups are skipped then replayed, signature/floor changes restart, and a >2 MB tagged
 group terminates with typed HTTP 413 instead of retrying or dropping rows.
 
+The installed Playwright/system-Chromium harness also loaded all 8,253 rows over disposable
+localhost HTTP after these changes. For 1/10/53 changed groups, synchronous redraw p50/p95 was
+271.7/286.5, 272.3/277.9, and 285.8/302.6 ms; two-frame p50/p95 was 283.3/302.9,
+298.0/298.7, and 309.8/326.3 ms. This non-interactive session could run the real headless page but
+could not perform a human visual inspection; that remains an explicit manual delivery check.
+
 Reproduction commands for the added measurements:
 
 ```sh
