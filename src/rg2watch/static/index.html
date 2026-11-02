@@ -2755,17 +2755,22 @@ function operatorParent() {
   return (S && S.parent) || (D.rows[0] && D.rows[0].el) || Object.keys(D.elections || {})[0] || null;
 }
 function feedState(text) { $("built").textContent = text; }
-function invalidateTally() {
-  T = null;
-  tallyRevision = 0;
-  rows = rows.map(row => ({...row, tally_state: "updating", correctable: false,
+function staleTallyRow(row) {
+  return {...row, tally_state: "updating", correctable: false,
     rec: {status: "updating", rules: [], details: ["Updating"], gap: 0,
       result: {corrected: {included: null, reason: "Updating"},
         filed: {included: null, reason: "Updating"}},
       decision_warnings: [], decision_notices: [], annulled: null, undetermined: null},
-    resolved: [], t13: []}));
+    resolved: [], t13: []};
+}
+function invalidateTally() {
+  T = null;
+  tallyRevision = 0;
+  acceptedSnapshot = {generation: feedGeneration || acceptedSnapshot.generation,
+    order: feedOrderSignature || acceptedSnapshot.order, revision: -1, id: null};
+  rows = rows.map(staleTallyRow);
   D.rows = rows;
-  if (table) table.rows().invalidate().draw(false);
+  if (table) table.rows().every(function () { this.data(staleTallyRow(this.data())); }).draw(false);
 }
 function beginBootstrap(clear = false, cursor = null) {
   if (!HTTP || bootstrapTerminal) return;
@@ -2864,7 +2869,11 @@ function loadData() {
     fetch("data.json?t=" + Date.now(), {cache: "no-store"}),
     fetch("data-meta.json?t=" + Date.now(), {cache: "no-store"})
   ]).then(async ([dataResponse, metaResponse]) => {
-    if (dataResponse.status === 404 || metaResponse.status === 404) { beginBootstrap(false); return null; }
+    if (dataResponse.status === 404 || metaResponse.status === 404) {
+      if (!table) beginBootstrap(false);
+      else { invalidateTally(); feedState("forms current · tally stale"); }
+      return null;
+    }
     if (!dataResponse.ok || !metaResponse.ok) throw new Error("snapshot HTTP error");
     const data = await dataResponse.json(), meta = await metaResponse.json();
     if (data.snapshot_id !== meta.snapshot_id || data.generation !== meta.generation ||

@@ -353,18 +353,22 @@ def test_operator_reset_clears_rendered_rows_without_synthetic_tombstones():
 
 def test_stale_tally_is_discarded_without_clearing_form_revisions():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    start = html.index("function invalidateTally()")
+    start = html.index("function staleTallyRow(")
     code = html[start:html.index("function beginBootstrap(", start)]
     script = f"""
 const assert = require("assert");
 let T = {{old: true}}, tallyRevision = 9;
+let feedGeneration = "g", feedOrderSignature = "o";
+let acceptedSnapshot = {{generation: "g", order: "o", revision: 9, id: "S"}};
 let rows = [{{id: 1, tally_state: "selected", correctable: true,
   rec: {{status: "ok", result: {{corrected: {{included: true}}}}}}}}];
 let D = {{rows}};
 const groupRevisions = new Map([["station\\01", 7]]);
 const deletedGroupRevisions = new Set(["station\\02"]);
 let invalidated = 0;
-const table = {{rows: () => ({{invalidate: () => ({{draw: () => invalidated++}})}})}};
+const table = {{rows: () => ({{every(fn) {{ rows.forEach((value, index) => fn.call({{
+  data(next) {{ if (arguments.length) rows[index] = next; return rows[index]; }}
+}})); return this; }}, draw() {{ invalidated++; return this; }}}})}};
 {code}
 invalidateTally();
 assert.equal(T, null);
@@ -374,6 +378,63 @@ assert.equal(rows[0].rec.result.corrected.included, null);
 assert.equal(groupRevisions.get("station\\01"), 7);
 assert.equal(deletedGroupRevisions.has("station\\02"), true);
 assert.equal(invalidated, 1);
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_snapshot_loader_preserves_forms_invalidates_owned_rows_and_recovers_same_id():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    invalidate = html[html.index("function staleTallyRow("):html.index(
+        "function beginBootstrap(", html.index("function staleTallyRow("))]
+    decision = html[html.index("function snapshotDecision("):html.index(
+        "function loadData(", html.index("function snapshotDecision("))]
+    loader = html[html.index("function loadData("):html.index(
+        "loadStatus();", html.index("function loadData("))]
+    script = f"""
+const assert = require("assert");
+const HTTP = true;
+let T = {{old: true}}, tallyRevision = 9, feedRevision = 7, bootstrapEpoch = 0;
+let feedGeneration = "g", feedOrderSignature = "o";
+let snapshotLoadPromise = null, snapshotLoadQueued = false;
+let acceptedSnapshot = {{generation: "g", order: "o", revision: 9, id: "S"}};
+let rows = [{{id: 1, tally_state: "selected", correctable: true,
+  rec: {{status: "ok", result: {{corrected: {{included: true}}, filed: {{included: true}}}}}}}}];
+let D = {{rows}}, bootstraps = 0, applied = 0, status = "";
+const owned = JSON.parse(JSON.stringify(rows));
+const table = {{rows: () => ({{
+  every(fn) {{ owned.forEach((value, index) => fn.call({{
+    data(next) {{ if (arguments.length) owned[index] = next; return owned[index]; }}
+  }})); return this; }},
+  invalidate() {{ return this; }}, draw() {{ return this; }}
+}})}};
+const $ = () => ({{textContent: ""}});
+const feedState = value => status = value;
+const beginBootstrap = () => bootstraps++;
+const applyData = data => {{ T = data.tally; tallyRevision = data.snapshot_revision; applied++; }};
+const responses = [];
+const response = (statusCode, body) => ({{status: statusCode, ok: statusCode >= 200 && statusCode < 300,
+  json: () => body instanceof Error ? Promise.reject(body) : Promise.resolve(body)}});
+const fetch = () => Promise.resolve(responses.shift());
+{invalidate}
+{decision}
+{loader}
+const pair = () => [response(200, {{generation:"g", model_order_signature:"o",
+  snapshot_revision:9, snapshot_id:"S", tally:{{restored:true}}}}),
+  response(200, {{generation:"g", model_order_signature:"o", snapshot_revision:9, snapshot_id:"S"}})];
+(async () => {{
+  responses.push(response(404, {{}}), response(404, {{}}));
+  await loadData();
+  assert.equal(bootstraps, 0, "post-bootstrap 404 must not bootstrap forms");
+  assert.equal(status, "forms current · tally stale");
+  assert.equal(owned[0].rec.status, "updating", "DataTables-owned row must be invalidated");
+  assert.equal(owned[0].rec.result.corrected.included, null);
+  assert.equal(feedRevision, 7);
+  responses.push(...pair());
+  await loadData();
+  assert.equal(applied, 1, "same snapshot id must recover invalidated tally");
+  assert.deepEqual(T, {{restored:true}});
+}})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
