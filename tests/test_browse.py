@@ -434,6 +434,16 @@ const pair = () => [response(200, {{generation:"g", model_order_signature:"o",
   await loadData();
   assert.equal(applied, 1, "same snapshot id must recover invalidated tally");
   assert.deepEqual(T, {{restored:true}});
+  responses.push(response(200, new Error("invalid json")), response(200, {{}}));
+  await loadData();
+  assert.equal(bootstraps, 0);
+  assert.equal(status, "forms current · tally stale");
+  responses.push(response(200, {{generation:"g", model_order_signature:"o",
+    snapshot_revision:10, snapshot_id:"A", tally:{{bad:true}}}}),
+    response(200, {{generation:"g", model_order_signature:"o", snapshot_revision:10, snapshot_id:"B"}}));
+  await loadData();
+  assert.equal(applied, 1, "mismatched pair must not apply");
+  assert.equal(bootstraps, 0, "mismatched tally pair must preserve valid forms");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
