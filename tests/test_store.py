@@ -176,6 +176,49 @@ def test_operator_model_projection_keeps_null_and_empty_models_distinct():
         None: 1, "": 1}
 
 
+def test_operator_model_projection_mutation_matrix_matches_legacy_query():
+    s = store()
+    first = doc("https://x/matrix-null.pdf")
+    second = doc("https://x/matrix-empty.pdf", no="2")
+    for value in (first, second):
+        s.apply_events(P, s.start_sweep(P, "projection-matrix"), [Event("added", value)])
+    with s._lock, s._db:
+        null_id = s._db.execute(
+            "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+            "VALUES(1,NULL,?,'{}','done',?) RETURNING id", (PROMPT_VERSION, P)).fetchone()[0]
+        empty_id = s._db.execute(
+            "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+            "VALUES(2,'',?,'{}','done',?) RETURNING id", (PROMPT_VERSION, P)).fetchone()[0]
+
+    def parity():
+        assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION)
+
+    parity()
+    for sql, args in (
+        ("UPDATE analyses SET status='failed' WHERE id=?", (null_id,)),
+        ("UPDATE analyses SET status='done' WHERE id=?", (null_id,)),
+        ("UPDATE analyses SET result_json=NULL WHERE id=?", (empty_id,)),
+        ("UPDATE analyses SET result_json='{}' WHERE id=?", (empty_id,)),
+        ("UPDATE analyses SET prompt_version='a1' WHERE id=?", (null_id,)),
+        ("UPDATE analyses SET prompt_version=? WHERE id=?", (PROMPT_VERSION, null_id)),
+        ("UPDATE documents SET doc_type=9 WHERE id=2", ()),
+        ("UPDATE documents SET doc_type=6 WHERE id=2", ()),
+        ("UPDATE documents SET parent='other' WHERE id=2", ()),
+        ("UPDATE documents SET parent=? WHERE id=2", (P,)),
+    ):
+        with s._lock, s._db:
+            s._db.execute(sql, args)
+        parity()
+
+    with s._lock, s._db:
+        s._db.execute("DELETE FROM analyses WHERE id=?", (null_id,))
+    parity()
+    with s._lock, s._db:
+        s._db.execute("DELETE FROM documents WHERE id=2")
+    parity()
+    assert s.operator_model_counts(P) == {}
+
+
 def test_prompt_version_has_one_dependency_neutral_owner():
     import rg2watch.operator_feed as operator_feed
     import rg2watch.pipeline as pipeline
