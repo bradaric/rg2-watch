@@ -314,8 +314,17 @@ assert.deepEqual(current.map(x => x.id), [9, 3, 4]); // stale feed cannot replac
 const beforeStale = current, afterStale = mergeGroupState(current,
   [{{kind: "station", key: "B", rows: [row("station", "B", 6, 7, 31)]}}], []);
 assert.deepEqual(changedGroupTags(beforeStale, afterStale, new Set(["station\\0B"])), []);
-current = mergeGroupState(current, [], [{{kind: "document", key: "9"}}]);
+current = mergeGroupState(current, [], [{{kind: "document", key: "9", changed_revision: 10}}]);
 assert.deepEqual(current.map(x => x.id), [3, 4]);
+current = mergeGroupState(current,
+  [{{kind: "document", key: "9", rows: [row("document", "9", 6, 9, 90)]}}], []);
+assert.deepEqual(current.map(x => x.id), [3, 4]); // row 9 cannot undo tombstone 10
+current = mergeGroupState(current,
+  [{{kind: "document", key: "9", rows: [row("document", "9", 6, 11, 91)]}}], []);
+assert.deepEqual(current.map(x => x.id), [3, 4, 91]);
+current = mergeGroupState(current, [],
+  [{{kind: "document", key: "9", changed_revision: 9}}]);
+assert.deepEqual(current.map(x => x.id), [3, 4, 91]); // stale tombstone cannot remove row 11
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -328,6 +337,27 @@ def test_operator_page_bootstraps_and_polls_feed_without_overlapping_requests():
     assert "if (feedBusy) return" in html
     assert "generation !== feedGeneration" in html
     assert '"reconnecting"' in html and '"auto-refresh paused"' in html
+
+
+def test_snapshot_acceptance_is_monotonic_and_epoch_scoped():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function snapshotDecision(")
+    code = html[start:html.index("function loadData(", start)]
+    script = f"""
+const assert = require("assert");
+{code}
+const accepted = {{generation: "g", order: "o", revision: 11, id: "new"}};
+const value = (revision, id="x", generation="g", order="o") =>
+  ({{generation, model_order_signature: order, snapshot_revision: revision, snapshot_id: id}});
+assert.equal(snapshotDecision(accepted, value(10), 3, 3), "stale");
+assert.equal(snapshotDecision(accepted, value(11, "new"), 3, 3), "duplicate");
+assert.equal(snapshotDecision(accepted, value(11, "distinct"), 3, 3), "accept");
+assert.equal(snapshotDecision(accepted, value(12, "x", "other"), 3, 3), "reset");
+assert.equal(snapshotDecision(accepted, value(12, "x", "g", "other"), 3, 3), "reset");
+assert.equal(snapshotDecision(accepted, value(12), 2, 3), "epoch");
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_local_and_rik_links_share_one_documents_column_and_alert_link_style():

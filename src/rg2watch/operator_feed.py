@@ -343,7 +343,8 @@ class OperatorFeed:
                 if group_revisions.get((kind, key), 0) > state["revision"]:
                     scanned = [kind, key]
                     continue
-                rows = self._rows(snapshot, parent, kind, key, state["revision"], model_order)
+                rows = self._rows(snapshot, parent, kind, key,
+                                  group_revisions.get((kind, key), 0), model_order)
                 candidate_after = [kind, key]
                 candidate_done = (len(identities) <= BOOTSTRAP_ROWS and
                                   index == len(identities) - 1)
