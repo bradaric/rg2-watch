@@ -18,6 +18,105 @@ def store():
     return s
 
 
+def test_operator_feed_journal_is_stable_transactional_and_tagged(tmp_path):
+    path = tmp_path / "e.sqlite"
+    s = Store(path)
+    s.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    db_uuid, revision, floor = s.operator_feed_state(P)
+    assert len(db_uuid) == 32 and revision == 0 and floor == 0
+
+    first = doc("https://x/a.pdf")
+    s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", first)])
+    _, revision, _ = s.operator_feed_state(P)
+    assert revision > 0
+    assert s.operator_feed_changes(P, 0, 200)[0]["group_kind"] == "station"
+    assert s.operator_feed_changes(P, 0, 200)[0]["group_key"] == first.station_key
+
+    # Re-seeing an unchanged URL does not make an operator revision.
+    before = revision
+    s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", first)])
+    assert s.operator_feed_state(P)[1] == before
+
+    # Alert delivery is deliberately not operator-visible.
+    s.add_finding(P, Finding("X1", "HIGH", first, "problem"), first.url)
+    finding_revision = s.operator_feed_state(P)[1]
+    finding_id = s._db.execute("SELECT id FROM findings").fetchone()[0]
+    s.mark_alerted([finding_id])
+    assert s.operator_feed_state(P)[1] == finding_revision
+
+    s.close()
+    reopened = Store(path)
+    assert reopened.operator_feed_state(P)[0] == db_uuid
+    assert reopened.operator_feed_state(P)[1] == finding_revision
+
+
+def test_operator_feed_null_documents_and_move_keep_distinct_tagged_identities():
+    s = store()
+    with s._lock, s._db:
+        s._db.executemany(
+            "INSERT INTO documents(parent,station_key,doc_type,label,url,active) VALUES(?,NULL,6,?,?,1)",
+            [(P, "orphan a", "https://x/orphan-a"), (P, "orphan b", "https://x/orphan-b")])
+    changes = s.operator_feed_changes(P, 0, 200)
+    assert {(r["group_kind"], r["group_key"]) for r in changes} == {
+        ("document", "1"), ("document", "2")}
+
+    before = s.operator_feed_state(P)[1]
+    with s._lock, s._db:
+        s._db.execute("UPDATE documents SET municipality='Сечањ',station_no='1',station_key='Сечањ|1' "
+                      "WHERE url=?", ("https://x/orphan-a",))
+    moved = s.operator_feed_changes(P, before, 200)
+    assert {(r["group_kind"], r["group_key"]) for r in moved} == {
+        ("document", "1"), ("station", "Сечањ|1")}
+
+
+def test_operator_feed_aborted_write_emits_no_revision():
+    s = store()
+    before = s.operator_feed_state(P)[1]
+    with pytest.raises(RuntimeError):
+        with s._lock, s._db:
+            s._db.execute(
+                "INSERT INTO documents(parent,url,doc_type,active) VALUES(?,?,6,1)",
+                (P, "https://x/abort"))
+            raise RuntimeError("abort")
+    assert s.operator_feed_state(P)[1] == before
+
+
+def test_operator_group_revision_survives_journal_pruning():
+    s = store()
+    value = doc("https://x/persisted-revision.pdf")
+    s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", value)])
+    revision = s.operator_feed_state(P)[1]
+    assert s.operator_group_revisions(P)[("station", value.station_key)] == revision
+
+    # Pruning removes replay history, not the durable last-changed marker used by full snapshots.
+    with s._lock, s._db:
+        s._db.execute("DELETE FROM operator_feed_changes WHERE parent=?", (P,))
+
+    assert s.operator_group_revisions(P)[("station", value.station_key)] == revision
+
+
+def test_type13_retarget_invalidates_source_old_and_new_target_groups():
+    s = store()
+    source = doc("https://x/type13.pdf", no="1", dt=13)
+    old_target = doc("https://x/old-target.pdf", no="2")
+    new_target = doc("https://x/new-target.pdf", no="3")
+    s.apply_events(P, s.start_sweep(P, "rare"), [
+        Event("added", source), Event("added", old_target), Event("added", new_target)])
+    s.add_type13_resolution(source.url, old_target.url, "uncertain", "first", "token-1",
+                            None, None)
+    previous = s.latest_type13_resolution(source.url)
+    before = s.operator_feed_state(P)[1]
+
+    s.add_type13_resolution(source.url, new_target.url, "other_decision", "retarget", "token-2",
+                            None, previous["id"])
+
+    changed = {(row["group_kind"], row["group_key"])
+               for row in s.operator_feed_changes(P, before, 20)}
+    assert changed == {("station", source.station_key),
+                       ("station", old_target.station_key),
+                       ("station", new_target.station_key)}
+
+
 def test_added_then_known():
     s = store()
     d = doc()

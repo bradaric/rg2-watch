@@ -1,9 +1,12 @@
 import hashlib
+import fcntl
 import json
 import logging
 import os
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,6 +30,122 @@ UNKNOWN = "(unknown)"
 STATIC = Path(__file__).parent / "static"
 STATIC_FILES = ("index.html", "jquery.min.js", "dataTables.min.js", "dataTables.dataTables.min.css")
 STALE_TMP_S = 300
+_MEMORY_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_MEMORY_BUILD_LOCKS_GUARD = threading.Lock()
+_MEMORY_GENERATIONS: dict[str, dict[str, int]] = {}
+
+
+class SnapshotBusy(RuntimeError):
+    pass
+
+
+class SnapshotGenerationConflict(SnapshotBusy):
+    pass
+
+
+def _snapshot_lock_path(store: Store, out_path: Path) -> Path | None:
+    if store.path == ":memory:":
+        return None
+    page = str(Path(out_path).resolve().parent)
+    db = Path(store.path).resolve()
+    digest = hashlib.sha256((str(db) + "\0" + page).encode()).hexdigest()[:16]
+    return db.parent / f".{db.name}.{digest}.operator-snapshot.lock"
+
+
+@contextmanager
+def snapshot_build_lock(store: Store, out_path: Path, blocking: bool = False):
+    """One snapshot publisher per database/page pair, across threads and processes."""
+    page = str(Path(out_path).resolve().parent)
+    if store.path == ":memory:":
+        key = store.path + "\0" + page
+        with _MEMORY_BUILD_LOCKS_GUARD:
+            lock = _MEMORY_BUILD_LOCKS.setdefault(key, threading.Lock())
+        if not lock.acquire(blocking=blocking):
+            raise SnapshotBusy("operator snapshot build already running")
+        try:
+            yield
+        finally:
+            lock.release()
+        return
+    lock_path = _snapshot_lock_path(store, out_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError as exc:
+            raise SnapshotBusy("operator snapshot build already running") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+class _GenerationLease:
+    def __init__(self, fh=None, release=None):
+        self.fh, self.release = fh, release
+
+    def close(self) -> None:
+        if self.fh is not None:
+            fh, self.fh = self.fh, None
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            fh.close()
+        if self.release is not None:
+            release, self.release = self.release, None
+            release()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+def snapshot_generation_lease(store: Store, out_path: Path, generation: str) -> _GenerationLease:
+    """Hold one active snapshot generation; reject a different concurrently running process."""
+    if not isinstance(generation, str) or len(generation) != 64:
+        raise ValueError("invalid operator snapshot generation")
+    base = _snapshot_lock_path(store, out_path)
+    if base is None:
+        key = str(Path(out_path).resolve().parent)
+        with _MEMORY_BUILD_LOCKS_GUARD:
+            active = _MEMORY_GENERATIONS.setdefault(key, {})
+            if any(token != generation and count for token, count in active.items()):
+                raise SnapshotGenerationConflict("incompatible operator snapshot generation is active")
+            active[generation] = active.get(generation, 0) + 1
+
+        def release() -> None:
+            with _MEMORY_BUILD_LOCKS_GUARD:
+                active[generation] -= 1
+                if not active[generation]:
+                    del active[generation]
+        return _GenerationLease(release=release)
+
+    base.parent.mkdir(parents=True, exist_ok=True)
+    own_path = base.with_name(base.name + f".generation.{generation}.lock")
+    own = own_path.open("a+")
+    fcntl.flock(own, fcntl.LOCK_SH)
+    prefix = base.name + ".generation."
+    try:
+        for path in base.parent.glob(base.name + ".generation.*.lock"):
+            token = path.name[len(prefix):-len(".lock")]
+            if token == generation:
+                continue
+            other = path.open("a+")
+            try:
+                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                other.close()
+                raise SnapshotGenerationConflict(
+                    "incompatible operator snapshot generation is active") from exc
+            else:
+                fcntl.flock(other, fcntl.LOCK_UN)
+                other.close()
+                path.unlink(missing_ok=True)
+    except BaseException:
+        fcntl.flock(own, fcntl.LOCK_UN)
+        own.close()
+        raise
+    return _GenerationLease(fh=own)
 
 
 def _ast(d) -> str:
@@ -119,7 +238,18 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
 
 
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
-               cfg: Config | None = None, interval: int = 0, cache: dict | None = None) -> dict:
+               cfg: Config | None = None, interval: int = 0, cache: dict | None = None,
+               timings: dict[str, float] | None = None, selective: bool = False,
+               model_order: list[str] | None = None) -> dict:
+    timings = {} if timings is None else timings
+    phase = time.monotonic()
+
+    def mark(name: str) -> None:
+        nonlocal phase
+        now = time.monotonic()
+        timings[name] = timings.get(name, 0.0) + now - phase
+        phase = now
+
     cache_dir = Path(cache_dir).resolve()
     cfg = cfg or Config()
     model = stored_model(cfg.model)
@@ -130,7 +260,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     arows = [a for a in store.browse_analyses(parent, PROMPT_VERSION)
              if a["prompt_version"].startswith("v")]
     report_json = store.analysis_reports([a["id"] for a in arows])
-    selected_by_doc = preferred_analyses(arows, model, "v")
+    mark("db_reads")
+    selected_by_doc = preferred_analyses(arows, model, "v", model_order)
     selected_model_analyses = list(selected_by_doc.values())
     classification_reports = report_json
     classifications = {}
@@ -158,6 +289,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                    for a in selected_model_analyses if a["prompt_version"] == PROMPT_VERSION}
     elections = {e.parent: e for e in store.elections()}
     reviews = {r["url"]: review_record(r) for r in store.latest_reviews(parent)}
+    mark("selection")
     corrections = {}
     expected_rows_cache = {}
     if latest := store.latest_operator_corrections(parent):
@@ -165,6 +297,12 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         current = set(selected_by_doc)
         for item in latest:
             if item["document_id"] not in current:
+                continue
+            if selective:
+                corrections[item["url"]] = {
+                    "status": "active" if item["action"] == "correction" else "revoked",
+                    "reason": item["reason"], "at": to_belgrade(item["created_at"]),
+                    "revision": item["id"], "verification": "Updating"}
                 continue
             try:
                 source_model = selected_by_doc[item["document_id"]]["model"]
@@ -177,6 +315,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                     corrections[item["url"]]["resolved_rules"] = state["resolved_rules"]
             except Exception:
                 log.warning("operator correction state of %s could not be read", item["url"], exc_info=True)
+    mark("corrections")
     r7: dict[tuple, list[dict]] = {}  # (election, station_key, RG-2 type) -> its RG-7 decisions
     r7_docs = store.rg7_reports(
         parent, model, RG7_PROMPT_VERSION, analysed_only=False, fallback=True) if parent else [
@@ -226,7 +365,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         key = d["station_key"] if d["station_key"] is not None else ("id", d["id"])
         groups.setdefault((d["parent"], key, d["doc_type"]), []).append(d)
     rows = []
-    for (par, _, _), ds in groups.items():
+    for (par, group_key, _), ds in groups.items():
         ds.sort(key=lambda d: (d["uploaded_at"] or "", d["id"]), reverse=True)
         main = next((d for d in ds if d["active"]), ds[0])
         base = elections[par].base_url if par in elections else None
@@ -235,6 +374,8 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         location = station_location(main["municipality"] or "", main["station_no"] or "")
         row.update(
             id=main["id"], el=par, muni=main["municipality"] or UNKNOWN, no=main["station_no"],
+            group_kind="document" if isinstance(group_key, tuple) else "station",
+            group_key=str(group_key[1]) if isinstance(group_key, tuple) else group_key,
             council=main["minority"],
             name=main["station_name"], label=main["label"], doc_type=main["doc_type"],
             analysis_model=(selected_by_doc[main["id"]]["model"]
@@ -270,14 +411,20 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             version["classification"] = {**value, "kind": kind, "evidence": evidence,
                                            "override": override_action in ("confirm_rg2", "quarantine_rg7"),
                                            "override_action": override_action, "status": status}
+    mark("rows")
     try:
+        if selective:
+            raise LookupError("selective rows do not build a tally")
         tally = build_tally(store, cfg, default_parent(store, parent), stored_model(cfg.model),
                             cache=None if cache is None else cache.setdefault("tally", {}),
                             docs=docs, arows=arows, expected_rows_cache=expected_rows_cache,
                             include_station_results=True, report_json=report_json)
+    except LookupError:
+        tally = None
     except Exception:
         log.exception("tally could not be built")
         tally = None
+    mark("tally")
     try:
         for station in (tally or {}).get("station_results", []):
             if coordinates := station_coordinates(station["m"], station["no"]):
@@ -298,6 +445,18 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
     rec = {x["id"]: {k: x[k] for k in ("status", "rules", "details", "gap", "result")}
            for x in (tally or {}).pop("reconciliation", [])}
     for row in rows:
+        if selective:
+            reason = "Updating"
+            row["tally_state"] = "updating"
+            row["correctable"] = False
+            row["rec"] = {"status": "updating", "rules": [], "details": [reason], "gap": 0,
+                          "result": {"corrected": {"included": None, "reason": reason},
+                                     "filed": {"included": None, "reason": reason}},
+                          "decision_warnings": [], "decision_notices": [],
+                          "annulled": None, "undetermined": None}
+            row["resolved"] = []
+            row["t13"] = []
+            continue
         cstatus = row["classification"]["status"]
         row["tally_state"] = ("selected" if row["id"] in selected_ids else
                               "quarantined" if cstatus.startswith("quarantined_") else
@@ -330,6 +489,37 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             finding[0] not in INFORMATIONAL_RULES for finding in row["f"])
         row["todo"] = row["rf"] and row["rv"] is None
         row["t13"] = []
+    if selective:
+        rows_by_station: dict[tuple[str, str], list[dict]] = {}
+        for row in rows:
+            source_doc = docs_by_url.get(row["u"])
+            if source_doc is not None and source_doc["station_key"] is not None:
+                rows_by_station.setdefault((row["el"], source_doc["station_key"]), []).append(row)
+        for source in store.active_type13(parent):
+            analysis = store.type13_source(source["url"], model, "t1")
+            try:
+                report = json.loads(analysis["result_json"]) if analysis and analysis["result_json"] else {}
+            except (TypeError, ValueError):
+                report = {}
+            resolution = store.latest_type13_resolution(source["url"])
+            target = max(rows_by_station.get((source["parent"], source["station_key"]), []),
+                         key=lambda item: (item["up"] or "", item["id"]), default=None)
+            if target is None:
+                continue
+            base = elections[source["parent"]].base_url if source["parent"] in elections else None
+            source_version = _version(source, {}, {}, cache_dir, base)
+            target["t13"].append({
+                "u": source["url"], "rik": _rik_link(source["url"], base),
+                "up": source["uploaded_at"], "pdf": source_version["pdf"],
+                "classification": report.get("target", "uncertain"),
+                "evidence": report.get("evidence", ""), "confidence": report.get("confidence"),
+                "resolution": resolution["action"] if resolution else None,
+                "can_approve": False, "can_edit": False, "source_token": "", "updating": True,
+            })
+        return {"db": store.name,
+                "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "interval": interval, "elections": {p: e.title for p, e in elections.items()},
+                "rows": rows, "tally": None, "rules": RULE_INFO}
     type13 = Type13Corrections(store, cfg, model, expected_rows_cache=expected_rows_cache)
     rows_by_url = {row["u"]: row for row in rows}
     rows_by_station: dict[tuple[str, str], list[dict]] = {}
@@ -359,6 +549,7 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             "resolution": state["resolution"], "can_approve": state["can_approve"],
             "can_edit": state["can_edit"], "source_token": state["source_token"],
         })
+    mark("rows")
     return {"db": store.name, "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
             "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally,
             "rules": RULE_INFO}
@@ -382,10 +573,21 @@ def _atomic(path: Path, text: bytes | str) -> None:
         raise
 
 
-def _write_pair(out_dir: Path, name: str, glob: str, data) -> None:
-    blob = _json(data)
+def _remove_obsolete_script(out_dir: Path, name: str, glob: str) -> None:
+    """Remove only a script twin produced by an older rg2watch operator build."""
+    path = out_dir / f"{name}.js"
+    try:
+        if path.is_file() and path.read_bytes().startswith(f"window.{glob} = ".encode()):
+            path.unlink()
+    except OSError:
+        log.warning("obsolete operator script could not be removed: %s", path, exc_info=True)
+
+
+def _write_json(out_dir: Path, name: str, glob: str, data) -> int:
+    blob = _json(data).encode("utf-8")
     _atomic(out_dir / f"{name}.json", blob)
-    _atomic(out_dir / f"{name}.js", f"window.{glob} = {blob};\n")
+    _remove_obsolete_script(out_dir, name, glob)
+    return len(blob)
 
 
 def _data_meta(data: dict) -> dict:
@@ -395,7 +597,9 @@ def _data_meta(data: dict) -> dict:
             correction = version.get("oc")
             if correction and correction.get("revision") is not None:
                 corrections[version["u"]] = correction["revision"]
-    return {"built": data["built"], "corrections": corrections}
+    return {"built": data["built"], "generation": data.get("generation"),
+            "snapshot_revision": data.get("snapshot_revision"),
+            "snapshot_id": data.get("snapshot_id"), "corrections": corrections}
 
 
 def _clean(out_dir: Path) -> None:
@@ -432,12 +636,12 @@ def write_status(store: Store, out_path: Path, parent: str | None, live: dict | 
     out_dir = Path(out_path).resolve().parent
     parent = default_parent(store, parent)
     out_dir.mkdir(parents=True, exist_ok=True)
-    _write_pair(out_dir, "status", "RG2_STATUS", build_status(store, parent, live, cache_dir))
+    _write_json(out_dir, "status", "RG2_STATUS", build_status(store, parent, live, cache_dir))
 
 
-def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None = None,
-               cfg: Config | None = None, interval: int = 0, with_status: bool = True,
-               cache: dict | None = None) -> int:
+def _build_page_unlocked(store: Store, out_path: Path, cache_dir: Path, parent: str | None = None,
+                         cfg: Config | None = None, interval: int = 0,
+                         with_status: bool = True, cache: dict | None = None) -> int:
     """Write index.html (+ vendored libraries) and data.js/json next to `out_path`'s directory;
     returns the number of rows. `with_status` also writes status.js/json saying the watcher is not
     running (`watch` has its own status thread and passes False). `cache` keeps evaluated second
@@ -446,16 +650,55 @@ def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None
     out_dir = Path(out_path).resolve().parent
     out_dir.mkdir(parents=True, exist_ok=True)
     _clean(out_dir)
-    data = build_data(store, cache_dir, parent, cfg, interval, cache)
+    timings: dict[str, float] = {}
+    with store.read_snapshot() as snapshot:
+        snapshot_parent = default_parent(snapshot, parent)
+        _, snapshot_revision, _ = snapshot.operator_feed_state(snapshot_parent)
+        data = build_data(snapshot, cache_dir, parent, cfg, interval, cache, timings)
+        from .operator_feed import generation_token
+        data["generation"] = generation_token(snapshot, cfg or Config(), snapshot_parent)
+        data["snapshot_revision"] = snapshot_revision
+        group_revisions = snapshot.operator_group_revisions(snapshot_parent)
+        for row in data["rows"]:
+            row["changed_revision"] = group_revisions.get(
+                (row["group_kind"], row["group_key"]), 0)
+        data["snapshot_id"] = hashlib.sha256(_json({
+            "generation": data["generation"], "revision": snapshot_revision,
+            "built": data["built"], "rows": [row["id"] for row in data["rows"]],
+        }).encode()).hexdigest()
     t1 = time.monotonic()
     copy_static(out_dir)
     if Path(out_path).name != "index.html":
         _atomic(Path(out_path), (STATIC / "index.html").read_bytes())
-    _write_pair(out_dir, "data", "RG2_DATA", data)
-    _atomic(out_dir / "data-meta.json", _json(_data_meta(data)))
+    serial = time.monotonic()
+    data_blob = _json(data).encode("utf-8")
+    meta_blob = _json(_data_meta(data)).encode("utf-8")
+    timings["serialization"] = time.monotonic() - serial
+    writes = time.monotonic()
+    _atomic(out_dir / "data.json", data_blob)
+    _remove_obsolete_script(out_dir, "data", "RG2_DATA")
+    _atomic(out_dir / "data-meta.json", meta_blob)
     if with_status:
         write_status(store, out_path, parent, cache_dir=cache_dir)
-    log.info("browse page built: %d form(s), %d second opinion(s); data %.2f s, total %.2f s",
-             len(data["rows"]), sum(len(r["ops"]) for r in data["rows"]), t1 - t0,
-             time.monotonic() - t0)
+    timings["writes"] = time.monotonic() - writes
+    log.info("browse page built: rows=%d opinions=%d bytes=%d "
+             "db_reads=%.3fs selection=%.3fs corrections=%.3fs tally=%.3fs rows=%.3fs "
+             "serialization=%.3fs writes=%.3fs data=%.2fs total=%.2fs",
+             len(data["rows"]), sum(len(r["ops"]) for r in data["rows"]), len(data_blob),
+             *(timings.get(name, 0.0) for name in
+               ("db_reads", "selection", "corrections", "tally", "rows", "serialization", "writes")),
+             t1 - t0, time.monotonic() - t0)
     return len(data["rows"])
+
+
+def build_page(store: Store, out_path: Path, cache_dir: Path, parent: str | None = None,
+               cfg: Config | None = None, interval: int = 0, with_status: bool = True,
+               cache: dict | None = None, lock_blocking: bool = False) -> int:
+    with snapshot_build_lock(store, out_path, blocking=lock_blocking):
+        from .operator_feed import generation_token
+        with store.read_snapshot() as snapshot:
+            snapshot_parent = default_parent(snapshot, parent)
+            generation = generation_token(snapshot, cfg or Config(), snapshot_parent)
+        with snapshot_generation_lease(store, out_path, generation):
+            return _build_page_unlocked(
+                store, out_path, cache_dir, parent, cfg, interval, with_status, cache)

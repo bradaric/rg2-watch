@@ -7,6 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+import pytest
 import rg2watch.cli as cli
 from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.analyze import AnalysisResult
@@ -293,6 +294,42 @@ assert.equal(resultInclusionStatus(result(null, null)), "not-in-tally");
     assert 'ri === "excluded-filed" ? r.rec.result.filed.included === false' in html
 
 
+def test_operator_group_merge_is_tagged_and_never_regresses_newer_rows():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function groupTag(")
+    code = html[start:html.index("function applyFeedGroups(", start)]
+    script = f"""
+const assert = require("assert");
+{code}
+const row = (kind, key, type, revision, id) => ({{group_kind: kind, group_key: key,
+  doc_type: type, changed_revision: revision, id}});
+let current = [row("station", "A", 6, 5, 1), row("station", "A", 10, 5, 2),
+  row("document", "9", 6, 3, 9), row("station", "B", 6, 8, 3)];
+current = mergeGroupState(current,
+  [{{kind: "station", key: "A", rows: [row("station", "A", 6, 7, 4)]}}], []);
+assert.deepEqual(current.map(x => x.id), [9, 3, 4]);
+current = mergeGroupState(current,
+  [{{kind: "station", key: "B", rows: [row("station", "B", 6, 7, 30)]}}], []);
+assert.deepEqual(current.map(x => x.id), [9, 3, 4]); // stale feed cannot replace revision 8
+const beforeStale = current, afterStale = mergeGroupState(current,
+  [{{kind: "station", key: "B", rows: [row("station", "B", 6, 7, 31)]}}], []);
+assert.deepEqual(changedGroupTags(beforeStale, afterStale, new Set(["station\\0B"])), []);
+current = mergeGroupState(current, [], [{{kind: "document", key: "9"}}]);
+assert.deepEqual(current.map(x => x.id), [3, 4]);
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_operator_page_bootstraps_and_polls_feed_without_overlapping_requests():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'fetch("operator-bootstrap?parent="' in html
+    assert 'fetch("operator-feed?parent="' in html
+    assert "if (feedBusy) return" in html
+    assert "generation !== feedGeneration" in html
+    assert '"reconnecting"' in html and '"auto-refresh paused"' in html
+
+
 def test_local_and_rik_links_share_one_documents_column_and_alert_link_style():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     columns = html[html.index("columns: ["):html.index("]\n  });", html.index("columns: ["))]
@@ -576,8 +613,9 @@ def test_collapsed_station_results_defer_card_rendering_and_initial_tally_render
     assert '$("stationresults").addEventListener("toggle"' in station
 
     apply = html[html.index("function applyData("):html.index("// ---- results")]
-    assert apply.count("renderTally();") == 1
+    assert apply.count("renderTally();") == 2  # one initial path and one non-destructive refresh path
     assert "const first = !table;" in apply
+    assert "table.clear().rows.add(rows)" not in apply
 
 
 def test_forms_table_renders_settlement_on_a_small_separate_line():
@@ -687,10 +725,84 @@ def test_script_close_tag_escaped_in_utf8_files(tmp_path):
     add(s, doc(BASE + "/e/a.pdf", muni="</script><b>x", label="Ћ<!-- y"))
     out = tmp_path / "index.html"
     build_page(s, out, tmp_path / "pdfs")
-    for name in ("data.js", "data.json"):
-        raw = (tmp_path / name).read_bytes()
-        assert "Ћ".encode() in raw and b"</script>" not in raw and b"<!--" not in raw
+    raw = (tmp_path / "data.json").read_bytes()
+    assert "Ћ".encode() in raw and b"</script>" not in raw and b"<!--" not in raw
+    assert not (tmp_path / "data.js").exists()
     assert rows_of(out)[0]["muni"] == "</script><b>x"
+
+
+def test_operator_snapshot_is_json_only_and_file_scheme_is_rejected(tmp_path):
+    s = store()
+    add(s, doc(BASE + "/e/a.pdf"))
+    out = tmp_path / "index.html"
+
+    build_page(s, out, tmp_path / "pdfs")
+
+    assert (tmp_path / "data.json").is_file()
+    assert (tmp_path / "data-meta.json").is_file()
+    assert (tmp_path / "status.json").is_file()
+    assert not (tmp_path / "data.js").exists()
+    assert not (tmp_path / "status.js").exists()
+    html = out.read_text(encoding="utf-8")
+    assert "inject(name" not in html
+    assert "Open this operator page through http://127.0.0.1" in html
+
+
+def test_build_logs_named_phase_timings_and_counts(tmp_path, caplog):
+    s = store()
+    add(s, doc(BASE + "/e/a.pdf"))
+
+    with caplog.at_level("INFO", logger="rg2watch.browse"):
+        build_page(s, tmp_path / "index.html", tmp_path / "pdfs")
+
+    message = next(r.getMessage() for r in caplog.records if "browse page built" in r.getMessage())
+    for phase in ("db_reads", "selection", "corrections", "tally", "rows", "serialization", "writes"):
+        assert phase + "=" in message
+    assert "rows=1" in message and "bytes=" in message
+
+
+def test_full_build_uses_one_sqlite_snapshot_and_feed_catches_concurrent_change(
+        tmp_path, monkeypatch):
+    path = tmp_path / "e.sqlite"
+    s = Store(path)
+    s.upsert_election(Election(P, "1", "t", "Title", BASE))
+    old = doc(BASE + "/e/old.pdf")
+    add(s, old)
+    pre_revision = s.operator_feed_state(P)[1]
+    entered, release = threading.Event(), threading.Event()
+    original = cli.build_page.__globals__["build_tally"]
+
+    def paused(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setitem(cli.build_page.__globals__, "build_tally", paused)
+    out = tmp_path / "page" / "index.html"
+    errors = []
+    thread = threading.Thread(target=lambda: _capture_error(
+        errors, lambda: build_page(s, out, tmp_path / "pdfs", parent=P)))
+    thread.start()
+    assert entered.wait(5)
+    writer = Store(path)
+    new = doc(BASE + "/e/new.pdf", up="2026-10-19T21:00")
+    add(writer, new, "replaced", old.url)
+    release.set()
+    thread.join(10)
+    assert not thread.is_alive() and errors == []
+
+    data = json.loads((out.parent / "data.json").read_text())
+    assert data["snapshot_revision"] == pre_revision
+    assert [row["u"] for row in data["rows"]] == [old.url]
+    assert any(change["revision"] > pre_revision
+               for change in writer.operator_feed_changes(P, pre_revision))
+
+
+def _capture_error(errors, fn):
+    try:
+        fn()
+    except BaseException as exc:
+        errors.append(exc)
 
 
 def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
@@ -703,8 +815,10 @@ def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
     data = json.loads((tmp_path / "data.json").read_text(encoding="utf-8"))
     meta_path = tmp_path / "data-meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert meta == {"built": data["built"], "corrections": {}}
-    assert meta_path.stat().st_size < 200
+    assert meta == {"built": data["built"], "generation": data["generation"],
+                    "snapshot_revision": data["snapshot_revision"],
+                    "snapshot_id": data["snapshot_id"], "corrections": {}}
+    assert meta_path.stat().st_size < 500
 
 
 def test_atomic_write_leaves_no_temp_and_keeps_old_on_failure(tmp_path, monkeypatch):
@@ -755,7 +869,8 @@ def test_static_files_ship_and_are_copied_only_when_changed(tmp_path):
     for name in STATIC_FILES[1:]:
         assert name in versions and hashlib.sha256((STATIC / name).read_bytes()).hexdigest() in versions
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert "innerHTML" not in html.replace("never innerHTML", "") and "http://" not in html
+    assert "innerHTML" not in html.replace("never innerHTML", "")
+    assert html.count("http://") == 1 and "http://127.0.0.1" in html
     s = store()
     out = tmp_path / "index.html"
     build_page(s, out, tmp_path / "pdfs")
@@ -921,7 +1036,7 @@ def test_status_for_browse_says_watcher_not_running_with_db_counts(tmp_path):
     assert st["alerts"][0][1:3] == ["HIGH", "X9"]
     assert st["alerts"][0][7].startswith(BASE)  # document URL: the panel links to the form
     assert st["alerts"][0][8:] == [None, None]
-    assert (tmp_path / "status.js").read_text().startswith("window.RG2_STATUS = {")
+    assert not (tmp_path / "status.js").exists()
 
 
 def test_page_marks_stale_status():
@@ -1239,6 +1354,53 @@ def test_serve_always_copies_static(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "start_server", lambda *a: None)
     assert main(["serve", "--db", str(db), "--port", "8123"]) == 1
     assert (page / "index.html").read_bytes() == (STATIC / "index.html").read_bytes()
+
+
+def test_manual_browse_exits_busy_without_touching_snapshot(tmp_path, capsys):
+    from rg2watch.browse import snapshot_build_lock
+
+    db = tmp_path / "e.sqlite"
+    s = Store(db)
+    s.upsert_election(Election(P, "1", "t", "T", BASE))
+    out = tmp_path / "e" / "index.html"
+    out.parent.mkdir()
+    (out.parent / "data.json").write_text("old", encoding="utf-8")
+
+    with snapshot_build_lock(s, out, blocking=False):
+        assert main(["browse", "--db", str(db)]) != 0
+
+    assert "operator snapshot build already running; try again later" in capsys.readouterr().err
+    assert (out.parent / "data.json").read_text(encoding="utf-8") == "old"
+
+
+def test_incompatible_running_generation_cannot_publish_sequentially(tmp_path):
+    from rg2watch.browse import (SnapshotGenerationConflict, snapshot_generation_lease)
+    from rg2watch.operator_feed import generation_token
+
+    db = tmp_path / "e.sqlite"
+    s = Store(db)
+    s.upsert_election(Election(P, "1", "t", "T", BASE))
+    add(s, doc(BASE + "/e/a.pdf"))
+    out = tmp_path / "e" / "index.html"
+    first_cfg = Config(model="claude-haiku-5-5")
+    second_cfg = Config(model="claude-sonnet-5-5")
+    build_page(s, out, tmp_path / "pdfs", P, first_cfg)
+    before = (out.parent / "data.json").read_bytes()
+
+    first_generation = generation_token(s, first_cfg, P)
+    with snapshot_generation_lease(s, out, first_generation):
+        with pytest.raises(SnapshotGenerationConflict):
+            build_page(s, out, tmp_path / "pdfs", P, second_cfg)
+
+    assert (out.parent / "data.json").read_bytes() == before
+    build_page(s, out, tmp_path / "pdfs", P, second_cfg)
+    assert json.loads((out.parent / "data.json").read_text())["generation"] != first_generation
+
+
+def test_view_script_only_validates_and_serves_without_browse():
+    script = (STATIC.parent.parent.parent / "scripts" / "view.sh").read_text(encoding="utf-8")
+    assert "rg2watch browse" not in script
+    assert "require_db" in script and "rg2watch serve" in script
 
 
 def test_page_filters_include_versions_and_models():
