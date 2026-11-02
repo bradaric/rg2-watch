@@ -6,8 +6,12 @@ import socket
 
 import pytest
 
+from rg2watch.config import Config
+from rg2watch.models import Election
+from rg2watch.operator_feed import BOOTSTRAP_BYTES, OPERATOR_MAX_BYTES, OperatorFeed
 from rg2watch.server import start_server
 from rg2watch.operator_feed import OperatorGroupTooLarge
+from rg2watch.store import Store
 
 H = hashlib.sha256(b"x").hexdigest()
 
@@ -139,6 +143,67 @@ def test_operator_feed_endpoints_are_same_origin_read_only_and_exact(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_real_operator_bootstrap_soft_and_hard_encoded_limits(tmp_path):
+    parent = "662405"
+    store = Store(tmp_path / "limits.sqlite")
+    store.upsert_election(Election(parent, "1", "national", "Election", "https://x"))
+    with store._lock, store._db:
+        store._db.execute(
+            "INSERT INTO documents(parent,municipality,station_no,station_key,doc_type,label,url,active) "
+            "VALUES(?,?,?,?,6,'current',?,1)",
+            (parent, "Сечањ", "1", "Сечањ|1", "https://x/current.pdf"))
+        store._db.execute(
+            "INSERT INTO documents(parent,municipality,station_no,station_key,doc_type,label,url,active) "
+            "VALUES(?,?,?,?,6,'old',?,0)",
+            (parent, "Сечањ", "1", "Сечањ|1", "https://x/old.pdf"))
+    feed = OperatorFeed(store, Config(), tmp_path / "cache")
+
+    def set_payload(size):
+        # Quotes, backslashes and Serbian text ensure wire-size calculation includes JSON escaping.
+        value = "https://x/" + ('"\\Ж' * (size // 3)) + "x" * (size % 3)
+        with store._lock, store._db:
+            store._db.execute("UPDATE documents SET url=? WHERE id=2", (value,))
+
+    low, high = 1, OPERATOR_MAX_BYTES
+    soft_page = None
+    soft_payload = None
+    while low <= high:
+        middle = (low + high) // 2
+        set_payload(middle)
+        try:
+            page = feed.bootstrap(parent)
+            size = len(json.dumps(page, ensure_ascii=True).encode())
+        except OperatorGroupTooLarge:
+            size = OPERATOR_MAX_BYTES + 1
+        if size < BOOTSTRAP_BYTES:
+            low = middle + 1
+        else:
+            if size <= OPERATOR_MAX_BYTES:
+                soft_page, soft_payload = page, middle
+            high = middle - 1
+    assert soft_page is not None
+    set_payload(soft_payload)
+    soft_page = feed.bootstrap(parent)
+    soft_size = len(json.dumps(soft_page, ensure_ascii=True).encode())
+    assert BOOTSTRAP_BYTES <= soft_size <= OPERATOR_MAX_BYTES
+
+    server = start_server(tmp_path, tmp_path, 0, operator_feed=feed)
+    same = {"Sec-Fetch-Site": "same-origin"}
+    try:
+        status, _, body, _ = req(server, f"/operator-bootstrap?parent={parent}", headers=same)
+        assert status == 200 and len(body) == soft_size
+
+        set_payload(OPERATOR_MAX_BYTES)
+        status, _, body, _ = req(server, f"/operator-bootstrap?parent={parent}", headers=same)
+        assert status == 413
+        assert json.loads(body)["error"] == "operator_group_too_large"
+        assert b"\\u0416" not in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        store.close()
 
 
 def test_serves_allow_listed_files(srv):
