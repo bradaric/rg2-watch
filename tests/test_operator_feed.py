@@ -305,3 +305,29 @@ def test_feed_pinned_snapshot_replays_same_group_commit(tmp_path, monkeypatch):
     replay = feed.feed(P, revision_t)
     row = replay["groups"][0]["rows"][0]
     assert row["changed_revision"] == revision_next and row["rv"]["v"] == "escalate"
+
+
+def test_feed_bounded_chunk_can_return_current_group_ahead_of_through(tmp_path):
+    store, feed = setup_feed(tmp_path)
+    target = doc("https://x/ahead-target.pdf", no="000")
+    others = [doc(f"https://x/ahead-{number}.pdf", no=f"{number:03d}")
+              for number in range(1, 202)]
+    for value in (target, *others):
+        add(store, value)
+    since = store.operator_feed_state(P)[1]
+    store.set_review(target.url, "ok", "first selected change")
+    for value in others:
+        store.set_review(value.url, "ok", "fill bounded chunk")
+    store.set_review(target.url, "escalate", "newer than bounded chunk")
+    latest = store.operator_feed_state(P)[1]
+
+    change = feed.feed(P, since)
+    target_group = next(group for group in change["groups"] if group["key"] == target.station_key)
+    assert change["more"] is True and change["through"] < latest
+    assert target_group["changed_revision"] == latest
+    assert target_group["rows"][0]["rv"]["v"] == "escalate"
+
+    replay = feed.feed(P, change["through"])
+    assert replay["through"] >= latest
+    replay_target = next(group for group in replay["groups"] if group["key"] == target.station_key)
+    assert replay_target["changed_revision"] == latest
