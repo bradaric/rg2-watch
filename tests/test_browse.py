@@ -325,6 +325,8 @@ assert.deepEqual(current.map(x => x.id), [3, 4, 91]);
 current = mergeGroupState(current, [],
   [{{kind: "document", key: "9", changed_revision: 9}}]);
 assert.deepEqual(current.map(x => x.id), [3, 4, 91]); // stale tombstone cannot remove row 11
+current = mergeGroupState(current, [], [{{kind: "document", key: "9"}}]);
+assert.deepEqual(current.map(x => x.id), [3, 4, 91]); // malformed tombstone cannot invent a revision
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr

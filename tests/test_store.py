@@ -195,6 +195,48 @@ def test_projection_migration_rebuilds_prompt_dependent_winners_and_triggers(tmp
     assert reopened.operator_model_counts(P) == reopened.operator_model_coverage(P, "v8")
 
 
+def test_projection_migrates_previous_nullable_schema_atomically(tmp_path):
+    path = tmp_path / "nullable-projection.sqlite"
+    seeded = Store(path)
+    seeded.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    for i in range(1, 3):
+        value = doc(f"https://x/nullable-{i}.pdf", no=str(i))
+        seeded.apply_events(P, seeded.start_sweep(P, "projection"), [Event("added", value)])
+        with seeded._lock, seeded._db:
+            seeded._db.execute(
+                "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+                "VALUES(?,NULL,?,'{}','done',?)", (i, PROMPT_VERSION, P))
+    with seeded._lock, seeded._db:
+        for row in seeded._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'operator_model_%'"):
+            seeded._db.execute(f"DROP TRIGGER {row[0]}")
+        seeded._db.execute("DROP TABLE operator_model_counts")
+        seeded._db.execute("DROP TABLE operator_model_winners")
+        seeded._db.execute(
+            "CREATE TABLE operator_model_winners(document_id INTEGER NOT NULL,model TEXT,"
+            "parent TEXT NOT NULL,selected_analysis_id INTEGER NOT NULL,PRIMARY KEY(document_id,model))")
+        seeded._db.execute(
+            "CREATE TABLE operator_model_counts(parent TEXT NOT NULL,model TEXT,coverage INTEGER NOT NULL,"
+            "PRIMARY KEY(parent,model))")
+        seeded._db.execute("UPDATE operator_model_projection_meta SET marker=? WHERE id=1",
+                           (f"1:{PROMPT_VERSION}",))
+    seeded.close()
+
+    migrated = Store(path)
+    assert migrated.operator_model_counts(P) == migrated.operator_model_coverage(
+        P, PROMPT_VERSION) == {None: 2}
+    assert [row["name"] for row in migrated._db.execute(
+        "PRAGMA table_info(operator_model_counts)")] == [
+            "parent", "model_is_null", "model_value", "coverage"]
+    marker = migrated._db.execute(
+        "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()[0]
+    migrated.close()
+    reopened = Store(path)
+    assert reopened._db.execute(
+        "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()[0] == marker
+    assert reopened.operator_model_counts(P) == {None: 2}
+
+
 def test_projection_migration_serializes_two_openers(tmp_path, monkeypatch):
     path = tmp_path / "concurrent-projection.sqlite"
     seed = Store(path)

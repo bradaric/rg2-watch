@@ -16,7 +16,7 @@ def preferred_models(rows, preferred_model: str) -> list[str | None]:
 
 
 def preferred_analyses(rows, preferred_model: str, prompt_prefix: str | None = None,
-                       model_order: list[str] | None = None) -> dict:
+                       model_order: list[str | None] | None = None) -> dict:
     """Document id -> preferred model row, else the most widely used completed model row."""
     rows = [row for row in rows
             if prompt_prefix is None or row["prompt_version"].startswith(prompt_prefix)]

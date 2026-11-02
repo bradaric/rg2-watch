@@ -81,7 +81,7 @@ def generation_token(store: Store, cfg: Config, parent: str, resources: str | No
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
-def effective_model_order(store: Store, cfg: Config, parent: str) -> tuple[list[str], str]:
+def effective_model_order(store: Store, cfg: Config, parent: str) -> tuple[list[str | None], str]:
     """Return the full-builder fallback order and its opaque, config-specific signature."""
     preferred = stored_model(cfg.model)
     coverage = store.operator_model_counts(parent)
@@ -223,7 +223,7 @@ class OperatorFeed:
         self.store, self.cfg, self.cache_dir = store, cfg, Path(cache_dir)
         self._resource_digest = resource_digest()
         self._cursor_secret = secrets.token_bytes(32)
-        self._model_orders: dict[tuple[str, str, str], list[str]] = {}
+        self._model_orders: dict[tuple[str, str, str], list[str | None]] = {}
 
     def _generation(self, store: Store, parent: str) -> str:
         if store.get_election(parent) is None:
@@ -234,7 +234,8 @@ class OperatorFeed:
         with self.store.read_snapshot() as snapshot:
             return self._generation(snapshot, parent)
 
-    def _model_order(self, store: Store, parent: str, generation: str) -> tuple[list[str], str]:
+    def _model_order(self, store: Store, parent: str,
+                     generation: str) -> tuple[list[str | None], str]:
         order, signature = effective_model_order(store, self.cfg, parent)
         cache_key = (parent, generation, signature)
         if cache_key not in self._model_orders:
@@ -242,7 +243,7 @@ class OperatorFeed:
         return self._model_orders[cache_key], signature
 
     def _rows(self, store: Store, parent: str, kind: str, key: str, revision: int,
-              model_order: list[str]) -> list[dict]:
+              model_order: list[str | None]) -> list[dict]:
         view = _GroupStore(store, parent, kind, key)
         data = build_data(view, self.cache_dir, parent, self.cfg, selective=True,
                           model_order=model_order)

@@ -240,7 +240,7 @@ def _version(d, found: dict, opinions: dict, cache_dir: Path, base: str | None,
 def build_data(store: Store, cache_dir: Path, parent: str | None = None,
                cfg: Config | None = None, interval: int = 0, cache: dict | None = None,
                timings: dict[str, float] | None = None, selective: bool = False,
-               model_order: list[str] | None = None) -> dict:
+               model_order: list[str | None] | None = None) -> dict:
     timings = {} if timings is None else timings
     phase = time.monotonic()
 
