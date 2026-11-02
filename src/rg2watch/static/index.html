@@ -2880,6 +2880,7 @@ function loadData() {
     applyData(data, true);
     return data;
   }).catch(error => { console.error("fetching tally snapshot failed", error);
+    if (epochStarted !== bootstrapEpoch) return;
     if (!table) beginBootstrap(false);
     else { invalidateTally(); feedState("forms current · tally stale"); }
   }).finally(() => {

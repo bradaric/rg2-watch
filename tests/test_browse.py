@@ -398,6 +398,9 @@ assert.equal(snapshotDecision(accepted, value(12), 2, 3), "epoch");
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
+    loader = html[html.index("function loadData("):html.index("loadStatus();", html.index("function loadData("))]
+    catch = loader[loader.index(".catch(error =>"):loader.index(".finally(")]
+    assert "epochStarted !== bootstrapEpoch" in catch
 
 
 def test_local_and_rik_links_share_one_documents_column_and_alert_link_style():
