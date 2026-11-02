@@ -51,6 +51,35 @@ def test_replaced_marks_old_inactive():
     assert active[0] == 0
 
 
+def test_urls_reassigned_between_stations_update_metadata_and_stay_active():
+    s = store()
+    moved = doc("https://x/moved.pdf", no="8", name="BM 8")
+    replacement = doc("https://x/replacement.pdf", no="23", name="BM 23 old")
+    station_23 = doc("https://x/station-23.pdf", no="23", name="BM 23")
+    for d in (moved, replacement, station_23):
+        s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", d)])
+    s.add_finding(P, Finding("V9", "MEDIUM", moved, "moved"), moved.url)
+    s.add_finding(P, Finding("V9", "MEDIUM", replacement, "replacement"), replacement.url)
+
+    moved_to_6 = doc(moved.url, no="6", name="BM 6")
+    replacement_at_8 = doc(replacement.url, no="8", name="BM 8")
+    s.apply_events(P, s.start_sweep(P, "rg2"), [
+        Event("added", moved_to_6),
+        Event("replaced", replacement_at_8, previous_url=moved.url),
+    ])
+
+    assert s.known_docs(P, Scope()) == {
+        doc_key(moved_to_6): moved_to_6,
+        doc_key(replacement_at_8): replacement_at_8,
+        doc_key(station_23): station_23,
+    }
+    findings = s._db.execute(
+        "SELECT d.url,f.station_no FROM findings f JOIN documents d ON d.id=f.document_id "
+        "ORDER BY d.url").fetchall()
+    assert [tuple(row) for row in findings] == [
+        (moved.url, "6"), (replacement.url, "8")]
+
+
 def test_removed_marks_inactive():
     s = store()
     d = doc()

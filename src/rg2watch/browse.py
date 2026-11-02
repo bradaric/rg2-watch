@@ -306,10 +306,11 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
         if row["correctable"]:
             reason, included = "tally data unavailable", False
         else:
-            reason = {"quarantined_rg7": "quarantined: likely mislabeled RG-7",
-                      "quarantined_other": "quarantined: not an RG-2",
-                      "pending": "pending document classification"}.get(
-                          row["classification"]["status"], "superseded by repeat vote")
+            reason = ("removed from RIK" if row["state"] == "removed" else
+                      {"quarantined_rg7": "quarantined: likely mislabeled RG-7",
+                       "quarantined_other": "quarantined: not an RG-2",
+                       "pending": "pending document classification"}.get(
+                           row["classification"]["status"], "superseded by repeat vote"))
             included = None
         row["rec"] = rec.get(row["id"], {"status": "unavailable", "rules": [],
                                           "details": [reason], "gap": 0,

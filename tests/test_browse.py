@@ -58,6 +58,22 @@ def test_groups_versions_and_states(tmp_path):
     assert by_no["2"]["state"] == "removed"
 
 
+def test_removed_rg2_is_not_described_as_superseded_by_repeat_vote(tmp_path):
+    s = store()
+    gone = doc(BASE + "/extfile/gone.pdf")
+    add(s, gone)
+    s.save_analysis(gone.url, AnalysisResult(clean_report(), 0, 0, 0, "model", "stop"),
+                    PROMPT_VERSION, parent=P)
+    add(s, gone, "removed")
+
+    data = build_data(s, tmp_path, parent=P, cfg=Config(model="model"))
+
+    assert data["rows"][0]["rec"]["result"] == {
+        "corrected": {"included": None, "reason": "removed from RIK"},
+        "filed": {"included": None, "reason": "removed from RIK"},
+    }
+
+
 def test_form_rows_expose_nsnm_council(tmp_path):
     s = store()
     d = Doc("Ада", "1", "МЗ", "lbl", 6, BASE + "/extfile/nsnm.pdf",

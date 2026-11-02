@@ -601,15 +601,20 @@ class Store:
 
     def apply_events(self, parent: str, sweep_id: int, events: list[Event]) -> None:
         now = _now()
+        destinations = {ev.doc.url: ev.doc.station_key for ev in events if ev.kind != "removed"}
         with self._lock, self._db:
             for ev in events:
                 d = ev.doc
                 if ev.kind == "removed":
-                    self._db.execute("UPDATE documents SET active=0 WHERE url=?", (d.url,))
+                    destination = destinations.get(d.url)
+                    if destination is None or destination == d.station_key:
+                        self._db.execute("UPDATE documents SET active=0 WHERE url=?", (d.url,))
                 else:
                     if ev.kind == "replaced" and ev.previous_url:
-                        self._db.execute("UPDATE documents SET active=0 WHERE url=?",
-                                         (ev.previous_url,))
+                        destination = destinations.get(ev.previous_url)
+                        if destination is None or destination == d.station_key:
+                            self._db.execute("UPDATE documents SET active=0 WHERE url=?",
+                                             (ev.previous_url,))
                     if d.doc_type is not None:
                         self._db.execute(
                             "UPDATE documents SET active=0 WHERE parent=? AND station_key=? "
@@ -629,11 +634,19 @@ class Store:
                         "INSERT INTO documents(parent, municipality, station_no, station_name, "
                         "station_key, minority, doc_type, label, url, uploaded_at, first_seen_at, "
                         "analysis_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
-                        "ON CONFLICT(url) DO UPDATE SET active=1",
+                        "ON CONFLICT(url) DO UPDATE SET municipality=excluded.municipality, "
+                        "station_no=excluded.station_no, station_name=excluded.station_name, "
+                        "station_key=excluded.station_key, minority=excluded.minority, "
+                        "doc_type=excluded.doc_type, label=excluded.label, "
+                        "uploaded_at=excluded.uploaded_at, active=1",
                         (parent, d.municipality, d.station_no, d.station_name, d.station_key,
                          d.minority, d.doc_type, d.label, d.url, d.uploaded_at, now,
-                           "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES else "skipped"))
+                            "new" if d.doc_type in ANALYSED_TYPES + RG7_TYPES + DECISION_TYPES + TYPE13_TYPES else "skipped"))
                 row = self._db.execute("SELECT id FROM documents WHERE url=?", (d.url,)).fetchone()
+                if row is not None and ev.kind != "removed":
+                    self._db.execute(
+                        "UPDATE findings SET parent=?,municipality=?,station_no=? WHERE document_id=?",
+                        (parent, d.municipality, d.station_no, row["id"]))
                 self._db.execute(
                     "INSERT INTO events(sweep_id, parent, kind, document_id, station_key, "
                     "doc_type, url, uploaded_at, detected_at, previous_url) "
