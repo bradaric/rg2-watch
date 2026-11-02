@@ -4,6 +4,9 @@ import pytest
 
 from rg2watch.models import Doc, Election, Event, Finding, Scope, doc_key
 from rg2watch.store import Store
+from rg2watch.analyze import AnalysisResult
+from rg2watch.pipeline import PROMPT_VERSION
+from test_rules import clean_report
 
 P = "662405"
 
@@ -94,6 +97,71 @@ def test_operator_group_revision_survives_journal_pruning():
 
     assert s.operator_group_revisions(P)[("station", value.station_key)] == revision
 
+
+def test_operator_model_projection_matches_legacy_selection_and_direct_sql():
+    s = store()
+    first = doc("https://x/model-1.pdf")
+    second = doc("https://x/model-2.pdf", no="2")
+    ignored = doc("https://x/model-rg9.pdf", no="3", dt=9)
+    for value in (first, second, ignored):
+        s.apply_events(P, s.start_sweep(P, "projection"), [Event("added", value)])
+    report = clean_report()
+    s.save_analysis(first.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), "v8", parent=P)
+    s.save_analysis(first.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    s.save_analysis(first.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), "v99", parent=P)
+    s.save_analysis(second.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), "v8", parent=P)
+    s.save_analysis(ignored.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {"m": 2}
+    winner = s._db.execute(
+        "SELECT a.prompt_version FROM operator_model_winners w JOIN analyses a "
+        "ON a.id=w.selected_analysis_id WHERE w.document_id=?", (1,)).fetchone()
+    assert winner[0] == PROMPT_VERSION
+
+    with s._lock, s._db:
+        s._db.execute("DELETE FROM analyses WHERE document_id=? AND prompt_version=?", (1, PROMPT_VERSION))
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {"m": 2}
+    with s._lock, s._db:
+        s._db.execute("UPDATE documents SET parent='other' WHERE id=2")
+    assert s.operator_model_counts(P) == {"m": 1}
+    assert s.operator_model_counts("other") == {"m": 1}
+
+
+def test_prompt_version_has_one_dependency_neutral_owner():
+    import rg2watch.operator_feed as operator_feed
+    import rg2watch.pipeline as pipeline
+    import rg2watch.prompt_versions as prompt_versions
+    import rg2watch.store as store_module
+
+    assert prompt_versions.PROMPT_VERSION == pipeline.PROMPT_VERSION
+    assert prompt_versions.PROMPT_VERSION == operator_feed.PROMPT_VERSION
+    assert prompt_versions.PROMPT_VERSION == store_module.PROMPT_VERSION
+
+
+def test_projection_migration_rebuilds_prompt_dependent_winners_and_triggers(tmp_path, monkeypatch):
+    import rg2watch.store as store_module
+
+    path = tmp_path / "projection.sqlite"
+    s = Store(path)
+    s.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    value = doc("https://x/migrated-model.pdf")
+    s.apply_events(P, s.start_sweep(P, "projection"), [Event("added", value)])
+    report = clean_report()
+    s.save_analysis(value.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), "v8", parent=P)
+    s.save_analysis(value.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    s.close()
+
+    monkeypatch.setattr(store_module, "PROMPT_VERSION", "v8")
+    reopened = Store(path)
+    winner = reopened._db.execute(
+        "SELECT a.prompt_version FROM operator_model_winners w JOIN analyses a "
+        "ON a.id=w.selected_analysis_id").fetchone()[0]
+    trigger_sql = reopened._db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='operator_model_analyses_insert'"
+    ).fetchone()[0]
+    assert winner == "v8"
+    assert "'v8'" in trigger_sql and "'v11'" not in trigger_sql
+    assert reopened.operator_model_counts(P) == reopened.operator_model_coverage(P, "v8")
 
 def test_type13_retarget_invalidates_source_old_and_new_target_groups():
     s = store()

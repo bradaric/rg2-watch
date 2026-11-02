@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from rg2watch.models import DOC_TYPES, Doc, Election, Event, Finding, Scope, doc_key
 from rg2watch.case_locks import CaseLocks
 from rg2watch.rules import INFORMATIONAL_RULES
+from rg2watch.prompt_versions import PROMPT_VERSION
 
 if TYPE_CHECKING:
     from rg2watch.analyze import AnalysisResult
@@ -48,6 +49,7 @@ CREATE INDEX IF NOT EXISTS operator_feed_changes_group
 """  # after the migrations: older DBs lack some of these columns until then
 
 OPERATOR_FEED_WINDOW = 10_000
+OPERATOR_MODEL_PROJECTION_VERSION = "1"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS elections(
@@ -176,8 +178,8 @@ END;""",
     for table, fk in (("findings", "OLD.document_id"),):
         sql.append(invalidate(f"operator_feed_{table}_delete", "AFTER DELETE", table,
                               doc_lookup_new, extra=fk))
-    # A successful read changes its group. RG-2 reads also conservatively request a reset because
-    # their model coverage can reorder the election-wide fallback preference.
+    # Analysis changes are group-local. Effective fallback-order changes are detected from the
+    # transactional model-count projection by each reader, not journalled as coarse global resets.
     sql.append("""
 CREATE TRIGGER IF NOT EXISTS operator_feed_analyses_insert AFTER INSERT ON analyses
 WHEN NEW.status='done' AND NEW.result_json IS NOT NULL BEGIN
@@ -186,13 +188,6 @@ WHEN NEW.status='done' AND NEW.result_json IS NOT NULL BEGIN
     SELECT m.revision,d.parent,CASE WHEN d.station_key IS NULL THEN 'document' ELSE 'station' END,
       CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
     FROM operator_feed_meta m JOIN documents d ON d.id=NEW.document_id WHERE m.id=1;
-  INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
-    SELECT m.revision,d.parent,'global','*' FROM operator_feed_meta m
-    JOIN documents d ON d.id=NEW.document_id
-    WHERE m.id=1 AND NEW.prompt_version LIKE 'v%' AND NOT EXISTS (
-      SELECT 1 FROM analyses old WHERE old.document_id=NEW.document_id
-      AND old.model IS NEW.model AND old.prompt_version LIKE 'v%' AND old.status='done'
-      AND old.result_json IS NOT NULL AND old.id<>NEW.id);
 END;""")
     sql.append("""
 CREATE TRIGGER IF NOT EXISTS operator_feed_analyses_delete AFTER DELETE ON analyses
@@ -202,13 +197,19 @@ WHEN OLD.status='done' AND OLD.result_json IS NOT NULL BEGIN
     SELECT m.revision,d.parent,CASE WHEN d.station_key IS NULL THEN 'document' ELSE 'station' END,
       CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
     FROM operator_feed_meta m JOIN documents d ON d.id=OLD.document_id WHERE m.id=1;
+END;""")
+    sql.append("""
+CREATE TRIGGER IF NOT EXISTS operator_feed_analyses_update AFTER UPDATE OF document_id,model,
+prompt_version,result_json,status ON analyses
+WHEN OLD.document_id IS NOT NEW.document_id OR OLD.model IS NOT NEW.model
+  OR OLD.prompt_version IS NOT NEW.prompt_version OR OLD.result_json IS NOT NEW.result_json
+  OR OLD.status IS NOT NEW.status BEGIN
+  UPDATE operator_feed_meta SET revision=revision+1 WHERE id=1;
   INSERT OR IGNORE INTO operator_feed_changes(revision,parent,group_kind,group_key)
-    SELECT m.revision,d.parent,'global','*' FROM operator_feed_meta m
-    JOIN documents d ON d.id=OLD.document_id
-    WHERE m.id=1 AND OLD.prompt_version LIKE 'v%' AND NOT EXISTS (
-      SELECT 1 FROM analyses kept WHERE kept.document_id=OLD.document_id
-      AND kept.model IS OLD.model AND kept.prompt_version LIKE 'v%' AND kept.status='done'
-      AND kept.result_json IS NOT NULL);
+    SELECT m.revision,d.parent,CASE WHEN d.station_key IS NULL THEN 'document' ELSE 'station' END,
+      CASE WHEN d.station_key IS NULL THEN CAST(d.id AS TEXT) ELSE d.station_key END
+    FROM operator_feed_meta m JOIN documents d ON d.id IN (OLD.document_id,NEW.document_id)
+    WHERE m.id=1;
 END;""")
     sql.append("""
 CREATE TRIGGER IF NOT EXISTS operator_feed_findings_update AFTER UPDATE OF rule,severity,summary,details_json
@@ -252,6 +253,76 @@ AFTER INSERT ON operator_feed_changes WHEN NEW.group_kind<>'global' BEGIN
     ON CONFLICT(parent,group_kind,group_key) DO UPDATE SET revision=MAX(revision,excluded.revision);
 END;""")
     return "\n".join(sql)
+
+
+def _operator_model_projection_triggers() -> list[tuple[str, str]]:
+    """Prompt-version-dependent projection triggers, returned as atomic statements."""
+    prompt = "'" + PROMPT_VERSION.replace("'", "''") + "'"
+    eligible = _ANALYSED
+    pick_new = f"""
+      INSERT OR IGNORE INTO operator_model_winners(document_id,model,parent,selected_analysis_id)
+      SELECT d.id,a.model,d.parent,a.id FROM documents d JOIN analyses a ON a.id=(
+        SELECT b.id FROM analyses b WHERE b.document_id=d.id AND b.model IS NEW.model
+          AND b.status='done' AND b.result_json IS NOT NULL
+        ORDER BY b.prompt_version IS {prompt} DESC,b.id DESC LIMIT 1)
+      WHERE d.id=NEW.document_id AND d.doc_type IN ({eligible}) AND a.prompt_version LIKE 'v%'"""
+    pick_old = pick_new.replace("NEW.model", "OLD.model").replace(
+        "NEW.document_id", "OLD.document_id")
+    pick_document = f"""
+      INSERT OR IGNORE INTO operator_model_winners(document_id,model,parent,selected_analysis_id)
+      SELECT d.id,a.model,d.parent,a.id FROM documents d JOIN analyses a
+        ON a.document_id=d.id AND a.status='done' AND a.result_json IS NOT NULL
+        AND a.id=(SELECT b.id FROM analyses b WHERE b.document_id=d.id AND b.model IS a.model
+          AND b.status='done' AND b.result_json IS NOT NULL
+          ORDER BY b.prompt_version IS {prompt} DESC,b.id DESC LIMIT 1)
+      WHERE d.id=NEW.id AND d.doc_type IN ({eligible}) AND a.prompt_version LIKE 'v%'"""
+    return [
+        ("operator_model_winners_count_insert", """
+         CREATE TRIGGER operator_model_winners_count_insert AFTER INSERT ON operator_model_winners
+         BEGIN
+           INSERT INTO operator_model_counts(parent,model,coverage) VALUES(NEW.parent,NEW.model,1)
+           ON CONFLICT(parent,model) DO UPDATE SET coverage=coverage+1;
+         END"""),
+        ("operator_model_winners_count_delete", """
+         CREATE TRIGGER operator_model_winners_count_delete AFTER DELETE ON operator_model_winners
+         BEGIN
+           DELETE FROM operator_model_counts WHERE parent=OLD.parent AND model IS OLD.model
+             AND coverage=1;
+           UPDATE operator_model_counts SET coverage=coverage-1
+             WHERE parent=OLD.parent AND model IS OLD.model;
+         END"""),
+        ("operator_model_analyses_insert", f"""
+         CREATE TRIGGER operator_model_analyses_insert AFTER INSERT ON analyses BEGIN
+           DELETE FROM operator_model_winners
+             WHERE document_id=NEW.document_id AND model IS NEW.model;
+           {pick_new};
+         END"""),
+        ("operator_model_analyses_delete", f"""
+         CREATE TRIGGER operator_model_analyses_delete AFTER DELETE ON analyses BEGIN
+           DELETE FROM operator_model_winners
+             WHERE document_id=OLD.document_id AND model IS OLD.model;
+           {pick_old};
+         END"""),
+        ("operator_model_analyses_update", f"""
+         CREATE TRIGGER operator_model_analyses_update AFTER UPDATE ON analyses BEGIN
+           DELETE FROM operator_model_winners
+             WHERE document_id=OLD.document_id AND model IS OLD.model;
+           DELETE FROM operator_model_winners
+             WHERE document_id=NEW.document_id AND model IS NEW.model;
+           {pick_old};
+           {pick_new};
+         END"""),
+        ("operator_model_documents_update", f"""
+         CREATE TRIGGER operator_model_documents_update AFTER UPDATE OF parent,doc_type ON documents
+         BEGIN
+           DELETE FROM operator_model_winners WHERE document_id=OLD.id;
+           {pick_document};
+         END"""),
+        ("operator_model_documents_delete", """
+         CREATE TRIGGER operator_model_documents_delete AFTER DELETE ON documents BEGIN
+           DELETE FROM operator_model_winners WHERE document_id=OLD.id;
+         END"""),
+    ]
 
 
 def clean_note(note: str | None) -> str | None:
@@ -381,9 +452,64 @@ class Store:
             "SELECT parent,group_kind,group_key,MAX(revision) FROM operator_feed_changes "
             "WHERE group_kind<>'global' GROUP BY parent,group_kind,group_key "
             "ON CONFLICT(parent,group_kind,group_key) DO UPDATE SET "
-            "revision=MAX(revision,excluded.revision)")
+             "revision=MAX(revision,excluded.revision)")
+        self._db.commit()
+        self._migrate_operator_model_projection()
+        feed_trigger_names = [row[0] for row in self._db.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'operator_feed_%'")]
+        for name in feed_trigger_names:
+            self._db.execute(f"DROP TRIGGER IF EXISTS {name}")
         self._db.executescript(_operator_feed_triggers())
         self.case_locks = CaseLocks(path)
+
+    def _migrate_operator_model_projection(self) -> None:
+        """Atomically install/backfill the exact per-document model coverage projection."""
+        marker = f"{OPERATOR_MODEL_PROJECTION_VERSION}:{PROMPT_VERSION}"
+        triggers = _operator_model_projection_triggers()
+        try:
+            self._db.execute("BEGIN IMMEDIATE")
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS operator_model_projection_meta("
+                "id INTEGER PRIMARY KEY CHECK(id=1),marker TEXT NOT NULL)")
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS operator_model_winners("
+                "document_id INTEGER NOT NULL,model TEXT,parent TEXT NOT NULL,"
+                "selected_analysis_id INTEGER NOT NULL,PRIMARY KEY(document_id,model))")
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS operator_model_counts("
+                "parent TEXT NOT NULL,model TEXT,coverage INTEGER NOT NULL,"
+                "PRIMARY KEY(parent,model))")
+            current = self._db.execute(
+                "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()
+            installed = {row[0] for row in self._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'operator_model_%'")}
+            expected = {name for name, _ in triggers}
+            if current is None or current[0] != marker or not expected <= installed:
+                for name, _ in triggers:
+                    self._db.execute(f"DROP TRIGGER IF EXISTS {name}")
+                self._db.execute("DELETE FROM operator_model_counts")
+                self._db.execute("DELETE FROM operator_model_winners")
+                prompt = PROMPT_VERSION
+                self._db.execute(
+                    "INSERT INTO operator_model_winners(document_id,model,parent,selected_analysis_id) "
+                    "SELECT d.id,a.model,d.parent,a.id FROM documents d JOIN analyses a "
+                    "ON a.document_id=d.id AND a.status='done' AND a.result_json IS NOT NULL "
+                    "AND a.id=(SELECT b.id FROM analyses b WHERE b.document_id=d.id "
+                    "AND b.model IS a.model AND b.status='done' AND b.result_json IS NOT NULL "
+                    "ORDER BY b.prompt_version IS ? DESC,b.id DESC LIMIT 1) "
+                    f"WHERE d.doc_type IN ({_ANALYSED}) AND a.prompt_version LIKE 'v%'", (prompt,))
+                self._db.execute(
+                    "INSERT INTO operator_model_counts(parent,model,coverage) "
+                    "SELECT parent,model,COUNT(*) FROM operator_model_winners GROUP BY parent,model")
+                for _, sql in triggers:
+                    self._db.execute(sql)
+                self._db.execute(
+                    "INSERT INTO operator_model_projection_meta(id,marker) VALUES(1,?) "
+                    "ON CONFLICT(id) DO UPDATE SET marker=excluded.marker", (marker,))
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
 
     def close(self) -> None:
         with self._lock:
@@ -446,12 +572,20 @@ class Store:
                 (parent, after_kind, after_kind, after_key, limit)).fetchall()
         return [(row["kind"], row["key"]) for row in rows]
 
-    def operator_group_revisions(self, parent: str) -> dict[tuple[str, str], int]:
+    def operator_group_revisions(self, parent: str,
+                                 identities: list[tuple[str, str]] | None = None
+                                 ) -> dict[tuple[str, str], int]:
         with self._lock:
+            extra, args = "", [parent]
+            if identities is not None:
+                if not identities:
+                    return {}
+                extra = " AND (" + " OR ".join(
+                    "(group_kind=? AND group_key=?)" for _ in identities) + ")"
+                args.extend(value for identity in identities for value in identity)
             rows = self._db.execute(
                 "SELECT group_kind,group_key,revision FROM operator_feed_group_revisions "
-                "WHERE parent=?",
-                (parent,)).fetchall()
+                "WHERE parent=?" + extra, args).fetchall()
         return {(row["group_kind"], row["group_key"]): row["revision"] for row in rows}
 
     def operator_model_coverage(self, parent: str, prompt_version: str) -> dict[str, int]:
@@ -466,6 +600,13 @@ class Store:
                 "ORDER BY b.prompt_version IS ? DESC,b.id DESC LIMIT 1)) "
                 "SELECT model,COUNT(*) coverage FROM chosen WHERE prompt_version LIKE 'v%' "
                 "GROUP BY model", (parent, prompt_version)).fetchall()
+        return {row["model"]: row["coverage"] for row in rows}
+
+    def operator_model_counts(self, parent: str) -> dict[str, int]:
+        """Projected election/model coverage; bounded by the number of stored models."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT model,coverage FROM operator_model_counts WHERE parent=?", (parent,)).fetchall()
         return {row["model"]: row["coverage"] for row in rows}
 
     def add_classification_override(self, url: str, action: str) -> sqlite3.Row | None:

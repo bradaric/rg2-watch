@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from rg2watch.analyze import AnalysisResult
+from rg2watch.analyze import AnalysisResult, stored_model
 from rg2watch.config import Config
 from rg2watch.models import Doc, Election, Event
 from rg2watch.operator_feed import OperatorFeed
@@ -61,7 +61,8 @@ def test_feed_is_bounded_incremental_and_returns_tombstones(tmp_path):
         store._db.execute("DELETE FROM documents WHERE url=?", (first.url,))
     removed = feed.feed(P, since)
     assert removed["groups"] == []
-    assert removed["tombstones"] == [{"kind": "station", "key": first.station_key}]
+    assert removed["tombstones"] == [{"kind": "station", "key": first.station_key,
+                                      "changed_revision": removed["through"]}]
 
 
 def test_feed_rejects_stale_future_and_global_revisions(tmp_path):
@@ -125,3 +126,52 @@ def test_selective_rows_use_election_wide_model_coverage_order(tmp_path):
     station = next(group for group in page["groups"] if group["key"] == docs[0].station_key)
 
     assert station["rows"][0]["analysis_model"] == "z-model"
+
+
+def test_effective_model_order_signature_only_changes_when_order_changes(tmp_path):
+    store, feed = setup_feed(tmp_path)
+    docs = [doc(f"https://x/signature-{i}.pdf", no=str(i)) for i in range(1, 4)]
+    for item in docs:
+        add(store, item)
+    initial = feed.feed(P, store.operator_feed_state(P)[1])["model_order_signature"]
+    store.save_analysis(docs[0].url, AnalysisResult(
+        clean_report(), 0, 0, 0, stored_model(Config().model), "stop"), PROMPT_VERSION, parent=P)
+    after_first = feed.feed(P, store.operator_feed_state(P)[1])
+    assert after_first["model_order_signature"] == initial
+    store.save_analysis(docs[0].url, AnalysisResult(
+        clean_report(), 0, 0, 0, "fallback-z", "stop"), PROMPT_VERSION, parent=P)
+    one_fallback = feed.feed(P, store.operator_feed_state(P)[1])["model_order_signature"]
+    assert one_fallback != initial
+    store.save_analysis(docs[1].url, AnalysisResult(
+        clean_report(), 0, 0, 0, "fallback-a", "stop"), PROMPT_VERSION, parent=P)
+    tied = feed.feed(P, store.operator_feed_state(P)[1])["model_order_signature"]
+    assert tied != one_fallback
+    store.save_analysis(docs[2].url, AnalysisResult(
+        clean_report(), 0, 0, 0, "fallback-z", "stop"), PROMPT_VERSION, parent=P)
+    reordered = feed.feed(P, store.operator_feed_state(P)[1])["model_order_signature"]
+    assert reordered != tied
+    assert feed.bootstrap(P)["model_order_signature"] == reordered
+
+
+def test_bootstrap_skips_post_start_group_and_feed_replays_true_revision(tmp_path, monkeypatch):
+    import rg2watch.operator_feed as feed_module
+
+    monkeypatch.setattr(feed_module, "BOOTSTRAP_ROWS", 1)
+    store, feed = setup_feed(tmp_path)
+    docs = [doc(f"https://x/page-{i}.pdf", no=str(i)) for i in range(1, 4)]
+    for item in docs:
+        add(store, item)
+    first = feed.bootstrap(P)
+    start = first["revision"]
+    store.set_review(docs[1].url, "ok", "during bootstrap")
+    changed_revision = store.operator_feed_state(P)[1]
+
+    second = feed.bootstrap(P, first["cursor"])
+    assert second["groups"] == []
+    assert second["cursor"] is not None
+    third = feed.bootstrap(P, second["cursor"])
+    assert third["done"] is True
+
+    replay = feed.feed(P, start)
+    changed = next(group for group in replay["groups"] if group["key"] == docs[1].station_key)
+    assert changed["rows"][0]["changed_revision"] == changed_revision

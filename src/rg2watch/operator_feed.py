@@ -13,7 +13,8 @@ from pathlib import Path
 from .analyze import ARITHMETIC_PROMPT_VERSION, stored_model
 from .browse import STATIC, build_data
 from .config import Config
-from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
+from .pipeline import RG7_PROMPT_VERSION
+from .prompt_versions import PROMPT_VERSION
 from .rules import RULE_INFO
 from .store import ANALYSED_TYPES, RG7_TYPES, Store
 
@@ -21,6 +22,11 @@ PROTOCOL_VERSION = 1
 MAX_GROUPS = 200
 BOOTSTRAP_ROWS = 100
 BOOTSTRAP_BYTES = 1_000_000
+OPERATOR_MAX_BYTES = 2_000_000
+
+
+class OperatorGroupTooLarge(ValueError):
+    """One complete tagged group cannot fit in the hard HTTP response bound."""
 
 # Explicit review list: presentation/tally inputs are hashed; operational and secret-bearing
 # settings are intentionally excluded. The assertion makes every future Config field a decision.
@@ -72,6 +78,16 @@ def generation_token(store: Store, cfg: Config, parent: str, resources: str | No
              "config": config, "election": election.__dict__ if election is not None else None,
              "resources": resources or resource_digest()}
     return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def effective_model_order(store: Store, cfg: Config, parent: str) -> tuple[list[str], str]:
+    """Return the full-builder fallback order and its opaque, config-specific signature."""
+    preferred = stored_model(cfg.model)
+    coverage = store.operator_model_counts(parent)
+    order = [preferred, *sorted(
+        (model for model in coverage if model != preferred),
+        key=lambda model: (-coverage[model], model or ""))]
+    return order, hashlib.sha256(_canonical(order)).hexdigest()
 
 
 class _GroupStore:
@@ -206,7 +222,7 @@ class OperatorFeed:
         self.store, self.cfg, self.cache_dir = store, cfg, Path(cache_dir)
         self._resource_digest = resource_digest()
         self._cursor_secret = secrets.token_bytes(32)
-        self._model_orders: dict[tuple[str, str, int], list[str]] = {}
+        self._model_orders: dict[tuple[str, str, str], list[str]] = {}
 
     def _generation(self, store: Store, parent: str) -> str:
         if store.get_election(parent) is None:
@@ -217,15 +233,12 @@ class OperatorFeed:
         with self.store.read_snapshot() as snapshot:
             return self._generation(snapshot, parent)
 
-    def _model_order(self, store: Store, parent: str, revision: int) -> list[str]:
-        preferred = stored_model(self.cfg.model)
-        cache_key = (parent, preferred, revision)
+    def _model_order(self, store: Store, parent: str, generation: str) -> tuple[list[str], str]:
+        order, signature = effective_model_order(store, self.cfg, parent)
+        cache_key = (parent, generation, signature)
         if cache_key not in self._model_orders:
-            coverage = store.operator_model_coverage(parent, PROMPT_VERSION)
-            self._model_orders[cache_key] = [preferred, *sorted(
-                (model for model in coverage if model != preferred),
-                key=lambda model: (-coverage[model], model or ""))]
-        return self._model_orders[cache_key]
+            self._model_orders[cache_key] = order
+        return self._model_orders[cache_key], signature
 
     def _rows(self, store: Store, parent: str, kind: str, key: str, revision: int,
               model_order: list[str]) -> list[dict]:
@@ -242,7 +255,9 @@ class OperatorFeed:
         with self.store.read_snapshot() as snapshot:
             generation = self._generation(snapshot, parent)
             db_uuid, revision, floor = snapshot.operator_feed_state(parent)
+            model_order, order_signature = self._model_order(snapshot, parent, generation)
             base = {"db": db_uuid, "parent": parent, "generation": generation,
+                    "model_order_signature": order_signature,
                     "revision": revision, "through": since, "more": False,
                     "reset_required": False, "groups": [], "tombstones": []}
             if since < floor or since > revision:
@@ -261,11 +276,13 @@ class OperatorFeed:
             identities = {}
             for row in selected:
                 identities[(row["group_kind"], row["group_key"])] = row["revision"]
-            model_order = self._model_order(snapshot, parent, since)
-            for (kind, key), changed in identities.items():
+            current_revisions = snapshot.operator_group_revisions(parent, list(identities))
+            for kind, key in identities:
+                changed = current_revisions.get((kind, key), identities[(kind, key)])
                 rows = self._rows(snapshot, parent, kind, key, changed, model_order)
                 target = base["groups"] if rows else base["tombstones"]
-                target.append({"kind": kind, "key": key, **({"rows": rows} if rows else {})})
+                target.append({"kind": kind, "key": key, "changed_revision": changed,
+                               **({"rows": rows} if rows else {})})
             through = max((row["revision"] for row in selected), default=revision)
             more = bool(snapshot.operator_feed_changes(parent, through, 1))
             return {**base, "through": through, "more": more}
@@ -292,31 +309,54 @@ class OperatorFeed:
         with self.store.read_snapshot() as snapshot:
             generation = self._generation(snapshot, parent)
             _, revision, floor = snapshot.operator_feed_state(parent)
+            model_order, order_signature = self._model_order(snapshot, parent, generation)
             state = ({"parent": parent, "generation": generation, "revision": revision,
-                      "after": None} if cursor is None else self._decode_cursor(cursor))
+                      "model_order_signature": order_signature, "after": None}
+                     if cursor is None else self._decode_cursor(cursor))
             if (state.get("parent") != parent or state.get("generation") != generation
                     or not isinstance(state.get("revision"), int)):
                 raise ValueError("bootstrap cursor does not match this election")
+            if state.get("model_order_signature") != order_signature:
+                return {"parent": parent, "generation": generation,
+                        "model_order_signature": order_signature, "revision": revision,
+                        "reset_required": True, "groups": [], "cursor": None, "done": False}
             if state["revision"] < floor:
                 return {"parent": parent, "generation": generation, "revision": revision,
+                        "model_order_signature": order_signature,
                         "reset_required": True, "rows": [], "cursor": None, "done": False}
-            model_order = self._model_order(snapshot, parent, state["revision"])
             identities = snapshot.operator_group_identities(parent, state.get("after"), BOOTSTRAP_ROWS + 1)
-            page, size = [], 0
-            for kind, key in identities[:BOOTSTRAP_ROWS]:
-                rows = self._rows(snapshot, parent, kind, key, state["revision"], model_order)
-                blob_size = len(_canonical(rows))
-                if page and size + blob_size > BOOTSTRAP_BYTES:
-                    break
-                page.append({"kind": kind, "key": key, "rows": rows})
-                size += blob_size
-            done = len(page) == len(identities) and len(identities) <= BOOTSTRAP_ROWS
-            after = [page[-1]["kind"], page[-1]["key"]] if page else state.get("after")
-            next_cursor = None if done else self._encode_cursor({**state, "after": after})
+            group_revisions = snapshot.operator_group_revisions(parent, identities)
             election = snapshot.get_election(parent)
-            return {"db": snapshot.operator_feed_state(parent)[0], "parent": parent,
-                    "generation": generation, "revision": state["revision"],
-                    "reset_required": False, "groups": page, "cursor": next_cursor,
-                    "done": done, "election": {"title": election.title},
-                    "rules_version": PROTOCOL_VERSION, "rules": RULE_INFO,
-                    "interval": self.cfg.browse_interval_s}
+
+            def response(groups: list[dict], after: list[str] | None, done: bool) -> dict:
+                next_cursor = None if done else self._encode_cursor({**state, "after": after})
+                return {"db": snapshot.operator_feed_state(parent)[0], "parent": parent,
+                        "generation": generation, "revision": state["revision"],
+                        "model_order_signature": order_signature,
+                        "reset_required": False, "groups": groups, "cursor": next_cursor,
+                        "done": done, "election": {"title": election.title},
+                        "rules_version": PROTOCOL_VERSION, "rules": RULE_INFO,
+                        "interval": self.cfg.browse_interval_s}
+
+            page, scanned = [], state.get("after")
+            for index, (kind, key) in enumerate(identities[:BOOTSTRAP_ROWS]):
+                if group_revisions.get((kind, key), 0) > state["revision"]:
+                    scanned = [kind, key]
+                    continue
+                rows = self._rows(snapshot, parent, kind, key, state["revision"], model_order)
+                candidate_after = [kind, key]
+                candidate_done = (len(identities) <= BOOTSTRAP_ROWS and
+                                  index == len(identities) - 1)
+                candidate = response(
+                    [*page, {"kind": kind, "key": key, "rows": rows}],
+                    candidate_after, candidate_done)
+                encoded_size = len(json.dumps(candidate, ensure_ascii=True).encode())
+                if page and encoded_size > BOOTSTRAP_BYTES:
+                    break
+                if not page and encoded_size > OPERATOR_MAX_BYTES:
+                    raise OperatorGroupTooLarge("operator group exceeds response limit")
+                page.append({"kind": kind, "key": key, "rows": rows})
+                scanned = candidate_after
+            done = len(identities) <= BOOTSTRAP_ROWS and scanned == (
+                [*identities[-1]] if identities else state.get("after"))
+            return response(page, scanned, done)

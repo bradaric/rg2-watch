@@ -28,7 +28,7 @@ from .store import (ANALYSED_TYPES, DECISION_TYPES, MAX_ANALYSIS_ATTEMPTS, RG7_T
 
 log = logging.getLogger("rg2watch.pipeline")
 
-PROMPT_VERSION = "v11"
+from .prompt_versions import PROMPT_VERSION
 RG7_PROMPT_VERSION = "r3"
 DECISION_PROMPT_VERSION = "d1"
 TYPE13_PROMPT_VERSION = "t1"

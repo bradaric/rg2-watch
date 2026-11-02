@@ -598,6 +598,7 @@ def _data_meta(data: dict) -> dict:
             if correction and correction.get("revision") is not None:
                 corrections[version["u"]] = correction["revision"]
     return {"built": data["built"], "generation": data.get("generation"),
+            "model_order_signature": data.get("model_order_signature"),
             "snapshot_revision": data.get("snapshot_revision"),
             "snapshot_id": data.get("snapshot_id"), "corrections": corrections}
 
@@ -655,15 +656,18 @@ def _build_page_unlocked(store: Store, out_path: Path, cache_dir: Path, parent: 
         snapshot_parent = default_parent(snapshot, parent)
         _, snapshot_revision, _ = snapshot.operator_feed_state(snapshot_parent)
         data = build_data(snapshot, cache_dir, parent, cfg, interval, cache, timings)
-        from .operator_feed import generation_token
+        from .operator_feed import effective_model_order, generation_token
         data["generation"] = generation_token(snapshot, cfg or Config(), snapshot_parent)
+        _, data["model_order_signature"] = effective_model_order(
+            snapshot, cfg or Config(), snapshot_parent)
         data["snapshot_revision"] = snapshot_revision
         group_revisions = snapshot.operator_group_revisions(snapshot_parent)
         for row in data["rows"]:
             row["changed_revision"] = group_revisions.get(
                 (row["group_kind"], row["group_key"]), 0)
         data["snapshot_id"] = hashlib.sha256(_json({
-            "generation": data["generation"], "revision": snapshot_revision,
+            "generation": data["generation"], "order": data["model_order_signature"],
+            "revision": snapshot_revision,
             "built": data["built"], "rows": [row["id"] for row in data["rows"]],
         }).encode()).hexdigest()
     t1 = time.monotonic()

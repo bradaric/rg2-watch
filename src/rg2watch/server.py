@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .operator_corrections import CorrectionConflict
+from .operator_feed import OPERATOR_MAX_BYTES, OperatorGroupTooLarge
 from .store import VERDICTS
 
 log = logging.getLogger("rg2watch.server")
@@ -34,7 +35,6 @@ LENGTH = re.compile(r"[0-9]{1,6}")
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
        "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 GZIP_MIN_BYTES = 1024
-OPERATOR_MAX_BYTES = 2_000_000
 
 
 def _accepts_gzip(value: str) -> bool:
@@ -540,6 +540,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, data, body)
         except KeyError:
             self._json(404, {"error": "unknown election"}, body)
+        except OperatorGroupTooLarge:
+            self._json(413, {"error": "operator_group_too_large",
+                             "recovery": "reduce the tagged group before retrying bootstrap"}, body)
         except (ValueError, TypeError):
             self._json(400, {"error": "bad request"}, body)
         except OverflowError:

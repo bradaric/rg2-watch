@@ -816,6 +816,7 @@ def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
     meta_path = tmp_path / "data-meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert meta == {"built": data["built"], "generation": data["generation"],
+                    "model_order_signature": data["model_order_signature"],
                     "snapshot_revision": data["snapshot_revision"],
                     "snapshot_id": data["snapshot_id"], "corrections": {}}
     assert meta_path.stat().st_size < 500
