@@ -1,3 +1,4 @@
+import multiprocessing
 import threading
 
 import pytest
@@ -9,6 +10,23 @@ from rg2watch.pipeline import PROMPT_VERSION
 from test_rules import clean_report
 
 P = "662405"
+
+
+def _open_store_with_migration_pause(path, entered, release, result, fail=False):
+    def hook(stage):
+        if stage == "before_rebuild":
+            result.put("rebuild")
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError("migration test release timed out")
+        if fail and stage == "before_commit":
+            raise RuntimeError("injected migration failure")
+    try:
+        value = Store(path, migration_hook=hook)
+        result.put(("ok", value.operator_model_counts(P)))
+        value.close()
+    except Exception as exc:
+        result.put(("error", str(exc)))
 
 
 def doc(url="https://x/1.pdf", muni="Сечањ", no="1", dt=6, name="ОШ"):
@@ -276,6 +294,108 @@ def test_projection_migration_serializes_two_openers(tmp_path, monkeypatch):
     assert [item.operator_model_counts(P) for item in opened] == [{"m": 1}, {"m": 1}]
     for item in opened:
         item.close()
+
+
+def test_projection_migration_serializes_processes_and_hides_partial_state(tmp_path):
+    path = tmp_path / "process-projection.sqlite"
+    seed = Store(path)
+    seed.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    value = doc("https://x/process-model.pdf")
+    seed.apply_events(P, seed.start_sweep(P, "projection"), [Event("added", value)])
+    seed.save_analysis(value.url, AnalysisResult(
+        clean_report(), 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    with seed._lock, seed._db:
+        seed._db.execute("UPDATE operator_model_projection_meta SET marker='old'")
+    expected = seed.operator_model_counts(P)
+    seed.close()
+
+    ctx = multiprocessing.get_context("spawn")
+    entered, release, result = ctx.Event(), ctx.Event(), ctx.Queue()
+    entered_second, release_second = ctx.Event(), ctx.Event()
+    first = ctx.Process(target=_open_store_with_migration_pause,
+                        args=(path, entered, release, result))
+    second = ctx.Process(target=_open_store_with_migration_pause,
+                         args=(path, entered_second, release_second, result))
+    first.start()
+    try:
+        assert entered.wait(10)
+        second.start()
+        observer = Store(path, read_only=True)
+        try:
+            assert observer.operator_model_counts(P) == expected
+            marker = observer._db.execute(
+                "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()[0]
+            assert marker == "old"
+        finally:
+            observer.close()
+        release.set()
+        first.join(10)
+        second.join(10)
+        assert first.exitcode == second.exitcode == 0
+        messages = [result.get(timeout=2) for _ in range(3)]
+        assert messages.count("rebuild") == 1
+        assert [message for message in messages if isinstance(message, tuple)] == [
+            ("ok", expected), ("ok", expected)]
+    finally:
+        release.set()
+        for process in (first, second):
+            if process.pid is not None:
+                if process.is_alive():
+                    process.terminate()
+                process.join(2)
+
+
+def test_projection_migration_rolls_back_failed_process_then_retries(tmp_path):
+    path = tmp_path / "failed-process-projection.sqlite"
+    seed = Store(path)
+    seed.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    value = doc("https://x/failed-process-model.pdf")
+    seed.apply_events(P, seed.start_sweep(P, "projection"), [Event("added", value)])
+    seed.save_analysis(value.url, AnalysisResult(
+        clean_report(), 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    with seed._lock, seed._db:
+        seed._db.execute("UPDATE operator_model_projection_meta SET marker='old'")
+    expected = seed.operator_model_counts(P)
+    seed.close()
+
+    ctx = multiprocessing.get_context("spawn")
+    entered, release, result = ctx.Event(), ctx.Event(), ctx.Queue()
+    entered_second, release_second = ctx.Event(), ctx.Event()
+    release_second.set()
+    first = ctx.Process(target=_open_store_with_migration_pause,
+                        args=(path, entered, release, result, True))
+    second = ctx.Process(target=_open_store_with_migration_pause,
+                         args=(path, entered_second, release_second, result))
+    first.start()
+    try:
+        assert entered.wait(10)
+        second.start()
+        release.set()
+        first.join(10)
+        assert first.exitcode == 0
+        assert entered_second.wait(10), "second process must rebuild after rollback"
+        second.join(10)
+        assert second.exitcode == 0
+        messages = [result.get(timeout=2) for _ in range(4)]
+        assert messages.count("rebuild") == 2
+        assert any(message[0] == "error" and "injected" in message[1]
+                   for message in messages if isinstance(message, tuple))
+        assert ("ok", expected) in messages
+        reopened = Store(path)
+        try:
+            assert reopened.operator_model_counts(P) == expected
+            assert reopened._db.execute(
+                "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()[0] != "old"
+        finally:
+            reopened.close()
+    finally:
+        release.set()
+        release_second.set()
+        for process in (first, second):
+            if process.pid is not None:
+                if process.is_alive():
+                    process.terminate()
+                process.join(2)
 
 def test_type13_retarget_invalidates_source_old_and_new_target_groups():
     s = store()

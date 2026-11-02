@@ -395,10 +395,11 @@ def _selected_rg2_urls(rows, prompt_version: str) -> set[str]:
 
 
 class Store:
-    def __init__(self, path: Path | str, read_only: bool = False):
+    def __init__(self, path: Path | str, read_only: bool = False, migration_hook=None):
         self.path = str(path)
         self.name = Path(path).stem if str(path) != ":memory:" else "memory"  # which DB (page banner)
         self._read_only = read_only
+        self._migration_hook = migration_hook
         if read_only:
             if self.path == ":memory:":
                 raise ValueError("a separate read-only Store cannot use :memory:")
@@ -498,6 +499,8 @@ class Store:
                 "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'operator_model_%'")}
             expected = {name for name, _ in triggers}
             if current is None or current[0] != marker or not expected <= installed:
+                if self._migration_hook is not None:
+                    self._migration_hook("before_rebuild")
                 for name, _ in triggers:
                     self._db.execute(f"DROP TRIGGER IF EXISTS {name}")
                 self._db.execute("DROP TABLE IF EXISTS operator_model_counts")
@@ -531,6 +534,8 @@ class Store:
                 self._db.execute(
                     "INSERT INTO operator_model_projection_meta(id,marker) VALUES(1,?) "
                     "ON CONFLICT(id) DO UPDATE SET marker=excluded.marker", (marker,))
+                if self._migration_hook is not None:
+                    self._migration_hook("before_commit")
             self._db.commit()
         except Exception:
             self._db.rollback()
