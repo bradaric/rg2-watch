@@ -444,6 +444,16 @@ const pair = () => [response(200, {{generation:"g", model_order_signature:"o",
   await loadData();
   assert.equal(applied, 1, "mismatched pair must not apply");
   assert.equal(bootstraps, 0, "mismatched tally pair must preserve valid forms");
+  const current = [response(200, {{generation:"g", model_order_signature:"o",
+    snapshot_revision:11, snapshot_id:"C", tally:{{current:true}}}}),
+    response(200, {{generation:"g", model_order_signature:"o", snapshot_revision:11, snapshot_id:"C"}})];
+  responses.push(...current, ...current);
+  const active = loadData(), queued = loadData();
+  assert.strictEqual(active, queued, "overlapping load must share one in-flight promise");
+  await active;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(applied, 2, "queued duplicate must not apply twice");
+  assert.equal(responses.length, 0, "exactly one follow-up pair must be coalesced");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
