@@ -478,6 +478,7 @@ const child = () => null;
 const renderTally = () => {{}};
 const epoch = () => "now";
 const console = {{error: () => {{}}}};
+const clone = value => JSON.parse(JSON.stringify(value));
 function rowsFn(selector) {{
   const indexes = tableRows.map((value, index) => [value,index]).filter(([value,index]) =>
     !selector || selector(index, value)).map(([,index]) => index);
@@ -490,19 +491,19 @@ function rowsFn(selector) {{
     draw() {{ return this; }}
   }};
 }}
-rowsFn.add = additions => {{ tableRows.push(...additions); return {{draw: () => table}}; }};
+rowsFn.add = additions => {{ tableRows.push(...additions.map(clone)); return {{draw: () => table}}; }};
 table = {{rows: rowsFn}};
 {merge}
 {loading}
 let resolveData, resolveMeta;
 const oldData = new Promise(resolve => resolveData = resolve);
 const oldMeta = new Promise(resolve => resolveMeta = resolve);
-let snapshotFetches = 0;
+let snapshotFetches = 0, snapshotMode = "old";
 const response = (status, body) => ({{status, ok: status >= 200 && status < 300,
   json: () => Promise.resolve(body)}});
 async function fetch(url) {{
-  if (url.startsWith("data.json")) {{ snapshotFetches++; return oldData; }}
-  if (url.startsWith("data-meta.json")) return oldMeta;
+  if (url.startsWith("data.json")) {{ snapshotFetches++; return snapshotMode === "old" ? oldData : response(404, {{}}); }}
+  if (url.startsWith("data-meta.json")) return snapshotMode === "old" ? oldMeta : response(404, {{}});
   if (url.startsWith("operator-bootstrap")) return response(200, {{db:"d", parent:"p",
     generation:"g2", model_order_signature:"o2", revision:5, reset_required:false,
     groups:[{{kind:"station", key:"A", rows:[{{id:1, el:"p", group_kind:"station",
@@ -516,7 +517,7 @@ async function fetch(url) {{
 (async () => {{
   feedGeneration = "g1"; feedOrderSignature = "o1";
   rows = [{{id:1, el:"p", group_kind:"station", group_key:"A", doc_type:6,
-    changed_revision:4, rec:{{status:"ok"}}}}]; D.rows = rows; tableRows = [...rows];
+    changed_revision:4, rec:{{status:"ok"}}}}]; D.rows = rows; tableRows = rows.map(clone);
   const old = loadData();
   beginBootstrap(true);
   await new Promise(resolve => setImmediate(resolve));
@@ -531,6 +532,15 @@ async function fetch(url) {{
   assert.deepEqual(T, {{newer:true}}, "old-epoch 404 must not invalidate newer tally");
   assert.equal(tallyRevision, 6);
   assert.equal(tableRows[0].rec.status, "ok");
+  assert.notStrictEqual(tableRows[0], rows[0], "DataTables must own independent row objects");
+  snapshotMode = "current";
+  await loadData();
+  assert.equal(T, null);
+  assert.equal(tallyRevision, 0);
+  assert.equal(rows[0].rec.status, "updating", "global row must become Updating");
+  assert.equal(D.rows[0].rec.status, "updating", "D.rows must match global rows");
+  assert.equal(tableRows[0].rec.status, "updating", "independent DataTables row must become Updating");
+  assert.notStrictEqual(tableRows[0], rows[0], "tally invalidation must preserve independent ownership");
 }})().catch(error => {{ process.stderr.write(String(error.stack || error)); process.exit(1); }});
 """
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
