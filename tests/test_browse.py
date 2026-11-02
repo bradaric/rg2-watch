@@ -337,6 +337,9 @@ def test_operator_page_bootstraps_and_polls_feed_without_overlapping_requests():
     assert "if (feedBusy) return" in html
     assert "generation !== feedGeneration" in html
     assert '"reconnecting"' in html and '"auto-refresh paused"' in html
+    poll = html[html.index("function pollFeed("):html.index("function snapshotDecision(")]
+    assert "const epochStarted = bootstrapEpoch" in poll
+    assert poll.count("epochStarted !== bootstrapEpoch") == 2
 
 
 def test_operator_reset_clears_rendered_rows_without_synthetic_tombstones():
@@ -344,6 +347,34 @@ def test_operator_reset_clears_rendered_rows_without_synthetic_tombstones():
     assert "function clearRenderedGroups()" in html
     assert "applyFeedGroups([]," not in html
     assert "(groupRevisions.get(tag) || 0) + 1" not in html
+
+
+def test_stale_tally_is_discarded_without_clearing_form_revisions():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function invalidateTally()")
+    code = html[start:html.index("function beginBootstrap(", start)]
+    script = f"""
+const assert = require("assert");
+let T = {{old: true}}, tallyRevision = 9;
+let rows = [{{id: 1, tally_state: "selected", correctable: true,
+  rec: {{status: "ok", result: {{corrected: {{included: true}}}}}}}}];
+let D = {{rows}};
+const groupRevisions = new Map([["station\\01", 7]]);
+const deletedGroupRevisions = new Set(["station\\02"]);
+let invalidated = 0;
+const table = {{rows: () => ({{invalidate: () => ({{draw: () => invalidated++}})}})}};
+{code}
+invalidateTally();
+assert.equal(T, null);
+assert.equal(tallyRevision, 0);
+assert.equal(rows[0].rec.status, "updating");
+assert.equal(rows[0].rec.result.corrected.included, null);
+assert.equal(groupRevisions.get("station\\01"), 7);
+assert.equal(deletedGroupRevisions.has("station\\02"), true);
+assert.equal(invalidated, 1);
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_snapshot_acceptance_is_monotonic_and_epoch_scoped():

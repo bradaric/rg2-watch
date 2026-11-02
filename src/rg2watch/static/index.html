@@ -2755,8 +2755,21 @@ function operatorParent() {
   return (S && S.parent) || (D.rows[0] && D.rows[0].el) || Object.keys(D.elections || {})[0] || null;
 }
 function feedState(text) { $("built").textContent = text; }
+function invalidateTally() {
+  T = null;
+  tallyRevision = 0;
+  rows = rows.map(row => ({...row, tally_state: "updating", correctable: false,
+    rec: {status: "updating", rules: [], details: ["Updating"], gap: 0,
+      result: {corrected: {included: null, reason: "Updating"},
+        filed: {included: null, reason: "Updating"}},
+      decision_warnings: [], decision_notices: [], annulled: null, undetermined: null},
+    resolved: [], t13: []}));
+  D.rows = rows;
+  if (table) table.rows().invalidate().draw(false);
+}
 function beginBootstrap(clear = false, cursor = null) {
   if (!HTTP || bootstrapTerminal) return;
+  const parent = operatorParent();
   if (clear) {
     bootstrapEpoch++;
     feedGeneration = null; feedRevision = tallyRevision = 0; T = null;
@@ -2764,7 +2777,6 @@ function beginBootstrap(clear = false, cursor = null) {
     acceptedSnapshot = {generation: null, order: null, revision: -1, id: null};
     if (bootstrapBusy) { bootstrapResetPending = true; return; }
   } else if (bootstrapBusy) return;
-  const parent = operatorParent();
   if (!parent) { feedState("reconnecting"); setTimeout(() => beginBootstrap(clear), 1000); return; }
   bootstrapBusy = true; feedState("loading forms…");
   const epochStarted = bootstrapEpoch;
@@ -2815,12 +2827,14 @@ function pollFeed(force = false) {
   if (!force && $("auto") && !$("auto").checked) { feedState("auto-refresh paused"); return; }
   const parent = operatorParent();
   if (!parent || !feedGeneration) { beginBootstrap(false); return; }
+  const epochStarted = bootstrapEpoch;
   feedBusy = true;
   fetch("operator-feed?parent=" + encodeURIComponent(parent) + "&since=" + feedRevision,
     {cache: "no-store"})
     .then(response => response.ok ? response.json() : Promise.reject(new Error("HTTP " + response.status)))
     .then(change => {
       feedBusy = false;
+      if (epochStarted !== bootstrapEpoch) return;
       if (change.generation !== feedGeneration ||
           change.model_order_signature !== feedOrderSignature || change.reset_required) {
         beginBootstrap(true); return;
@@ -2830,7 +2844,9 @@ function pollFeed(force = false) {
       feedState(change.more ? "catching up…" : "forms current · tally " +
         (tallyRevision >= feedRevision ? "current" : "Updating"));
       if (change.more) pollFeed(true);
-    }, error => { feedBusy = false; feedState("reconnecting"); console.error("operator feed failed", error); });
+    }, error => { feedBusy = false;
+      if (epochStarted !== bootstrapEpoch) return;
+      feedState("reconnecting"); console.error("operator feed failed", error); });
 }
 function snapshotDecision(accepted, data, responseEpoch, currentEpoch) {
   if (responseEpoch !== currentEpoch) return "epoch";
@@ -2864,7 +2880,8 @@ function loadData() {
     applyData(data, true);
     return data;
   }).catch(error => { console.error("fetching tally snapshot failed", error);
-    if (!table) beginBootstrap(false); else feedState("forms current · tally stale");
+    if (!table) beginBootstrap(false);
+    else { invalidateTally(); feedState("forms current · tally stale"); }
   }).finally(() => {
     snapshotLoadPromise = null;
     if (snapshotLoadQueued) { snapshotLoadQueued = false; loadData(); }
