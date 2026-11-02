@@ -102,6 +102,42 @@ def test_operator_feed_aborted_write_emits_no_revision():
     assert s.operator_feed_state(P)[1] == before
 
 
+def test_operator_feed_visible_mutation_invalidation_matrix():
+    s = store()
+    value = doc("https://x/invalidation-matrix.pdf")
+    s.apply_events(P, s.start_sweep(P, "matrix"), [Event("added", value)])
+    document_id = s._db.execute("SELECT id FROM documents WHERE url=?", (value.url,)).fetchone()[0]
+
+    def visible(sql, args=()):
+        before = s.operator_feed_state(P)[1]
+        with s._lock, s._db:
+            s._db.execute(sql, args)
+        changes = s.operator_feed_changes(P, before, 20)
+        assert {(row["group_kind"], row["group_key"]) for row in changes} == {
+            ("station", value.station_key)}
+        assert s.operator_feed_state(P)[1] > before
+
+    visible("INSERT INTO findings(document_id,parent,rule,severity,summary,details_json) "
+            "VALUES(?,?, 'M1','HIGH','one','{}')", (document_id, P))
+    visible("UPDATE findings SET summary='two' WHERE document_id=?", (document_id,))
+    visible("DELETE FROM findings WHERE document_id=?", (document_id,))
+    visible("INSERT INTO reviews(document_id,url,verdict,note,created_at) "
+            "VALUES(?,?,'ok','n','now')", (document_id, value.url))
+    visible("INSERT INTO operator_corrections(document_id,url,action,reason,source_token,created_at) "
+            "VALUES(?,?,'correction','r','t','now')", (document_id, value.url))
+    visible("INSERT INTO classification_overrides(document_id,url,action,created_at) "
+            "VALUES(?,?,'confirm_rg2','now')", (document_id, value.url))
+    visible("INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+            "VALUES(?, 'm', ?, '{}', 'done', ?)", (document_id, PROMPT_VERSION, P))
+
+    before = s.operator_feed_state(P)[1]
+    with s._lock, s._db:
+        s._db.execute("INSERT INTO counts(parent,scope,value) VALUES(?,?,1)", (P, "visible-none"))
+        s._db.execute("INSERT INTO ai_draft_costs(parent,url,model,input_tokens,output_tokens,cost_usd,"
+                      "status,created_at) VALUES(?,?,?,1,1,0,'done','now')", (P, value.url, "m"))
+    assert s.operator_feed_state(P)[1] == before
+
+
 def test_operator_group_revision_survives_journal_pruning():
     s = store()
     value = doc("https://x/persisted-revision.pdf")
