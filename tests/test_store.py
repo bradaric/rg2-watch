@@ -1,11 +1,32 @@
+import multiprocessing
 import threading
 
 import pytest
 
 from rg2watch.models import Doc, Election, Event, Finding, Scope, doc_key
 from rg2watch.store import Store
+from rg2watch.analyze import AnalysisResult
+from rg2watch.pipeline import PROMPT_VERSION
+from test_rules import clean_report
 
 P = "662405"
+
+
+def _open_store_with_migration_pause(path, entered, release, result, fail=False):
+    def hook(stage):
+        if stage == "before_rebuild":
+            result.put("rebuild")
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError("migration test release timed out")
+        if fail and stage == "before_commit":
+            raise RuntimeError("injected migration failure")
+    try:
+        value = Store(path, migration_hook=hook)
+        result.put(("ok", value.operator_model_counts(P)))
+        value.close()
+    except Exception as exc:
+        result.put(("error", str(exc)))
 
 
 def doc(url="https://x/1.pdf", muni="Сечањ", no="1", dt=6, name="ОШ"):
@@ -16,6 +37,465 @@ def store():
     s = Store(":memory:")
     s.upsert_election(Election(P, "1", "t", "Title", "https://x"))
     return s
+
+
+def test_operator_feed_journal_is_stable_transactional_and_tagged(tmp_path):
+    path = tmp_path / "e.sqlite"
+    s = Store(path)
+    s.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    db_uuid, revision, floor = s.operator_feed_state(P)
+    assert len(db_uuid) == 32 and revision == 0 and floor == 0
+
+    first = doc("https://x/a.pdf")
+    s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", first)])
+    _, revision, _ = s.operator_feed_state(P)
+    assert revision > 0
+    assert s.operator_feed_changes(P, 0, 200)[0]["group_kind"] == "station"
+    assert s.operator_feed_changes(P, 0, 200)[0]["group_key"] == first.station_key
+
+    # Re-seeing an unchanged URL does not make an operator revision.
+    before = revision
+    s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", first)])
+    assert s.operator_feed_state(P)[1] == before
+
+    # Alert delivery is deliberately not operator-visible.
+    s.add_finding(P, Finding("X1", "HIGH", first, "problem"), first.url)
+    finding_revision = s.operator_feed_state(P)[1]
+    finding_id = s._db.execute("SELECT id FROM findings").fetchone()[0]
+    s.mark_alerted([finding_id])
+    assert s.operator_feed_state(P)[1] == finding_revision
+
+    s.close()
+    reopened = Store(path)
+    assert reopened.operator_feed_state(P)[0] == db_uuid
+    assert reopened.operator_feed_state(P)[1] == finding_revision
+
+
+def test_operator_feed_null_documents_and_move_keep_distinct_tagged_identities():
+    s = store()
+    with s._lock, s._db:
+        s._db.executemany(
+            "INSERT INTO documents(parent,station_key,doc_type,label,url,active) VALUES(?,NULL,6,?,?,1)",
+            [(P, "orphan a", "https://x/orphan-a"), (P, "orphan b", "https://x/orphan-b")])
+    changes = s.operator_feed_changes(P, 0, 200)
+    assert {(r["group_kind"], r["group_key"]) for r in changes} == {
+        ("document", "1"), ("document", "2")}
+
+    before = s.operator_feed_state(P)[1]
+    with s._lock, s._db:
+        s._db.execute("UPDATE documents SET municipality='Сечањ',station_no='1',station_key='Сечањ|1' "
+                      "WHERE url=?", ("https://x/orphan-a",))
+    moved = s.operator_feed_changes(P, before, 200)
+    assert {(r["group_kind"], r["group_key"]) for r in moved} == {
+        ("document", "1"), ("station", "Сечањ|1")}
+
+
+def test_operator_feed_aborted_write_emits_no_revision():
+    s = store()
+    before = s.operator_feed_state(P)[1]
+    with pytest.raises(RuntimeError):
+        with s._lock, s._db:
+            s._db.execute(
+                "INSERT INTO documents(parent,url,doc_type,active) VALUES(?,?,6,1)",
+                (P, "https://x/abort"))
+            raise RuntimeError("abort")
+    assert s.operator_feed_state(P)[1] == before
+
+
+def test_operator_feed_visible_mutation_invalidation_matrix():
+    s = store()
+    value = doc("https://x/invalidation-matrix.pdf")
+    s.apply_events(P, s.start_sweep(P, "matrix"), [Event("added", value)])
+    document_id = s._db.execute("SELECT id FROM documents WHERE url=?", (value.url,)).fetchone()[0]
+
+    def visible(sql, args=()):
+        before = s.operator_feed_state(P)[1]
+        with s._lock, s._db:
+            s._db.execute(sql, args)
+        changes = s.operator_feed_changes(P, before, 20)
+        assert {(row["group_kind"], row["group_key"]) for row in changes} == {
+            ("station", value.station_key)}
+        assert s.operator_feed_state(P)[1] > before
+
+    visible("INSERT INTO findings(document_id,parent,rule,severity,summary,details_json) "
+            "VALUES(?,?, 'M1','HIGH','one','{}')", (document_id, P))
+    visible("UPDATE findings SET summary='two' WHERE document_id=?", (document_id,))
+    visible("DELETE FROM findings WHERE document_id=?", (document_id,))
+    visible("INSERT INTO reviews(document_id,url,verdict,note,created_at) "
+            "VALUES(?,?,'ok','n','now')", (document_id, value.url))
+    visible("INSERT INTO operator_corrections(document_id,url,action,reason,source_token,created_at) "
+            "VALUES(?,?,'correction','r','t','now')", (document_id, value.url))
+    visible("INSERT INTO classification_overrides(document_id,url,action,created_at) "
+            "VALUES(?,?,'confirm_rg2','now')", (document_id, value.url))
+    visible("INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+            "VALUES(?, 'm', ?, '{}', 'done', ?)", (document_id, PROMPT_VERSION, P))
+
+    before = s.operator_feed_state(P)[1]
+    with s._lock, s._db:
+        s._db.execute("INSERT INTO counts(parent,scope,value) VALUES(?,?,1)", (P, "visible-none"))
+        s._db.execute("INSERT INTO ai_draft_costs(parent,url,model,input_tokens,output_tokens,cost_usd,"
+                      "status,created_at) VALUES(?,?,?,1,1,0,'done','now')", (P, value.url, "m"))
+    assert s.operator_feed_state(P)[1] == before
+
+
+def test_operator_group_revision_survives_journal_pruning():
+    s = store()
+    value = doc("https://x/persisted-revision.pdf")
+    s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", value)])
+    revision = s.operator_feed_state(P)[1]
+    assert s.operator_group_revisions(P)[("station", value.station_key)] == revision
+
+    # Pruning removes replay history, not the durable last-changed marker used by full snapshots.
+    with s._lock, s._db:
+        s._db.execute("DELETE FROM operator_feed_changes WHERE parent=?", (P,))
+
+    assert s.operator_group_revisions(P)[("station", value.station_key)] == revision
+
+
+def test_operator_model_projection_matches_legacy_selection_and_direct_sql():
+    s = store()
+    first = doc("https://x/model-1.pdf")
+    second = doc("https://x/model-2.pdf", no="2")
+    ignored = doc("https://x/model-rg9.pdf", no="3", dt=9)
+    for value in (first, second, ignored):
+        s.apply_events(P, s.start_sweep(P, "projection"), [Event("added", value)])
+    report = clean_report()
+    s.save_analysis(first.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), "v8", parent=P)
+    s.save_analysis(first.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    s.save_analysis(first.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), "v99", parent=P)
+    s.save_analysis(second.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), "v8", parent=P)
+    s.save_analysis(ignored.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {"m": 2}
+    winner = s._db.execute(
+        "SELECT a.prompt_version FROM operator_model_winners w JOIN analyses a "
+        "ON a.id=w.selected_analysis_id WHERE w.document_id=?", (1,)).fetchone()
+    assert winner[0] == PROMPT_VERSION
+
+    with s._lock, s._db:
+        s._db.execute("DELETE FROM analyses WHERE document_id=? AND prompt_version=?", (1, PROMPT_VERSION))
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {"m": 2}
+    with s._lock, s._db:
+        s._db.execute("UPDATE documents SET parent='other' WHERE id=2")
+    assert s.operator_model_counts(P) == {"m": 1}
+    assert s.operator_model_counts("other") == {"m": 1}
+
+
+def test_operator_model_projection_keeps_null_and_empty_models_distinct():
+    s = store()
+    documents = [doc(f"https://x/null-model-{i}.pdf", no=str(i)) for i in range(1, 3)]
+    for value in documents:
+        s.apply_events(P, s.start_sweep(P, "projection-null"), [Event("added", value)])
+
+    with s._lock, s._db:
+        for document_id in (1, 2):
+            s._db.execute(
+                "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+                "VALUES(?,NULL,?,'{}','done',?)", (document_id, PROMPT_VERSION, P))
+        s._db.execute(
+            "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+            "VALUES(1,'',?,'{}','done',?)", (PROMPT_VERSION, P))
+
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {
+        None: 2, "": 1}
+
+    with s._lock, s._db:
+        null_analysis = s._db.execute(
+            "SELECT id FROM analyses WHERE document_id=1 AND model IS NULL").fetchone()[0]
+        s._db.execute("UPDATE analyses SET model='named' WHERE id=?", (null_analysis,))
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {
+        None: 1, "": 1, "named": 1}
+
+    with s._lock, s._db:
+        s._db.execute("UPDATE analyses SET model=NULL,document_id=2 WHERE id=?", (null_analysis,))
+    assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION) == {
+        None: 1, "": 1}
+
+
+def test_operator_model_projection_mutation_matrix_matches_legacy_query():
+    s = store()
+    first = doc("https://x/matrix-null.pdf")
+    second = doc("https://x/matrix-empty.pdf", no="2")
+    for value in (first, second):
+        s.apply_events(P, s.start_sweep(P, "projection-matrix"), [Event("added", value)])
+    with s._lock, s._db:
+        null_id = s._db.execute(
+            "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+            "VALUES(1,NULL,?,'{}','done',?) RETURNING id", (PROMPT_VERSION, P)).fetchone()[0]
+        empty_id = s._db.execute(
+            "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+            "VALUES(2,'',?,'{}','done',?) RETURNING id", (PROMPT_VERSION, P)).fetchone()[0]
+
+    def parity():
+        assert s.operator_model_counts(P) == s.operator_model_coverage(P, PROMPT_VERSION)
+
+    parity()
+    for sql, args in (
+        ("UPDATE analyses SET status='failed' WHERE id=?", (null_id,)),
+        ("UPDATE analyses SET status='done' WHERE id=?", (null_id,)),
+        ("UPDATE analyses SET result_json=NULL WHERE id=?", (empty_id,)),
+        ("UPDATE analyses SET result_json='{}' WHERE id=?", (empty_id,)),
+        ("UPDATE analyses SET prompt_version='a1' WHERE id=?", (null_id,)),
+        ("UPDATE analyses SET prompt_version=? WHERE id=?", (PROMPT_VERSION, null_id)),
+        ("UPDATE documents SET doc_type=9 WHERE id=2", ()),
+        ("UPDATE documents SET doc_type=6 WHERE id=2", ()),
+        ("UPDATE documents SET parent='other' WHERE id=2", ()),
+        ("UPDATE documents SET parent=? WHERE id=2", (P,)),
+    ):
+        with s._lock, s._db:
+            s._db.execute(sql, args)
+        parity()
+
+    with s._lock, s._db:
+        s._db.execute("DELETE FROM analyses WHERE id=?", (null_id,))
+    parity()
+    with s._lock, s._db:
+        s._db.execute("DELETE FROM documents WHERE id=2")
+    parity()
+    assert s.operator_model_counts(P) == {}
+
+
+def test_prompt_version_has_one_dependency_neutral_owner():
+    import rg2watch.operator_feed as operator_feed
+    import rg2watch.pipeline as pipeline
+    import rg2watch.prompt_versions as prompt_versions
+    import rg2watch.store as store_module
+
+    assert prompt_versions.PROMPT_VERSION == pipeline.PROMPT_VERSION
+    assert prompt_versions.PROMPT_VERSION == operator_feed.PROMPT_VERSION
+    assert prompt_versions.PROMPT_VERSION == store_module.PROMPT_VERSION
+
+
+def test_projection_migration_rebuilds_prompt_dependent_winners_and_triggers(tmp_path, monkeypatch):
+    import rg2watch.store as store_module
+
+    path = tmp_path / "projection.sqlite"
+    s = Store(path)
+    s.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    value = doc("https://x/migrated-model.pdf")
+    s.apply_events(P, s.start_sweep(P, "projection"), [Event("added", value)])
+    report = clean_report()
+    s.save_analysis(value.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), "v8", parent=P)
+    s.save_analysis(value.url, AnalysisResult(report, 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    s.close()
+
+    monkeypatch.setattr(store_module, "PROMPT_VERSION", "v8")
+    reopened = Store(path)
+    winner = reopened._db.execute(
+        "SELECT a.prompt_version FROM operator_model_winners w JOIN analyses a "
+        "ON a.id=w.selected_analysis_id").fetchone()[0]
+    trigger_sql = reopened._db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='operator_model_analyses_insert'"
+    ).fetchone()[0]
+    assert winner == "v8"
+    assert "'v8'" in trigger_sql and "'v11'" not in trigger_sql
+    assert reopened.operator_model_counts(P) == reopened.operator_model_coverage(P, "v8")
+
+
+def test_projection_migrates_previous_nullable_schema_atomically(tmp_path):
+    path = tmp_path / "nullable-projection.sqlite"
+    seeded = Store(path)
+    seeded.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    for i in range(1, 3):
+        value = doc(f"https://x/nullable-{i}.pdf", no=str(i))
+        seeded.apply_events(P, seeded.start_sweep(P, "projection"), [Event("added", value)])
+        with seeded._lock, seeded._db:
+            seeded._db.execute(
+                "INSERT INTO analyses(document_id,model,prompt_version,result_json,status,parent) "
+                "VALUES(?,NULL,?,'{}','done',?)", (i, PROMPT_VERSION, P))
+    with seeded._lock, seeded._db:
+        for row in seeded._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'operator_model_%'"):
+            seeded._db.execute(f"DROP TRIGGER {row[0]}")
+        seeded._db.execute("DROP TABLE operator_model_counts")
+        seeded._db.execute("DROP TABLE operator_model_winners")
+        seeded._db.execute(
+            "CREATE TABLE operator_model_winners(document_id INTEGER NOT NULL,model TEXT,"
+            "parent TEXT NOT NULL,selected_analysis_id INTEGER NOT NULL,PRIMARY KEY(document_id,model))")
+        seeded._db.execute(
+            "CREATE TABLE operator_model_counts(parent TEXT NOT NULL,model TEXT,coverage INTEGER NOT NULL,"
+            "PRIMARY KEY(parent,model))")
+        seeded._db.execute("UPDATE operator_model_projection_meta SET marker=? WHERE id=1",
+                           (f"1:{PROMPT_VERSION}",))
+    seeded.close()
+
+    migrated = Store(path)
+    assert migrated.operator_model_counts(P) == migrated.operator_model_coverage(
+        P, PROMPT_VERSION) == {None: 2}
+    assert [row["name"] for row in migrated._db.execute(
+        "PRAGMA table_info(operator_model_counts)")] == [
+            "parent", "model_is_null", "model_value", "coverage"]
+    marker = migrated._db.execute(
+        "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()[0]
+    migrated.close()
+    reopened = Store(path)
+    assert reopened._db.execute(
+        "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()[0] == marker
+    assert reopened.operator_model_counts(P) == {None: 2}
+
+
+def test_projection_migration_serializes_two_openers(tmp_path, monkeypatch):
+    path = tmp_path / "concurrent-projection.sqlite"
+    seed = Store(path)
+    seed.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    value = doc("https://x/concurrent-model.pdf")
+    seed.apply_events(P, seed.start_sweep(P, "projection"), [Event("added", value)])
+    seed.save_analysis(value.url, AnalysisResult(
+        clean_report(), 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    with seed._lock, seed._db:
+        seed._db.execute("DELETE FROM operator_model_projection_meta")
+        seed._db.execute("DELETE FROM operator_model_counts")
+        seed._db.execute("DELETE FROM operator_model_winners")
+    seed.close()
+
+    barrier = threading.Barrier(2)
+    original = Store._migrate_operator_model_projection
+
+    def synchronized(self):
+        barrier.wait(timeout=5)
+        return original(self)
+
+    monkeypatch.setattr(Store, "_migrate_operator_model_projection", synchronized)
+    opened, errors = [], []
+
+    def run():
+        try:
+            opened.append(Store(path))
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert [item.operator_model_counts(P) for item in opened] == [{"m": 1}, {"m": 1}]
+    for item in opened:
+        item.close()
+
+
+def test_projection_migration_serializes_processes_and_hides_partial_state(tmp_path):
+    path = tmp_path / "process-projection.sqlite"
+    seed = Store(path)
+    seed.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    value = doc("https://x/process-model.pdf")
+    seed.apply_events(P, seed.start_sweep(P, "projection"), [Event("added", value)])
+    seed.save_analysis(value.url, AnalysisResult(
+        clean_report(), 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    with seed._lock, seed._db:
+        seed._db.execute("UPDATE operator_model_projection_meta SET marker='old'")
+    expected = seed.operator_model_counts(P)
+    seed.close()
+
+    ctx = multiprocessing.get_context("spawn")
+    entered, release, result = ctx.Event(), ctx.Event(), ctx.Queue()
+    entered_second, release_second = ctx.Event(), ctx.Event()
+    first = ctx.Process(target=_open_store_with_migration_pause,
+                        args=(path, entered, release, result))
+    second = ctx.Process(target=_open_store_with_migration_pause,
+                         args=(path, entered_second, release_second, result))
+    first.start()
+    try:
+        assert entered.wait(10)
+        second.start()
+        observer = Store(path, read_only=True)
+        try:
+            assert observer.operator_model_counts(P) == expected
+            marker = observer._db.execute(
+                "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()[0]
+            assert marker == "old"
+        finally:
+            observer.close()
+        release.set()
+        first.join(10)
+        second.join(10)
+        assert first.exitcode == second.exitcode == 0
+        messages = [result.get(timeout=2) for _ in range(3)]
+        assert messages.count("rebuild") == 1
+        assert [message for message in messages if isinstance(message, tuple)] == [
+            ("ok", expected), ("ok", expected)]
+    finally:
+        release.set()
+        for process in (first, second):
+            if process.pid is not None:
+                if process.is_alive():
+                    process.terminate()
+                process.join(2)
+
+
+def test_projection_migration_rolls_back_failed_process_then_retries(tmp_path):
+    path = tmp_path / "failed-process-projection.sqlite"
+    seed = Store(path)
+    seed.upsert_election(Election(P, "1", "t", "Title", "https://x"))
+    value = doc("https://x/failed-process-model.pdf")
+    seed.apply_events(P, seed.start_sweep(P, "projection"), [Event("added", value)])
+    seed.save_analysis(value.url, AnalysisResult(
+        clean_report(), 0, 0, 0, "m", "stop"), PROMPT_VERSION, parent=P)
+    with seed._lock, seed._db:
+        seed._db.execute("UPDATE operator_model_projection_meta SET marker='old'")
+    expected = seed.operator_model_counts(P)
+    seed.close()
+
+    ctx = multiprocessing.get_context("spawn")
+    entered, release, result = ctx.Event(), ctx.Event(), ctx.Queue()
+    entered_second, release_second = ctx.Event(), ctx.Event()
+    release_second.set()
+    first = ctx.Process(target=_open_store_with_migration_pause,
+                        args=(path, entered, release, result, True))
+    second = ctx.Process(target=_open_store_with_migration_pause,
+                         args=(path, entered_second, release_second, result))
+    first.start()
+    try:
+        assert entered.wait(10)
+        second.start()
+        release.set()
+        first.join(10)
+        assert first.exitcode == 0
+        assert entered_second.wait(10), "second process must rebuild after rollback"
+        second.join(10)
+        assert second.exitcode == 0
+        messages = [result.get(timeout=2) for _ in range(4)]
+        assert messages.count("rebuild") == 2
+        assert any(message[0] == "error" and "injected" in message[1]
+                   for message in messages if isinstance(message, tuple))
+        assert ("ok", expected) in messages
+        reopened = Store(path)
+        try:
+            assert reopened.operator_model_counts(P) == expected
+            assert reopened._db.execute(
+                "SELECT marker FROM operator_model_projection_meta WHERE id=1").fetchone()[0] != "old"
+        finally:
+            reopened.close()
+    finally:
+        release.set()
+        release_second.set()
+        for process in (first, second):
+            if process.pid is not None:
+                if process.is_alive():
+                    process.terminate()
+                process.join(2)
+
+def test_type13_retarget_invalidates_source_old_and_new_target_groups():
+    s = store()
+    source = doc("https://x/type13.pdf", no="1", dt=13)
+    old_target = doc("https://x/old-target.pdf", no="2")
+    new_target = doc("https://x/new-target.pdf", no="3")
+    s.apply_events(P, s.start_sweep(P, "rare"), [
+        Event("added", source), Event("added", old_target), Event("added", new_target)])
+    s.add_type13_resolution(source.url, old_target.url, "uncertain", "first", "token-1",
+                            None, None)
+    previous = s.latest_type13_resolution(source.url)
+    before = s.operator_feed_state(P)[1]
+
+    s.add_type13_resolution(source.url, new_target.url, "other_decision", "retarget", "token-2",
+                            None, previous["id"])
+
+    changed = {(row["group_kind"], row["group_key"])
+               for row in s.operator_feed_changes(P, before, 20)}
+    assert changed == {("station", source.station_key),
+                       ("station", old_target.station_key),
+                       ("station", new_target.station_key)}
 
 
 def test_added_then_known():
@@ -49,6 +529,35 @@ def test_replaced_marks_old_inactive():
     assert s.known_docs(P, Scope()) == {(new.station_key, 6): new}
     active = s._db.execute("SELECT active FROM documents WHERE url=?", (old.url,)).fetchone()
     assert active[0] == 0
+
+
+def test_urls_reassigned_between_stations_update_metadata_and_stay_active():
+    s = store()
+    moved = doc("https://x/moved.pdf", no="8", name="BM 8")
+    replacement = doc("https://x/replacement.pdf", no="23", name="BM 23 old")
+    station_23 = doc("https://x/station-23.pdf", no="23", name="BM 23")
+    for d in (moved, replacement, station_23):
+        s.apply_events(P, s.start_sweep(P, "rg2"), [Event("added", d)])
+    s.add_finding(P, Finding("V9", "MEDIUM", moved, "moved"), moved.url)
+    s.add_finding(P, Finding("V9", "MEDIUM", replacement, "replacement"), replacement.url)
+
+    moved_to_6 = doc(moved.url, no="6", name="BM 6")
+    replacement_at_8 = doc(replacement.url, no="8", name="BM 8")
+    s.apply_events(P, s.start_sweep(P, "rg2"), [
+        Event("added", moved_to_6),
+        Event("replaced", replacement_at_8, previous_url=moved.url),
+    ])
+
+    assert s.known_docs(P, Scope()) == {
+        doc_key(moved_to_6): moved_to_6,
+        doc_key(replacement_at_8): replacement_at_8,
+        doc_key(station_23): station_23,
+    }
+    findings = s._db.execute(
+        "SELECT d.url,f.station_no FROM findings f JOIN documents d ON d.id=f.document_id "
+        "ORDER BY d.url").fetchall()
+    assert [tuple(row) for row in findings] == [
+        (moved.url, "6"), (replacement.url, "8")]
 
 
 def test_removed_marks_inactive():

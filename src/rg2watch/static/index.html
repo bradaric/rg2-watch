@@ -406,7 +406,7 @@ stroke-width:2.5;
 <span id="presettitle" class="filtertitle">Common workflows</span>
 <button type="button" data-preset="not-counted-no-decision">Not counted, no decision</button>
 <label>Review batch <select id="reviewbatch"><option value="">Choose a batch…</option><option value="review-filed">Excluded as filed</option><option value="review-v13">No names or signatures (V13)</option><option value="review-numbers">Altered numbers</option><option value="review-integrity">Signatures &amp; scan integrity</option><option value="review-procedure">Procedural findings</option><option value="review-stats">Statistical flags</option></select></label>
-<div id="presetutils"><label><input type="checkbox" id="auto" checked> auto-refresh</label><button id="clearfilters" type="button">Clear all filters</button></div>
+<div id="presetutils"><label><input type="checkbox" id="auto" checked> auto-refresh</label><button id="reloadsnapshot" type="button">Reload tally snapshot</button><button id="clearfilters" type="button">Clear all filters</button></div>
 </div>
 <div id="filtergroups">
 <div id="scopefilters" class="filtergroup" role="group" aria-labelledby="scopetitle">
@@ -1235,23 +1235,14 @@ function retryCorrectionData(url, state, attempt) {
   if (attempt < 60) setTimeout(() => waitForCorrectionData(url, state, attempt + 1), 1000);
 }
 function waitForCorrectionData(url, state, attempt = 0) {
-  fetch("data-meta.json?t=" + Date.now(), {cache: "no-store"})
-    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
-    .then(meta => {
-      if (!correctionMetaReady(meta, url, state)) { retryCorrectionData(url, state, attempt); return null; }
-      return fetch("data.json?t=" + Date.now(), {cache: "no-store"})
-        .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)));
-    })
-    .then(data => {
-      if (!data) return;
-      if (correctionStateInData(data, url, state) && applyCorrectionData(data, url)) dataBuilt = data.built;
-      else retryCorrectionData(url, state, attempt);
-    }, e => {
-      retryCorrectionData(url, state, attempt);
-      if (attempt >= 60) console.error("refreshing corrected totals failed", e);
-    });
+  pollFeed(true); loadData();
+  const row = rows.find(item => [item, ...(item.v || [])].some(v => v.u === url &&
+    v.oc && v.oc.revision === state.revision));
+  if (row && row.rec.status !== "updating" && tallyRevision >= (row.changed_revision || 0)) return;
+  retryCorrectionData(url, state, attempt);
+  if (attempt >= 60) console.error("refreshing corrected totals is still pending");
 }
-function refreshType13Data() { dataBuilt = null; loadData(); }
+function refreshType13Data() { pollFeed(true); loadData(); }
 function submitCorrection(action) {
   const reason = $("ocreason").value, request = {url: ocUrl, action, reason, source_token: ocState.source_token};
   if (action === "correction") request.snapshot = ocReadSnapshot();
@@ -1279,7 +1270,7 @@ function resolveType13(x, action) {
   if (!reason || !reason.trim()) return;
   ocFetch("type13", {method: "POST", headers: {"Content-Type": "application/json", "X-RG2W": "1"},
     body: JSON.stringify({url: x.u, action, reason, source_token: x.source_token})})
-    .then(() => { dataBuilt = null; loadData(); }, e => alert("Type-13 resolution was not saved: " + e.message));
+    .then(() => { pollFeed(true); loadData(); }, e => alert("Type-13 resolution was not saved: " + e.message));
 }
 
 function type13Box(x) {
@@ -1288,8 +1279,9 @@ function type13Box(x) {
     (x.resolution ? "active" : "none")), " ", linksOf(x));
   if (x.evidence) line.append(mk("span", x.evidence, "mut"));
   if (x.resolution) line.append(mk("span", "resolved: " + x.resolution, "mut"));
+  if (x.updating) line.append(mk("span", "Updating verification…", "mut"));
   box.append(line);
-  if (HTTP) {
+  if (HTTP && !x.updating) {
     const actions = mk("div", null, "t13actions");
     if (x.can_edit) {
       const edit = mk("button", x.can_approve ? "Review correction" : "Enter manually");
@@ -1563,7 +1555,93 @@ function optsOf(sel2, first, items) {
   for (const [v, t] of items) sel2.append(new Option(t, v));
   sel2.value = [...sel2.options].some(o => o.value === keepv) ? keepv : "";
 }
-function applyData(data) {
+function groupTag(row) { return row.group_kind + "\0" + row.group_key; }
+const groupRevisions = new Map(), deletedGroupRevisions = new Set();
+function mergeGroupState(current, groups, tombstones) {
+  const incoming = new Map(groups.map(group => [group.kind + "\0" + group.key, group.rows || []]));
+  for (const row of current) groupRevisions.set(groupTag(row),
+    Math.max(groupRevisions.get(groupTag(row)) || 0, row.changed_revision || 0));
+  const removed = new Set();
+  for (const group of tombstones) {
+    const tag = group.kind + "\0" + group.key;
+    if (group.changed_revision == null) {
+      console.error("ignoring operator tombstone without changed_revision", group); continue;
+    }
+    const revision = group.changed_revision;
+    if (revision > (groupRevisions.get(tag) || 0)) {
+      groupRevisions.set(tag, revision); deletedGroupRevisions.add(tag); removed.add(tag);
+    }
+  }
+  const accepted = new Map();
+  for (const [tag, values] of incoming) {
+    const revision = Math.max(0, ...values.map(row => row.changed_revision || 0));
+    const old = current.filter(row => groupTag(row) === tag);
+    const known = groupRevisions.get(tag) || 0;
+    const freshTally = !deletedGroupRevisions.has(tag) && revision === known &&
+      old.some(row => row.rec && row.rec.status === "updating") &&
+      values.some(row => row.rec && row.rec.status !== "updating");
+    if (revision > known || freshTally) {
+      groupRevisions.set(tag, revision); deletedGroupRevisions.delete(tag); accepted.set(tag, values);
+    }
+  }
+  const out = current.filter(row => !removed.has(groupTag(row)) && !accepted.has(groupTag(row)));
+  for (const values of accepted.values()) out.push(...values);
+  return out;
+}
+function changedGroupTags(before, after, candidates) {
+  const values = (all, tag) => all.filter(row => groupTag(row) === tag);
+  return [...candidates].filter(tag => {
+    const oldRows = values(before, tag), newRows = values(after, tag);
+    return oldRows.length !== newRows.length || oldRows.some((row, index) => row !== newRows[index]);
+  });
+}
+function applyFeedGroups(groups, tombstones = []) {
+  const prepared = groups.map(group => ({...group, rows: (group.rows || []).map(prep)}));
+  const tags = new Set([...prepared, ...tombstones].map(group => group.kind + "\0" + group.key));
+  const shown = new Set();
+  if (table) table.rows().every(function () {
+    if (tags.has(groupTag(this.data())) && this.child.isShown())
+      shown.add(groupTag(this.data()) + "\0" + this.data().doc_type);
+  });
+  const before = rows, merged = mergeGroupState(rows, prepared, tombstones);
+  const changedTags = new Set(changedGroupTags(before, merged, tags));
+  rows = merged;
+  D.rows = rows;
+  if (!table || !changedTags.size) return;
+  table.rows((index, data) => changedTags.has(groupTag(data))).remove();
+  const additions = rows.filter(row => changedTags.has(groupTag(row)));
+  table.rows.add(additions).draw(false);
+  table.rows().every(function () {
+    if (shown.has(groupTag(this.data()) + "\0" + this.data().doc_type))
+      this.child(child(this.data())).show();
+  });
+}
+function clearRenderedGroups() {
+  if (table) table.rows().remove().draw(false);
+  rows = [];
+  D.rows = rows;
+  groupRevisions.clear();
+  deletedGroupRevisions.clear();
+}
+function applyData(data, acceptTally = false) {
+  if (table) {
+    if (feedGeneration && (data.generation !== feedGeneration ||
+        data.model_order_signature !== feedOrderSignature)) { beginBootstrap(true); return; }
+    D = {...D, ...data, rows};
+    const grouped = new Map();
+    for (const row of data.rows || []) {
+      const tag = groupTag(row);
+      if (!grouped.has(tag)) grouped.set(tag, {kind: row.group_kind, key: row.group_key, rows: []});
+      grouped.get(tag).rows.push(row);
+    }
+    applyFeedGroups([...grouped.values()]);
+    if (acceptTally) {
+      T = data.tally; tallyRevision = data.snapshot_revision || 0;
+      renderTally();
+      $("built").textContent = "tally built " + epoch(Date.parse(data.built) / 1000);
+    }
+    return;
+  }
   D = data;
   renderLegend();
   if (S) renderStatus();  // alert rule codes get their descriptions
@@ -1592,16 +1670,15 @@ function applyData(data) {
     return l; }));
   $("rulesbox").hidden = !$("rules").children.length;
   rulesSummary();
-  T = D.tally;
+  T = acceptTally ? D.tally : null;
+  feedGeneration = data.generation || feedGeneration;
+  feedOrderSignature = data.model_order_signature || feedOrderSignature;
+  feedRevision = Math.max(feedRevision, data.snapshot_revision || 0);
+  tallyRevision = data.snapshot_revision || 0;
   $("built").textContent = "built " + epoch(Date.parse(D.built) / 1000);
   const first = !table;
   if (first) { readHash(); initTable(); }
   renderTally();
-  if (first) return;
-  const shown = new Set();
-  table.rows().every(function () { if (this.child.isShown()) shown.add(this.data().id); });
-  table.clear().rows.add(rows).draw(false);
-  table.rows().every(function () { if (shown.has(this.data().id)) this.child(child(this.data())).show(); });
 }
 
 // ---- results (unofficial tally) -----------------------------------------------------------
@@ -2655,28 +2732,172 @@ $("clearfilters").addEventListener("click", () => {
   setCtl({auto: $("auto").checked});
   redraw();
 });
+$("reloadsnapshot").addEventListener("click", () => loadData());
 window.addEventListener("hashchange", () => { readHash(); if (table) table.draw(); if (T) renderTally(); });
 
-// ---- loading: fetch() over http, script re-injection from file:// ------------------------
-function inject(name, done) {
-  const s = document.createElement("script");
-  s.src = name + ".js?t=" + Date.now();
-  s.onload = () => { s.remove(); done(); };
-  s.onerror = () => { s.remove(); console.error("loading " + name + ".js failed"); };
-  document.head.append(s);
-}
+// ---- loading: revisioned forms feed and independent full tally snapshots -----------------
 function load(name, global, apply) {
   const run = d => { try { apply(d); } catch (e) { console.error("applying " + name + " failed", e); } };
-  if (HTTP) {
-    fetch(name + ".json?t=" + Date.now(), {cache: "no-store"})
-      .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
-      .then(run, e => console.error("fetching " + name + ".json failed", e));
-  } else inject(name, () => run(window[global]));
+  if (!HTTP) {
+    $("built").textContent = "Operator page requires localhost HTTP.";
+    return;
+  }
+  fetch(name + ".json?t=" + Date.now(), {cache: "no-store"})
+    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+    .then(run, e => console.error("fetching " + name + ".json failed", e));
 }
 function loadStatus() { load("status", "RG2_STATUS", applyStatus); loadReviews(); }
-let dataBuilt = null;
+let feedGeneration = null, feedOrderSignature = null, feedRevision = 0, tallyRevision = 0, feedBusy = false;
+let bootstrapBusy = false, bootstrapResetPending = false, bootstrapTerminal = false, nextTallyAt = 0;
+let bootstrapEpoch = 0, snapshotLoadPromise = null, snapshotLoadQueued = false;
+let acceptedSnapshot = {generation: null, order: null, revision: -1, id: null};
+function operatorParent() {
+  return (S && S.parent) || (D.rows[0] && D.rows[0].el) || Object.keys(D.elections || {})[0] || null;
+}
+function feedState(text) { $("built").textContent = text; }
+function staleTallyRow(row) {
+  return {...row, tally_state: "updating", correctable: false,
+    rec: {status: "updating", rules: [], details: ["Updating"], gap: 0,
+      result: {corrected: {included: null, reason: "Updating"},
+        filed: {included: null, reason: "Updating"}},
+      decision_warnings: [], decision_notices: [], annulled: null, undetermined: null},
+    resolved: [], t13: []};
+}
+function invalidateTally() {
+  T = null;
+  tallyRevision = 0;
+  acceptedSnapshot = {generation: feedGeneration || acceptedSnapshot.generation,
+    order: feedOrderSignature || acceptedSnapshot.order, revision: -1, id: null};
+  rows = rows.map(staleTallyRow);
+  D.rows = rows;
+  if (table) table.rows().every(function () { this.data(staleTallyRow(this.data())); }).draw(false);
+}
+function beginBootstrap(clear = false, cursor = null) {
+  if (!HTTP || bootstrapTerminal) return;
+  const parent = operatorParent();
+  if (clear) {
+    bootstrapEpoch++;
+    feedGeneration = null; feedRevision = tallyRevision = 0; T = null;
+    feedOrderSignature = null; clearRenderedGroups();
+    acceptedSnapshot = {generation: null, order: null, revision: -1, id: null};
+    if (bootstrapBusy) { bootstrapResetPending = true; return; }
+  } else if (bootstrapBusy) return;
+  if (!parent) { feedState("reconnecting"); setTimeout(() => beginBootstrap(clear), 1000); return; }
+  bootstrapBusy = true; feedState("loading forms…");
+  const epochStarted = bootstrapEpoch;
+  fetch("operator-bootstrap?parent=" + encodeURIComponent(parent) +
+    (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""), {cache: "no-store"})
+    .then(async response => {
+      if (response.status === 413) {
+        const detail = await response.json(), error = new Error(detail.error || "operator group too large");
+        error.bootstrapTerminal = true; throw error;
+      }
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    })
+    .then(page => {
+      bootstrapBusy = false;
+      if (epochStarted !== bootstrapEpoch) {
+        if (bootstrapResetPending) { bootstrapResetPending = false; beginBootstrap(false); }
+        return;
+      }
+      if (page.reset_required) { setTimeout(() => beginBootstrap(true), 500); return; }
+      if (feedGeneration && (page.generation !== feedGeneration ||
+          page.model_order_signature !== feedOrderSignature)) { beginBootstrap(true); return; }
+      feedGeneration = page.generation; feedOrderSignature = page.model_order_signature;
+      feedRevision = page.revision;
+      if (!table) applyData({db: page.db, parent, generation: page.generation,
+        model_order_signature: page.model_order_signature,
+        snapshot_revision: 0, built: "", interval: page.interval,
+        elections: {[parent]: page.election.title}, rows: page.groups.flatMap(group => group.rows),
+        tally: null, rules: page.rules || {}});
+      else applyFeedGroups(page.groups);
+      if (page.cursor) beginBootstrap(false, page.cursor);
+      else { feedState("forms current · tally Updating"); pollFeed(true); }
+    }, error => { bootstrapBusy = false;
+      if (epochStarted !== bootstrapEpoch) {
+        if (bootstrapResetPending) { bootstrapResetPending = false; beginBootstrap(false); }
+        return;
+      }
+      if (error.bootstrapTerminal) {
+        bootstrapTerminal = true;
+        feedState("forms unavailable: one group exceeds 2 MB; reduce that group and reload");
+        console.error("operator bootstrap stopped", error); return;
+      }
+      feedState("reconnecting"); console.error("operator bootstrap failed", error);
+      setTimeout(() => beginBootstrap(clear, cursor), 2000); });
+}
+function pollFeed(force = false) {
+  if (feedBusy) return;
+  if (!force && $("auto") && !$("auto").checked) { feedState("auto-refresh paused"); return; }
+  const parent = operatorParent();
+  if (!parent || !feedGeneration) { beginBootstrap(false); return; }
+  const epochStarted = bootstrapEpoch;
+  feedBusy = true;
+  fetch("operator-feed?parent=" + encodeURIComponent(parent) + "&since=" + feedRevision,
+    {cache: "no-store"})
+    .then(response => response.ok ? response.json() : Promise.reject(new Error("HTTP " + response.status)))
+    .then(change => {
+      feedBusy = false;
+      if (epochStarted !== bootstrapEpoch) return;
+      if (change.generation !== feedGeneration ||
+          change.model_order_signature !== feedOrderSignature || change.reset_required) {
+        beginBootstrap(true); return;
+      }
+      applyFeedGroups(change.groups || [], change.tombstones || []);
+      feedRevision = change.through;
+      feedState(change.more ? "catching up…" : "forms current · tally " +
+        (tallyRevision >= feedRevision ? "current" : "Updating"));
+      if (change.more) pollFeed(true);
+    }, error => { feedBusy = false;
+      if (epochStarted !== bootstrapEpoch) return;
+      feedState("reconnecting"); console.error("operator feed failed", error); });
+}
+function snapshotDecision(accepted, data, responseEpoch, currentEpoch) {
+  if (responseEpoch !== currentEpoch) return "epoch";
+  if ((accepted.generation && data.generation !== accepted.generation) ||
+      (accepted.order && data.model_order_signature !== accepted.order)) return "reset";
+  if (data.snapshot_revision < accepted.revision) return "stale";
+  if (data.snapshot_id === accepted.id) return "duplicate";
+  return "accept";
+}
 function loadData() {
-  load("data", "RG2_DATA", d => { if (d && d.built !== dataBuilt) { applyData(d); dataBuilt = d.built; } });
+  if (!HTTP) { feedState("Open this operator page through http://127.0.0.1 (run rg2watch serve)."); return; }
+  if (snapshotLoadPromise) { snapshotLoadQueued = true; return snapshotLoadPromise; }
+  const epochStarted = bootstrapEpoch;
+  snapshotLoadPromise = Promise.all([
+    fetch("data.json?t=" + Date.now(), {cache: "no-store"}),
+    fetch("data-meta.json?t=" + Date.now(), {cache: "no-store"})
+  ]).then(async ([dataResponse, metaResponse]) => {
+    if (epochStarted !== bootstrapEpoch) return null;
+    if (dataResponse.status === 404 || metaResponse.status === 404) {
+      if (!table) beginBootstrap(false);
+      else { invalidateTally(); feedState("forms current · tally stale"); }
+      return null;
+    }
+    if (!dataResponse.ok || !metaResponse.ok) throw new Error("snapshot HTTP error");
+    const data = await dataResponse.json(), meta = await metaResponse.json();
+    if (data.snapshot_id !== meta.snapshot_id || data.generation !== meta.generation ||
+        data.model_order_signature !== meta.model_order_signature ||
+        data.snapshot_revision !== meta.snapshot_revision) throw new Error("snapshot pair mismatch");
+    if (feedGeneration && (data.generation !== feedGeneration ||
+        data.model_order_signature !== feedOrderSignature)) { beginBootstrap(true); return null; }
+    const decision = snapshotDecision(acceptedSnapshot, data, epochStarted, bootstrapEpoch);
+    if (decision === "reset") { beginBootstrap(true); return null; }
+    if (decision !== "accept") return null;
+    acceptedSnapshot = {generation: data.generation, order: data.model_order_signature,
+      revision: data.snapshot_revision, id: data.snapshot_id};
+    applyData(data, true);
+    return data;
+  }).catch(error => { console.error("fetching tally snapshot failed", error);
+    if (epochStarted !== bootstrapEpoch) return;
+    if (!table) beginBootstrap(false);
+    else { invalidateTally(); feedState("forms current · tally stale"); }
+  }).finally(() => {
+    snapshotLoadPromise = null;
+    if (snapshotLoadQueued) { snapshotLoadQueued = false; loadData(); }
+  });
+  return snapshotLoadPromise;
 }
 loadStatus();
 setInterval(loadStatus, STATUS_EVERY_MS);
@@ -2684,8 +2905,10 @@ setInterval(tickStatus, 5000);
 // first load always; later loads only while auto-refresh is on, at the period given by the data (0 = off)
 loadData();
 function loop() {
-  if (!table || ($("auto").checked && D.interval > 0)) loadData();
-  setTimeout(loop, Math.max(5, D.interval || 10) * 1000);
+  pollFeed(false);
+  const now = Date.now();
+  if (D.interval > 0 && now >= nextTallyAt) { nextTallyAt = now + D.interval * 1000; loadData(); }
+  setTimeout(loop, 10000);
 }
 setTimeout(loop, 10000);
 setInterval(loadOfficialResults, 60000);

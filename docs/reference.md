@@ -8,11 +8,13 @@ also documented in [rg2watch.example.toml](../rg2watch.example.toml); use
 
 ## File layout and local server
 
-Each database has its own page folder, `<db dir>/<db stem>/` (`data/election-662405.sqlite` -> `data/election-662405/`: `index.html`, `data.*`, `status.*`, the vendored libraries); the PDF cache stays shared at `<db dir>/pdfs/`. Two elections can run side by side (`serve` on one DB, `watch` on another): they never write the same files, and each server only accepts review verdicts for its own DB. `status.json` and `data.json` carry the DB name and the page shows a red banner if they disagree. Old `index.html`, `data.*`, `status.*` and library files directly in `data/` are from the earlier shared layout and are safe to delete.
+Each database has its own page folder, `<db dir>/<db stem>/` (`data/election-662405.sqlite` -> `data/election-662405/`: `index.html`, JSON snapshots and vendored libraries); the PDF cache stays shared at `<db dir>/pdfs/`. Operator output is JSON-only; obsolete `data.js`/`status.js` twins are not generated. Two elections can run side by side (`serve` on one DB, `watch` on another): they never write the same files, and each server only accepts review verdicts for its own DB. `status.json` and `data.json` carry the DB name and the page shows a red banner if they disagree. Old files directly in `data/` are from the earlier shared layout and are safe to delete after verifying they are not current snapshots.
 
 `watch` serves the page on `serve_port` (default 8770; `--serve-port`, `0` = off); if that port is busy it tries the next ones up to +10. The URL actually used is printed (`page: http://127.0.0.1:PORT`), recorded in `status.json` and shown by `rg2watch status`; open the URL it prints. `rg2watch serve [--port N]` serves the same files without
-watching (same port fallback, prints the URL). The server binds 127.0.0.1 only, answers GET/HEAD, and serves a fixed allow-list
-(`index.html`, `status.json`, `data.json`, `reviews.json` (live verdicts), the vendored libraries, `pdfs/<sha256>.pdf`; the `.js` twins are not served, and cross-site requests are refused); the DB,
+watching (same port fallback, prints the URL before a missing or stale tally is rebuilt). The private
+operator page must be opened at that HTTP URL, never with `file://`. The server binds 127.0.0.1 only,
+answers GET/HEAD, and serves a fixed allow-list
+(`index.html`, `status.json`, `data.json`, `data-meta.json`, `reviews.json` (live verdicts), the vendored libraries, `pdfs/<sha256>.pdf`; the `.js` twins are not served, and cross-site requests are refused). Strict same-origin `/operator-feed` and `/operator-bootstrap` reads return bounded revision pages. The DB,
 `.env` and everything else are 404. No free port: a warning, and the watcher carries on. Writes are
 limited to `POST /review`, audited numeric-correction and document-classification routes,
 and the explicit case preparation/publication routes described in [Review and sharing](review-and-sharing.md#public-case-handoff-google-drive-and-viber-copy). They
@@ -24,6 +26,12 @@ an exact stored document URL. Classification accepts only confirm-as-RG-2, quara
 RG-7, or revocation for a
 RIK-listed RG-2 URL; review accepts verdict `ok`/`escalate`/`unsure` and a note of at most 500
 characters. Anything else is 403/400 and nothing is written.
+
+SQLite stores a stable database-instance ID and a transactionally updated operator-change journal.
+The journal retains the newest 10,000 revisions per election. A browser behind the durable floor, a
+restored older database, or a changed presentation/config generation discards incompatible form and
+tally state and bootstraps again. All full snapshot writers share a per-database/page process lock.
+The feed never invokes RIK or a model and never returns token inputs or secrets.
 
 ## Politeness
 

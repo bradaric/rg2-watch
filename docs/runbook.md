@@ -15,7 +15,7 @@ One argument: the election ID (digits). Databases are `data/election-<id>.sqlite
 - `scripts/night.sh <id>` - election night: register if needed, watch with analysis (`--watch-only`, `--baseline` if starting late)
 - `scripts/rehearse.sh <id>` - rehearsal on a past election, runs until done; add `--no-ntfy`
   to print and handle alerts without phone pushes: `scripts/rehearse.sh <id> --no-ntfy`
-- `scripts/view.sh <id>` - rebuild the page and serve it (no RIK, no API)
+- `scripts/view.sh <id>` - serve immediately; bootstrap forms and refresh the tally in background (no RIK, no API)
 - `scripts/status.sh <id>` - compact status: counts, spend, review state, watcher running or not
 - `scripts/escalated.sh <id>` - forms marked ESCALATE
 - `scripts/tally.sh <id>` - unofficial totals
@@ -104,7 +104,10 @@ change the file or environment variable.
      recorded silently, only later changes alert. Already-published RG-2s are still analysed.
 3. Open the URL `watch` prints (`page: http://127.0.0.1:PORT`, normally 8770; the next free port if
    busy; `rg2watch serve` prints it too when not watching): a live status panel, then every RG-2 with its alerts, second opinions, filters and
-   PDF links. The table refreshes every 2 minutes and the panel every 10 s, without a reload.
+   PDF links. Changed form groups normally merge on the next roughly 10-second poll (a target, not an
+   SLA); the panel also updates every 10 s. The complete tally keeps its configured background cadence.
+   **Updating** in Numbers or Result inclusion means rows are newer than that tally. Check the shown
+   tally-build time before relying on totals.
 4. What arrives on the phone:
    - By default, operational alerts only: RIK unreachable/recovered, analysis paused, spend cap,
      and one mass-replacement alert when a sweep replaces more than 20 documents.
@@ -151,6 +154,9 @@ logout:
 | "PDF downloads blocked" | RIK refusing downloads (consecutive 401/403), or at least 10 cumulative download deferrals | Nothing; downloads recover automatically. A 401/403 streak pauses downloads; an HTTP 404 instead breaks that streak. Listing changes are still detected. |
 | Forms stuck as failed (X2/D3/X1, LOW) | Analysis gave up on them | After fixing the cause: `uv run --env-file .env rg2watch requeue --parent <parent> --failed`, then keep `watch --analyze` running. |
 | Watch started without `--analyze` | Forms recorded, not analysed | Restart with `--analyze`, and `uv run rg2watch requeue --parent <parent> --skipped`. |
+| Page says “reconnecting” | Feed timeout, expired journal history, restored DB, generation change, or effective model-order signature change | Leave it open: it retries and re-bootstraps. If it persists, reload the localhost URL and inspect the `serve`/`watch` terminal. |
+| Forms unavailable: one group exceeds 2 MB | One complete tagged station/document group exceeds the hard response limit | This is terminal for that bootstrap cursor (automatic retries stop). Inspect the local server log, reduce/archive the exceptional duplicate versions in a controlled maintenance window, then reload. Do not treat missing forms as current. |
+| Forms current, tally stale/Updating | Full snapshot is absent, failed, busy or behind the feed | Keep the page open. `watch`/`serve` retries on `browse_interval_s`; run `rg2watch browse` manually only if no builder is active. |
 
 Each election has its own page folder (`data/election-<id>/`, next to `data/election-<id>.sqlite`), so
 two elections can run side by side (e.g. `watch` on one, `scripts/view.sh` on another, on different
@@ -164,6 +170,18 @@ shared layout and safe to delete.
   replaced/removed, "models disagree" and free text. Rebuild it any time:
 
       uv run rg2watch browse --config rg2watch.toml
+
+  This complete rebuild is a recovery/manual action. It exits with
+  `operator snapshot build already running; try again later` rather than racing `watch` or `serve`.
+
+### Operator-feed migration / deployment checklist
+
+This code change does not authorize a live restart or database migration. In an approved operational
+window: back up the election database with SQLite online backup while the watcher runs, or stop it
+gracefully and copy it; verify the backup; test opening the copy so the idempotent journal migration
+succeeds; then restart the watcher. Verify status/RIK coverage, an empty and changed feed response,
+and BM 6/8/23 regression behavior. Roll back code and restore the verified backup if migration or
+post-restart checks fail. Never test migration, pruning, or performance against the production DB.
 
 - **One form, a second opinion** (e.g. with Opus, or a local model for free):
 

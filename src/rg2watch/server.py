@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .operator_corrections import CorrectionConflict
+from .operator_feed import OPERATOR_MAX_BYTES, OperatorGroupTooLarge
 from .store import VERDICTS
 
 log = logging.getLogger("rg2watch.server")
@@ -512,7 +513,49 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(502, {"error": "live RIK station lookup failed"})
         return True
 
+    def _operator_get(self, body: bool = True) -> bool:
+        parsed = urlsplit(self.path)
+        if parsed.path not in ("/operator-feed", "/operator-bootstrap"):
+            return False
+        if self.server.operator_feed is None or not self._same_origin():
+            self._json(403, {"error": "forbidden"}, body)
+            return True
+        try:
+            values = parse_qs(parsed.query, strict_parsing=True)
+            if parsed.path == "/operator-feed":
+                if set(values) != {"parent", "since"} or any(len(value) != 1 for value in values.values()):
+                    raise ValueError("expected one parent and since query parameter")
+                raw_since = values["since"][0]
+                if not re.fullmatch(r"0|[1-9][0-9]{0,19}", raw_since):
+                    raise ValueError("invalid revision")
+                data = self.server.operator_feed.feed(values["parent"][0], int(raw_since))
+            else:
+                if set(values) not in ({"parent"}, {"parent", "cursor"}) \
+                        or any(len(value) != 1 for value in values.values()):
+                    raise ValueError("expected one parent and optional cursor query parameter")
+                data = self.server.operator_feed.bootstrap(
+                    values["parent"][0], values.get("cursor", [None])[0])
+            if len(json.dumps(data, ensure_ascii=True).encode()) > OPERATOR_MAX_BYTES:
+                raise OverflowError("operator response exceeded its bound")
+            self._json(200, data, body)
+        except KeyError:
+            self._json(404, {"error": "unknown election"}, body)
+        except OperatorGroupTooLarge:
+            self._json(413, {"error": "operator_group_too_large",
+                             "recovery": "reduce the tagged group before retrying bootstrap"}, body)
+        except (ValueError, TypeError):
+            self._json(400, {"error": "bad request"}, body)
+        except OverflowError:
+            log.error("operator feed response exceeded %d bytes", OPERATOR_MAX_BYTES)
+            self._json(500, {"error": "operator response too large"}, body)
+        except Exception:
+            log.exception("operator feed could not be read")
+            self._json(500, {"error": "operator feed could not be read"}, body)
+        return True
+
     def do_GET(self) -> None:
+        if self._operator_get():
+            return
         if self._station_get():
             return
         if self._type13_get():
@@ -524,6 +567,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(True)
 
     def do_HEAD(self) -> None:
+        if self._operator_get(False):
+            return
         self._send(False)
 
     def _refuse(self) -> None:
@@ -542,7 +587,7 @@ def start_server(out_dir: Path, cache_dir: Path, port: int,
                    get_reviews: Callable[[], dict] | None = None,
                    put_review: Callable[[str, str, str | None], dict | None] | None = None,
                     case_api=None, correction_api=None, classification_api=None, type13_api=None,
-                    station_api=None
+                     station_api=None, operator_feed=None
                  ) -> ThreadingHTTPServer | None:
     """Serve `out_dir` (+ cached PDFs) in a daemon thread; None when the port is unavailable.
     `get_reviews` serves GET /reviews.json, `put_review(url, verdict, note)` backs POST /review,
@@ -561,6 +606,7 @@ def start_server(out_dir: Path, cache_dir: Path, port: int,
     server.classification_api = classification_api
     server.type13_api = type13_api
     server.station_api = station_api
+    server.operator_feed = operator_feed
     threading.Thread(target=server.serve_forever, name="web", daemon=True).start()
     log.info("browse page at http://127.0.0.1:%d", server.server_port)
     return server

@@ -8,7 +8,8 @@ All commands run from the repository root.
 ## Browse page and status panel
 
 Open the URL printed by `watch` or `serve`. For an existing election database,
-`scripts/view.sh <id>` rebuilds and serves the page without calling RIK or a model API.
+`scripts/view.sh <id>` serves the page immediately without calling RIK or a model API. It bootstraps
+forms from SQLite while a complete tally snapshot is built in the background.
 See [File layout and local server](reference.md#file-layout-and-local-server) for paths and server restrictions.
 
 - **Forms table** (DataTables + jQuery, vendored in `src/rg2watch/static/`, versions and sha256 in
@@ -38,11 +39,13 @@ See [File layout and local server](reference.md#file-layout-and-local-server) fo
   analysis (model, queued/running/done/failed/retrying, pause reason, spend vs cap, seconds per form,
   time to clear the queue), the last 20 alerts and ntfy delivery. A red banner "watcher not running /
   stalled since HH:MM" appears when the status is older than 60 s.
-- **How it updates:** `watch` writes `status.js/json` every 10 s and `data.js/json` every
-  `browse_interval_s` (0 = off) from daemon threads, atomically; failures are logged and never touch
-  the watch loop. `watch --once` builds nothing. Over http the page polls the `.json` files; opened as
-  a file it re-injects the `.js` files. `rg2watch browse` writes everything once with the status
-  "watcher not running" (`--out` overrides the page location).
+- **How it updates:** the HTTP-only page polls a bounded, revisioned forms feed about every 10 seconds
+  and merges only changed station groups. This is a latency goal, not an SLA. The status panel remains
+  on its 10-second clock. Complete `data.json` and `data-meta.json` tally snapshots remain on
+  `browse_interval_s`; changed rows show **Updating** for Numbers and Result inclusion until a
+  same-generation tally covers their revision. `watch --once` builds nothing. `rg2watch browse`
+  manually writes one complete snapshot; if another process owns the builder lock it exits promptly
+  without touching files. The private operator page cannot be opened with `file://`.
 
 ## Operator review verdicts
 
@@ -62,7 +65,7 @@ ntfy message is sent for a verdict.
   version was escalated shows "older version escalated", stays under "escalated" and in the count,
   and its new version is still to review if it has findings. "Escalated CSV" downloads every
   escalated version (station, which version, RIK link, findings, note, time; formula cells
-  escaped). Notes lose control characters. Opened as a file the page shows the verdicts of the last build,
+  escaped). Notes lose control characters.
   read-only.
 - **CLI:** `rg2watch review <url> ok|escalate|unsure [--note TEXT]`, and
   `rg2watch review --list escalated|ok|unsure|todo [--parent P]` (per URL; a version that was

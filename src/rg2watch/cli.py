@@ -18,8 +18,9 @@ import httpx
 from .analyze import (AnalysisError, OllamaUnavailable, analyze_document, is_ollama, is_opencode,
                       parse_opencode_model, stored_model)
 from .batch import ARITHMETIC_PROMPT_VERSION, ADHOC, describe_estimate, run_batch, select_forms
-from .browse import (build_page, copy_static, default_parent, record_review, review_record,
-                     reviews_payload, write_status)
+from .browse import (SnapshotBusy, SnapshotGenerationConflict, build_page, copy_static,
+                     default_parent, record_review, review_record, reviews_payload,
+                     snapshot_generation_lease, write_status)
 from .config import Config, UnknownPrice, load_config, model_prices
 from .evaluate import OUTPUT_TOKENS, TOKENS_PER_TILE, estimate_cost, format_table, load_labels
 from .evaluate import PARENT as EVAL_PARENT
@@ -33,6 +34,7 @@ from .opencode_client import OpenCodeClient, OpenCodeError
 from .official_results import (OfficialResultsClient, official_results_supported,
                                write_official_results)
 from .operator_corrections import OperatorCorrections, Type13Corrections
+from .operator_feed import OperatorFeed, generation_token
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION, AnalysisPipeline
 from .public_results import write_public_results
 from .render import RenderError, render_tiles
@@ -339,11 +341,19 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
                correction_change=None, rik_client: RikClient | None = None):
     """Serve the page on `port`, else the next free port up to +10; None when none is free."""
     case_api = _publication_api(store, cfg) if cfg is not None else None
+    effective_cfg = cfg or Config()
+    feed = OperatorFeed(store, effective_cfg, cache_dir)
+    generation_lease = None
+    try:
+        parent = default_parent(store, None)
+        generation_lease = snapshot_generation_lease(
+            store, page_dir / "index.html", generation_token(store, effective_cfg, parent))
+    except SnapshotGenerationConflict:
+        log.error("incompatible operator snapshot generation is active; serving without publishing")
     if cfg is not None:
         expected_rows_cache = {}
-        refresh = correction_change or (lambda: build_page(
-            store, page_dir / "index.html", cache_dir, cfg=cfg,
-            interval=cfg.browse_interval_s, with_status=False))
+        refresh = correction_change or (lambda: _background_snapshot(
+            store, page_dir / "index.html", cache_dir, cfg, False))
         correction_api = OperatorCorrections(
             store, cfg, stored_model(cfg.model), on_change=refresh,
             expected_rows_cache=expected_rows_cache)
@@ -383,8 +393,17 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
 
     for p in range(port, min(port + PORT_TRIES, 65536)):
         server = start_server(page_dir, cache_dir, p, *_review_api(store), case_api,
-                               correction_api, classification_api, type13_api, station_api)
+                               correction_api, classification_api, type13_api, station_api, feed)
         if server is not None:
+            server.generation_lease = generation_lease
+            if generation_lease is not None and hasattr(server, "server_close"):
+                close_server = server.server_close
+                def close_with_generation_lease():
+                    lease, server.generation_lease = server.generation_lease, None
+                    if lease is not None:
+                        lease.close()
+                    close_server()
+                server.server_close = close_with_generation_lease
             if p != port:
                 log.warning("port %d busy, using %d", port, p)
             return server
@@ -392,6 +411,8 @@ def _start_web(page_dir: Path, cache_dir: Path, port: int, store: Store, cfg: Co
         case_api.close()
     if station_api is not None:
         station_api.close()
+    if generation_lease is not None:
+        generation_lease.close()
     log.warning("no free web port in %d-%d", port, port + PORT_TRIES - 1)
     return None
 
@@ -411,8 +432,12 @@ def _cmd_browse(args) -> int:
     store = _open_store(cfg)
     try:
         out = args.out or _browse_path(cfg)
-        n = build_page(store, out, _cache_dir(cfg), args.parent, cfg,
-                       with_status=not _watcher_live(out.resolve().parent))
+        try:
+            n = build_page(store, out, _cache_dir(cfg), args.parent, cfg,
+                           with_status=not _watcher_live(out.resolve().parent))
+        except SnapshotBusy:
+            print("operator snapshot build already running; try again later", file=sys.stderr)
+            return 1
     finally:
         store.close()
     print(f"{out} ({n} form(s))")
@@ -457,6 +482,17 @@ def _background(name: str, stop: threading.Event, period: float, fn, first=None,
     t = threading.Thread(target=run, name=name, daemon=True)
     t.start()
     return t
+
+
+def _background_snapshot(store: Store, out: Path, cache_dir: Path, cfg: Config,
+                         with_status: bool, cache: dict | None = None) -> bool:
+    try:
+        build_page(store, out, cache_dir, None, cfg, cfg.browse_interval_s,
+                   with_status, cache)
+        return True
+    except SnapshotBusy:
+        log.info("operator snapshot build already running; background build skipped")
+        return False
 
 
 def _cmd_tally(args) -> int:
@@ -524,29 +560,57 @@ def _cmd_serve(args) -> int:
     out = _browse_path(cfg)
     copy_static(out.parent)
     store = _open_store(cfg)  # stays open: POST /review writes verdicts
+    stop = threading.Event()
+    builder = None
     try:
-        if not (out.parent / "data.json").is_file():
-            build_page(store, out, _cache_dir(cfg), cfg=cfg,
-                       with_status=not _watcher_live(out.resolve().parent))
+        if not (out.parent / "status.json").is_file():
+            write_status(store, out, None, cache_dir=_cache_dir(cfg))
         server = _start_web(out.parent, _cache_dir(cfg), port, store, cfg)
         if server is None:
             print(f"no free port in {port}-{port + PORT_TRIES - 1}", file=sys.stderr)
             return 1
         print(f"page: http://127.0.0.1:{server.server_port}", flush=True)
+        opinions = {}
+
+        def refresh_snapshot():
+            if _snapshot_stale(store, out, cfg):
+                _background_snapshot(store, out, _cache_dir(cfg), cfg,
+                                     not _watcher_live(out.resolve().parent), opinions)
+
+        builder = _background("serve-browse", stop, max(1, cfg.browse_interval_s or 120),
+                              refresh_snapshot)
         try:
             threading.Event().wait()
         except KeyboardInterrupt:
             log.info("interrupted, shutting down")
         finally:
+            stop.set()
             server.shutdown()
             server.server_close()
             if server.case_api is not None:
                 server.case_api.close()
             if server.station_api is not None:
                 server.station_api.close()
+            if builder is not None:
+                builder.join(HELPER_JOIN_S)
         return 0
     finally:
         store.close()
+
+
+def _snapshot_stale(store: Store, out: Path, cfg: Config) -> bool:
+    try:
+        data = json.loads((out.parent / "data.json").read_text(encoding="utf-8"))
+        meta = json.loads((out.parent / "data-meta.json").read_text(encoding="utf-8"))
+        parent = default_parent(store, None)
+        generation = OperatorFeed(store, cfg, _cache_dir(cfg)).generation(parent)
+        revision = store.operator_feed_state(parent)[1]
+        return not (data.get("snapshot_id") == meta.get("snapshot_id")
+                    and data.get("generation") == meta.get("generation") == generation
+                    and data.get("snapshot_revision") == meta.get("snapshot_revision")
+                    and data.get("snapshot_revision", -1) >= revision)
+    except (OSError, ValueError, TypeError, KeyError):
+        return True
 
 
 def _cmd_review(args) -> int:
@@ -961,9 +1025,10 @@ def _run_watch(args, cfg: Config) -> int:
                     store, _browse_path(cfg), parent, live(), _cache_dir(cfg)),
                     first=lambda: copy_static(_browse_path(cfg).parent)))
                 if cfg.browse_interval_s > 0:
-                    threads.append(_background("browse", stop, cfg.browse_interval_s, lambda: build_page(
-                        store, _browse_path(cfg), _cache_dir(cfg), None, cfg, cfg.browse_interval_s,
-                        False, opinions), wake=browse_wake))
+                    threads.append(_background(
+                        "browse", stop, cfg.browse_interval_s,
+                        lambda: _background_snapshot(store, _browse_path(cfg), _cache_dir(cfg),
+                                                     cfg, False, opinions), wake=browse_wake))
             while True:
                 try:
                     watcher.run_once()
@@ -1022,8 +1087,9 @@ def _run_watch(args, cfg: Config) -> int:
                         write_status(store, _browse_path(cfg), parent, live,
                                      _cache_dir(cfg))  # no "watcher": stopped
                         if cfg.browse_interval_s > 0:
-                            build_page(store, _browse_path(cfg), _cache_dir(cfg), None, cfg,
-                                       cfg.browse_interval_s, False, opinions)
+                            if not _background_snapshot(
+                                    store, _browse_path(cfg), _cache_dir(cfg), cfg, False, opinions):
+                                log.warning("final operator snapshot skipped because a build is running")
                     except Exception:
                         log.exception("final delivery or page build failed")
                     _print_summary(store, cfg.db_path, parent, set(only) if only else None, started,

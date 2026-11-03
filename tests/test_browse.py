@@ -7,6 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+import pytest
 import rg2watch.cli as cli
 from rg2watch.pipeline import PROMPT_VERSION
 from rg2watch.analyze import AnalysisResult
@@ -56,6 +57,22 @@ def test_groups_versions_and_states(tmp_path):
     assert by_no["1"]["doc_type"] == 6 and by_no["1"]["doc_type_label"] == "РГ-2"
     assert [v["rik"] for v in by_no["1"]["v"]] == [old.url]
     assert by_no["2"]["state"] == "removed"
+
+
+def test_removed_rg2_is_not_described_as_superseded_by_repeat_vote(tmp_path):
+    s = store()
+    gone = doc(BASE + "/extfile/gone.pdf")
+    add(s, gone)
+    s.save_analysis(gone.url, AnalysisResult(clean_report(), 0, 0, 0, "model", "stop"),
+                    PROMPT_VERSION, parent=P)
+    add(s, gone, "removed")
+
+    data = build_data(s, tmp_path, parent=P, cfg=Config(model="model"))
+
+    assert data["rows"][0]["rec"]["result"] == {
+        "corrected": {"included": None, "reason": "removed from RIK"},
+        "filed": {"included": None, "reason": "removed from RIK"},
+    }
 
 
 def test_form_rows_expose_nsnm_council(tmp_path):
@@ -275,6 +292,283 @@ assert.equal(resultInclusionStatus(result(null, null)), "not-in-tally");
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert 'ri === "excluded-filed" ? r.rec.result.filed.included === false' in html
+
+
+def test_operator_group_merge_is_tagged_and_never_regresses_newer_rows():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function groupTag(")
+    code = html[start:html.index("function applyFeedGroups(", start)]
+    script = f"""
+const assert = require("assert");
+{code}
+const row = (kind, key, type, revision, id) => ({{group_kind: kind, group_key: key,
+  doc_type: type, changed_revision: revision, id}});
+let current = [row("station", "A", 6, 5, 1), row("station", "A", 10, 5, 2),
+  row("document", "9", 6, 3, 9), row("station", "B", 6, 8, 3)];
+current = mergeGroupState(current,
+  [{{kind: "station", key: "A", rows: [row("station", "A", 6, 7, 4)]}}], []);
+assert.deepEqual(current.map(x => x.id), [9, 3, 4]);
+current = mergeGroupState(current,
+  [{{kind: "station", key: "B", rows: [row("station", "B", 6, 7, 30)]}}], []);
+assert.deepEqual(current.map(x => x.id), [9, 3, 4]); // stale feed cannot replace revision 8
+const beforeStale = current, afterStale = mergeGroupState(current,
+  [{{kind: "station", key: "B", rows: [row("station", "B", 6, 7, 31)]}}], []);
+assert.deepEqual(changedGroupTags(beforeStale, afterStale, new Set(["station\\0B"])), []);
+current = mergeGroupState(current, [], [{{kind: "document", key: "9", changed_revision: 10}}]);
+assert.deepEqual(current.map(x => x.id), [3, 4]);
+current = mergeGroupState(current,
+  [{{kind: "document", key: "9", rows: [row("document", "9", 6, 9, 90)]}}], []);
+assert.deepEqual(current.map(x => x.id), [3, 4]); // row 9 cannot undo tombstone 10
+current = mergeGroupState(current,
+  [{{kind: "document", key: "9", rows: [row("document", "9", 6, 11, 91)]}}], []);
+assert.deepEqual(current.map(x => x.id), [3, 4, 91]);
+current = mergeGroupState(current, [],
+  [{{kind: "document", key: "9", changed_revision: 9}}]);
+assert.deepEqual(current.map(x => x.id), [3, 4, 91]); // stale tombstone cannot remove row 11
+current = mergeGroupState(current, [], [{{kind: "document", key: "9"}}]);
+assert.deepEqual(current.map(x => x.id), [3, 4, 91]); // malformed tombstone cannot invent a revision
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_operator_page_bootstraps_and_polls_feed_without_overlapping_requests():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'fetch("operator-bootstrap?parent="' in html
+    assert 'fetch("operator-feed?parent="' in html
+    assert "if (feedBusy) return" in html
+    assert "generation !== feedGeneration" in html
+    assert '"reconnecting"' in html and '"auto-refresh paused"' in html
+    poll = html[html.index("function pollFeed("):html.index("function snapshotDecision(")]
+    assert "const epochStarted = bootstrapEpoch" in poll
+    assert poll.count("epochStarted !== bootstrapEpoch") == 2
+
+
+def test_operator_reset_clears_rendered_rows_without_synthetic_tombstones():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "function clearRenderedGroups()" in html
+    assert "applyFeedGroups([]," not in html
+    assert "(groupRevisions.get(tag) || 0) + 1" not in html
+
+
+def test_stale_tally_is_discarded_without_clearing_form_revisions():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function staleTallyRow(")
+    code = html[start:html.index("function beginBootstrap(", start)]
+    script = f"""
+const assert = require("assert");
+let T = {{old: true}}, tallyRevision = 9;
+let feedGeneration = "g", feedOrderSignature = "o";
+let acceptedSnapshot = {{generation: "g", order: "o", revision: 9, id: "S"}};
+let rows = [{{id: 1, tally_state: "selected", correctable: true,
+  rec: {{status: "ok", result: {{corrected: {{included: true}}}}}}}}];
+let D = {{rows}};
+const groupRevisions = new Map([["station\\01", 7]]);
+const deletedGroupRevisions = new Set(["station\\02"]);
+let invalidated = 0;
+const table = {{rows: () => ({{every(fn) {{ rows.forEach((value, index) => fn.call({{
+  data(next) {{ if (arguments.length) rows[index] = next; return rows[index]; }}
+}})); return this; }}, draw() {{ invalidated++; return this; }}}})}};
+{code}
+invalidateTally();
+assert.equal(T, null);
+assert.equal(tallyRevision, 0);
+assert.equal(rows[0].rec.status, "updating");
+assert.equal(rows[0].rec.result.corrected.included, null);
+assert.equal(groupRevisions.get("station\\01"), 7);
+assert.equal(deletedGroupRevisions.has("station\\02"), true);
+assert.equal(invalidated, 1);
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_snapshot_loader_preserves_forms_invalidates_owned_rows_and_recovers_same_id():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    invalidate = html[html.index("function staleTallyRow("):html.index(
+        "function beginBootstrap(", html.index("function staleTallyRow("))]
+    decision = html[html.index("function snapshotDecision("):html.index(
+        "function loadData(", html.index("function snapshotDecision("))]
+    loader = html[html.index("function loadData("):html.index(
+        "loadStatus();", html.index("function loadData("))]
+    script = f"""
+const assert = require("assert");
+const HTTP = true;
+let T = {{old: true}}, tallyRevision = 9, feedRevision = 7, bootstrapEpoch = 0;
+let feedGeneration = "g", feedOrderSignature = "o";
+let snapshotLoadPromise = null, snapshotLoadQueued = false;
+let acceptedSnapshot = {{generation: "g", order: "o", revision: 9, id: "S"}};
+let rows = [{{id: 1, tally_state: "selected", correctable: true,
+  rec: {{status: "ok", result: {{corrected: {{included: true}}, filed: {{included: true}}}}}}}}];
+let D = {{rows}}, bootstraps = 0, applied = 0, status = "";
+const owned = JSON.parse(JSON.stringify(rows));
+const table = {{rows: () => ({{
+  every(fn) {{ owned.forEach((value, index) => fn.call({{
+    data(next) {{ if (arguments.length) owned[index] = next; return owned[index]; }}
+  }})); return this; }},
+  invalidate() {{ return this; }}, draw() {{ return this; }}
+}})}};
+const $ = () => ({{textContent: ""}});
+const feedState = value => status = value;
+const beginBootstrap = () => bootstraps++;
+const applyData = data => {{ T = data.tally; tallyRevision = data.snapshot_revision; applied++; }};
+const responses = [];
+const response = (statusCode, body) => ({{status: statusCode, ok: statusCode >= 200 && statusCode < 300,
+  json: () => body instanceof Error ? Promise.reject(body) : Promise.resolve(body)}});
+const fetch = () => Promise.resolve(responses.shift());
+{invalidate}
+{decision}
+{loader}
+const pair = () => [response(200, {{generation:"g", model_order_signature:"o",
+  snapshot_revision:9, snapshot_id:"S", tally:{{restored:true}}}}),
+  response(200, {{generation:"g", model_order_signature:"o", snapshot_revision:9, snapshot_id:"S"}})];
+(async () => {{
+  responses.push(response(404, {{}}), response(404, {{}}));
+  await loadData();
+  assert.equal(bootstraps, 0, "post-bootstrap 404 must not bootstrap forms");
+  assert.equal(status, "forms current · tally stale");
+  assert.equal(owned[0].rec.status, "updating", "DataTables-owned row must be invalidated");
+  assert.equal(owned[0].rec.result.corrected.included, null);
+  assert.equal(feedRevision, 7);
+  responses.push(...pair());
+  await loadData();
+  assert.equal(applied, 1, "same snapshot id must recover invalidated tally");
+  assert.deepEqual(T, {{restored:true}});
+  responses.push(response(200, new Error("invalid json")), response(200, {{}}));
+  await loadData();
+  assert.equal(bootstraps, 0);
+  assert.equal(status, "forms current · tally stale");
+  responses.push(response(200, {{generation:"g", model_order_signature:"o",
+    snapshot_revision:10, snapshot_id:"A", tally:{{bad:true}}}}),
+    response(200, {{generation:"g", model_order_signature:"o", snapshot_revision:10, snapshot_id:"B"}}));
+  await loadData();
+  assert.equal(applied, 1, "mismatched pair must not apply");
+  assert.equal(bootstraps, 0, "mismatched tally pair must preserve valid forms");
+  const current = [response(200, {{generation:"g", model_order_signature:"o",
+    snapshot_revision:11, snapshot_id:"C", tally:{{current:true}}}}),
+    response(200, {{generation:"g", model_order_signature:"o", snapshot_revision:11, snapshot_id:"C"}})];
+  responses.push(...current, ...current);
+  const active = loadData(), queued = loadData();
+  assert.strictEqual(active, queued, "overlapping load must share one in-flight promise");
+  await active;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(applied, 2, "queued duplicate must not apply twice");
+  assert.equal(responses.length, 0, "exactly one follow-up pair must be coalesced");
+}})().catch(error => {{ console.error(error); process.exit(1); }});
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_old_snapshot_404_cannot_invalidate_new_epoch_tally_through_real_lifecycle():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    merge = html[html.index("function groupTag("):html.index(
+        "// ---- results", html.index("function groupTag("))]
+    loading = html[html.index("let feedGeneration ="):html.index(
+        "loadStatus();", html.index("let feedGeneration ="))]
+    script = f"""
+const assert = require("assert");
+const HTTP = true;
+let S = {{parent:"p"}}, D = {{rows:[], elections:{{p:"Election"}}}}, rows = [];
+let T = null, tableRows = [], table = null;
+const built = {{textContent:""}};
+const $ = id => id === "built" ? built : (id === "auto" ? {{checked:true}} : {{}});
+const prep = value => value;
+const child = () => null;
+const renderTally = () => {{}};
+const epoch = () => "now";
+const console = {{error: () => {{}}}};
+const clone = value => JSON.parse(JSON.stringify(value));
+function rowsFn(selector) {{
+  const indexes = tableRows.map((value, index) => [value,index]).filter(([value,index]) =>
+    !selector || selector(index, value)).map(([,index]) => index);
+  return {{
+    every(fn) {{ indexes.forEach(index => fn.call({{
+      data(next) {{ if (arguments.length) tableRows[index] = next; return tableRows[index]; }},
+      child: {{isShown: () => false, show: () => {{}}}}
+    }})); return this; }},
+    remove() {{ for (const index of [...indexes].reverse()) tableRows.splice(index, 1); return this; }},
+    draw() {{ return this; }}
+  }};
+}}
+rowsFn.add = additions => {{ tableRows.push(...additions.map(clone)); return {{draw: () => table}}; }};
+table = {{rows: rowsFn}};
+{merge}
+{loading}
+let resolveData, resolveMeta;
+const oldData = new Promise(resolve => resolveData = resolve);
+const oldMeta = new Promise(resolve => resolveMeta = resolve);
+let snapshotFetches = 0, snapshotMode = "old";
+const response = (status, body) => ({{status, ok: status >= 200 && status < 300,
+  json: () => Promise.resolve(body)}});
+async function fetch(url) {{
+  if (url.startsWith("data.json")) {{ snapshotFetches++; return snapshotMode === "old" ? oldData : response(404, {{}}); }}
+  if (url.startsWith("data-meta.json")) return snapshotMode === "old" ? oldMeta : response(404, {{}});
+  if (url.startsWith("operator-bootstrap")) return response(200, {{db:"d", parent:"p",
+    generation:"g2", model_order_signature:"o2", revision:5, reset_required:false,
+    groups:[{{kind:"station", key:"A", rows:[{{id:1, el:"p", group_kind:"station",
+      group_key:"A", doc_type:6, changed_revision:5, rec:{{status:"updating"}}}}]}}],
+    cursor:null, election:{{title:"Election"}}, rules:{{}}, interval:120}});
+  if (url.startsWith("operator-feed")) return response(200, {{generation:"g2",
+    model_order_signature:"o2", through:5, more:false, reset_required:false,
+    groups:[], tombstones:[]}});
+  throw new Error("unexpected fetch " + url);
+}}
+(async () => {{
+  feedGeneration = "g1"; feedOrderSignature = "o1";
+  rows = [{{id:1, el:"p", group_kind:"station", group_key:"A", doc_type:6,
+    changed_revision:4, rec:{{status:"ok"}}}}]; D.rows = rows; tableRows = rows.map(clone);
+  const old = loadData();
+  beginBootstrap(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(feedGeneration, "g2");
+  assert.equal(tableRows.length, 1, "real bootstrap/applyFeedGroups must restore row");
+  applyData({{generation:"g2", model_order_signature:"o2", snapshot_revision:6,
+    snapshot_id:"new", built:"2026-11-02T00:00:00Z", rows:[{{...tableRows[0],
+    changed_revision:5, rec:{{status:"ok"}}}}], tally:{{newer:true}}}}, true);
+  assert.deepEqual(T, {{newer:true}});
+  resolveData(response(404, {{}})); resolveMeta(response(404, {{}}));
+  await old;
+  assert.deepEqual(T, {{newer:true}}, "old-epoch 404 must not invalidate newer tally");
+  assert.equal(tallyRevision, 6);
+  assert.equal(tableRows[0].rec.status, "ok");
+  assert.notStrictEqual(tableRows[0], rows[0], "DataTables must own independent row objects");
+  snapshotMode = "current";
+  await loadData();
+  assert.equal(T, null);
+  assert.equal(tallyRevision, 0);
+  assert.equal(rows[0].rec.status, "updating", "global row must become Updating");
+  assert.equal(D.rows[0].rec.status, "updating", "D.rows must match global rows");
+  assert.equal(tableRows[0].rec.status, "updating", "independent DataTables row must become Updating");
+  assert.notStrictEqual(tableRows[0], rows[0], "tally invalidation must preserve independent ownership");
+}})().catch(error => {{ process.stderr.write(String(error.stack || error)); process.exit(1); }});
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_snapshot_acceptance_is_monotonic_and_epoch_scoped():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    start = html.index("function snapshotDecision(")
+    code = html[start:html.index("function loadData(", start)]
+    script = f"""
+const assert = require("assert");
+{code}
+const accepted = {{generation: "g", order: "o", revision: 11, id: "new"}};
+const value = (revision, id="x", generation="g", order="o") =>
+  ({{generation, model_order_signature: order, snapshot_revision: revision, snapshot_id: id}});
+assert.equal(snapshotDecision(accepted, value(10), 3, 3), "stale");
+assert.equal(snapshotDecision(accepted, value(11, "new"), 3, 3), "duplicate");
+assert.equal(snapshotDecision(accepted, value(11, "distinct"), 3, 3), "accept");
+assert.equal(snapshotDecision(accepted, value(12, "x", "other"), 3, 3), "reset");
+assert.equal(snapshotDecision(accepted, value(12, "x", "g", "other"), 3, 3), "reset");
+assert.equal(snapshotDecision(accepted, value(12), 2, 3), "epoch");
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    loader = html[html.index("function loadData("):html.index("loadStatus();", html.index("function loadData("))]
+    catch = loader[loader.index(".catch(error =>"):loader.index(".finally(")]
+    assert "epochStarted !== bootstrapEpoch" in catch
 
 
 def test_local_and_rik_links_share_one_documents_column_and_alert_link_style():
@@ -560,8 +854,9 @@ def test_collapsed_station_results_defer_card_rendering_and_initial_tally_render
     assert '$("stationresults").addEventListener("toggle"' in station
 
     apply = html[html.index("function applyData("):html.index("// ---- results")]
-    assert apply.count("renderTally();") == 1
+    assert apply.count("renderTally();") == 2  # one initial path and one non-destructive refresh path
     assert "const first = !table;" in apply
+    assert "table.clear().rows.add(rows)" not in apply
 
 
 def test_forms_table_renders_settlement_on_a_small_separate_line():
@@ -671,10 +966,84 @@ def test_script_close_tag_escaped_in_utf8_files(tmp_path):
     add(s, doc(BASE + "/e/a.pdf", muni="</script><b>x", label="Ћ<!-- y"))
     out = tmp_path / "index.html"
     build_page(s, out, tmp_path / "pdfs")
-    for name in ("data.js", "data.json"):
-        raw = (tmp_path / name).read_bytes()
-        assert "Ћ".encode() in raw and b"</script>" not in raw and b"<!--" not in raw
+    raw = (tmp_path / "data.json").read_bytes()
+    assert "Ћ".encode() in raw and b"</script>" not in raw and b"<!--" not in raw
+    assert not (tmp_path / "data.js").exists()
     assert rows_of(out)[0]["muni"] == "</script><b>x"
+
+
+def test_operator_snapshot_is_json_only_and_file_scheme_is_rejected(tmp_path):
+    s = store()
+    add(s, doc(BASE + "/e/a.pdf"))
+    out = tmp_path / "index.html"
+
+    build_page(s, out, tmp_path / "pdfs")
+
+    assert (tmp_path / "data.json").is_file()
+    assert (tmp_path / "data-meta.json").is_file()
+    assert (tmp_path / "status.json").is_file()
+    assert not (tmp_path / "data.js").exists()
+    assert not (tmp_path / "status.js").exists()
+    html = out.read_text(encoding="utf-8")
+    assert "inject(name" not in html
+    assert "Open this operator page through http://127.0.0.1" in html
+
+
+def test_build_logs_named_phase_timings_and_counts(tmp_path, caplog):
+    s = store()
+    add(s, doc(BASE + "/e/a.pdf"))
+
+    with caplog.at_level("INFO", logger="rg2watch.browse"):
+        build_page(s, tmp_path / "index.html", tmp_path / "pdfs")
+
+    message = next(r.getMessage() for r in caplog.records if "browse page built" in r.getMessage())
+    for phase in ("db_reads", "selection", "corrections", "tally", "rows", "serialization", "writes"):
+        assert phase + "=" in message
+    assert "rows=1" in message and "bytes=" in message
+
+
+def test_full_build_uses_one_sqlite_snapshot_and_feed_catches_concurrent_change(
+        tmp_path, monkeypatch):
+    path = tmp_path / "e.sqlite"
+    s = Store(path)
+    s.upsert_election(Election(P, "1", "t", "Title", BASE))
+    old = doc(BASE + "/e/old.pdf")
+    add(s, old)
+    pre_revision = s.operator_feed_state(P)[1]
+    entered, release = threading.Event(), threading.Event()
+    original = cli.build_page.__globals__["build_tally"]
+
+    def paused(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setitem(cli.build_page.__globals__, "build_tally", paused)
+    out = tmp_path / "page" / "index.html"
+    errors = []
+    thread = threading.Thread(target=lambda: _capture_error(
+        errors, lambda: build_page(s, out, tmp_path / "pdfs", parent=P)))
+    thread.start()
+    assert entered.wait(5)
+    writer = Store(path)
+    new = doc(BASE + "/e/new.pdf", up="2026-10-19T21:00")
+    add(writer, new, "replaced", old.url)
+    release.set()
+    thread.join(10)
+    assert not thread.is_alive() and errors == []
+
+    data = json.loads((out.parent / "data.json").read_text())
+    assert data["snapshot_revision"] == pre_revision
+    assert [row["u"] for row in data["rows"]] == [old.url]
+    assert any(change["revision"] > pre_revision
+               for change in writer.operator_feed_changes(P, pre_revision))
+
+
+def _capture_error(errors, fn):
+    try:
+        fn()
+    except BaseException as exc:
+        errors.append(exc)
 
 
 def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
@@ -687,8 +1056,11 @@ def test_build_writes_small_data_metadata_for_correction_refresh(tmp_path):
     data = json.loads((tmp_path / "data.json").read_text(encoding="utf-8"))
     meta_path = tmp_path / "data-meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert meta == {"built": data["built"], "corrections": {}}
-    assert meta_path.stat().st_size < 200
+    assert meta == {"built": data["built"], "generation": data["generation"],
+                    "model_order_signature": data["model_order_signature"],
+                    "snapshot_revision": data["snapshot_revision"],
+                    "snapshot_id": data["snapshot_id"], "corrections": {}}
+    assert meta_path.stat().st_size < 500
 
 
 def test_atomic_write_leaves_no_temp_and_keeps_old_on_failure(tmp_path, monkeypatch):
@@ -739,7 +1111,8 @@ def test_static_files_ship_and_are_copied_only_when_changed(tmp_path):
     for name in STATIC_FILES[1:]:
         assert name in versions and hashlib.sha256((STATIC / name).read_bytes()).hexdigest() in versions
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert "innerHTML" not in html.replace("never innerHTML", "") and "http://" not in html
+    assert "innerHTML" not in html.replace("never innerHTML", "")
+    assert html.count("http://") == 1 and "http://127.0.0.1" in html
     s = store()
     out = tmp_path / "index.html"
     build_page(s, out, tmp_path / "pdfs")
@@ -905,7 +1278,7 @@ def test_status_for_browse_says_watcher_not_running_with_db_counts(tmp_path):
     assert st["alerts"][0][1:3] == ["HIGH", "X9"]
     assert st["alerts"][0][7].startswith(BASE)  # document URL: the panel links to the form
     assert st["alerts"][0][8:] == [None, None]
-    assert (tmp_path / "status.js").read_text().startswith("window.RG2_STATUS = {")
+    assert not (tmp_path / "status.js").exists()
 
 
 def test_page_marks_stale_status():
@@ -1223,6 +1596,53 @@ def test_serve_always_copies_static(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "start_server", lambda *a: None)
     assert main(["serve", "--db", str(db), "--port", "8123"]) == 1
     assert (page / "index.html").read_bytes() == (STATIC / "index.html").read_bytes()
+
+
+def test_manual_browse_exits_busy_without_touching_snapshot(tmp_path, capsys):
+    from rg2watch.browse import snapshot_build_lock
+
+    db = tmp_path / "e.sqlite"
+    s = Store(db)
+    s.upsert_election(Election(P, "1", "t", "T", BASE))
+    out = tmp_path / "e" / "index.html"
+    out.parent.mkdir()
+    (out.parent / "data.json").write_text("old", encoding="utf-8")
+
+    with snapshot_build_lock(s, out, blocking=False):
+        assert main(["browse", "--db", str(db)]) != 0
+
+    assert "operator snapshot build already running; try again later" in capsys.readouterr().err
+    assert (out.parent / "data.json").read_text(encoding="utf-8") == "old"
+
+
+def test_incompatible_running_generation_cannot_publish_sequentially(tmp_path):
+    from rg2watch.browse import (SnapshotGenerationConflict, snapshot_generation_lease)
+    from rg2watch.operator_feed import generation_token
+
+    db = tmp_path / "e.sqlite"
+    s = Store(db)
+    s.upsert_election(Election(P, "1", "t", "T", BASE))
+    add(s, doc(BASE + "/e/a.pdf"))
+    out = tmp_path / "e" / "index.html"
+    first_cfg = Config(model="claude-haiku-5-5")
+    second_cfg = Config(model="claude-sonnet-5-5")
+    build_page(s, out, tmp_path / "pdfs", P, first_cfg)
+    before = (out.parent / "data.json").read_bytes()
+
+    first_generation = generation_token(s, first_cfg, P)
+    with snapshot_generation_lease(s, out, first_generation):
+        with pytest.raises(SnapshotGenerationConflict):
+            build_page(s, out, tmp_path / "pdfs", P, second_cfg)
+
+    assert (out.parent / "data.json").read_bytes() == before
+    build_page(s, out, tmp_path / "pdfs", P, second_cfg)
+    assert json.loads((out.parent / "data.json").read_text())["generation"] != first_generation
+
+
+def test_view_script_only_validates_and_serves_without_browse():
+    script = (STATIC.parent.parent.parent / "scripts" / "view.sh").read_text(encoding="utf-8")
+    assert "rg2watch browse" not in script
+    assert "require_db" in script and "rg2watch serve" in script
 
 
 def test_page_filters_include_versions_and_models():
