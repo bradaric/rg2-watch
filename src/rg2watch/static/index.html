@@ -101,11 +101,15 @@ input[type=search]{width:15em}
 .rc:focus-visible::after{content:attr(data-d);position:absolute;left:0;top:calc(100% + 6px);z-index:30;width:max-content;max-width:26em;white-space:normal;padding:5px 9px;border-radius:5px;background:var(--fg);color:var(--panel);font-size:12.5px;font-weight:500;line-height:1.35;letter-spacing:0;text-transform:none;box-shadow:0 4px 12px rgba(0,0,0,.25)}
 #rules label,#cols label{white-space:nowrap;display:flex;align-items:center;gap:6px;color:var(--fg);padding:2px 0}
 /* tabs */
-#tabs{display:flex;gap:var(--s1);margin:0 0 var(--s3);border-bottom:1px solid var(--line2)}
+#tabs{display:flex;flex-wrap:wrap;gap:var(--s1);margin:0 0 var(--s3);border-bottom:1px solid var(--line2)}
 #tabs button{border:0;border-bottom:3px solid transparent;border-radius:0;background:none;padding:var(--s2) var(--s3);margin-bottom:-1px;color:var(--mut);font-weight:600;font-size:15px}
 #tabs button:hover{color:var(--fg)}
 #tabs button.on{border-bottom-color:var(--accent);color:var(--fg)}
 #tabs button[hidden]{display:none}
+.estimate-table{border-collapse:collapse;width:100%;margin:var(--s3) 0;font-variant-numeric:tabular-nums}
+.estimate-table th,.estimate-table td{padding:var(--s2);border-bottom:1px solid var(--line);text-align:left}
+.estimate-table th{color:var(--mut)}
+.estimate-panel{max-width:1100px}.estimate-panel h2{margin-top:var(--s3)}
 #officialhead{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s4);margin-bottom:var(--s3)}
 #officialhead h2{margin:0;font-size:22px}#officialmeta{margin:3px 0 0;color:var(--mut)}
 #officialbadge{display:inline-block;background:var(--good);color:#fff;border-radius:999px;padding:4px 10px;font-weight:750;white-space:nowrap}
@@ -399,7 +403,7 @@ stroke-width:2.5;
 <h1>rg2-watch <span class="mut" id="ele"></span> <span class="mut" id="built"></span></h1>
 <div id="banner"></div>
 <div id="status"><div id="status-live"></div><div id="status-alerts"></div></div>
-<div id="tabs"><button id="tabforms" class="on">Forms</button><button id="tabres">Results (unofficial)</button><button id="tabofficial">RIK official results</button></div>
+<div id="tabs"><button id="tabforms" class="on">Forms</button><button id="tabres">Results (unofficial)</button><button id="tabsample">Sample estimate</button><button id="tabmorning" hidden>Morning sample</button><button id="tabprojection">All-arrivals projection</button><button id="tabofficial">RIK official results</button></div>
 <div id="formsview">
 <div id="ctl">
 <div id="presetbar" class="presetbar" role="group" aria-labelledby="presettitle">
@@ -479,6 +483,9 @@ stroke-width:2.5;
 <h3 id="tnoteshead" hidden>Notes (not flagged)</h3><ul id="tnotes"></ul>
 </div></details>
 </div>
+<section id="sampleview" class="estimate-panel" hidden aria-label="Sample estimate"></section>
+<section id="morningview" class="estimate-panel" hidden aria-label="Morning sample estimate"></section>
+<section id="projectionview" class="estimate-panel" hidden aria-label="All-arrivals projection"></section>
 <div id="officialview" hidden>
 <div id="officialhead"><div><h2 id="officialtitle">RIK official results</h2><p><span id="officialmeta">Official results have not been loaded yet.</span> <a id="officialsource" target="_blank" rel="noopener noreferrer" hidden>Извор: РИК</a></p></div><span id="officialbadge">Official RIK data · ЗВАНИЧНИ ПОДАЦИ РИК</span></div>
 <p id="officialnotice" class="warnbox" aria-live="polite">Waiting for the first official RIK snapshot.</p>
@@ -1681,6 +1688,231 @@ function applyData(data, acceptTally = false) {
   renderTally();
 }
 
+// ---- operator estimates -----------------------------------------------------------------
+function sampleCsv(sample) {
+  if (sample.design_kind === "speed_balanced_nonprobability") {
+    return [["Municipality", "Station", "Prior registered", "Prior original upload", "Reporting",
+      "Sample", "Historical completion target", "Source election", "Seed", "Method"],
+      ...(sample.sample_stations || []).map(r => [r.m, r.no, r.prior_registered, r.prior_first_upload,
+        r.reporting ? "yes" : "no", sample.sample_label, sample.completion_target, sample.source_parent,
+        sample.seed, "purposive nonprobability — no sampling interval"])]
+      .map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  }
+  const header = ["Municipality", "Station", "Stratum stations", "Selected stations",
+    "Design weight 1/pi", "Response-adjusted weight", "Usable result reporting", "Seed", "Retrospective",
+    "Inclusion probability", "Historical source election", "Sampling stratum", "Historical geography"];
+  return [header, ...(sample.sample_stations || []).map(r => [r.m, r.no, r.population,
+    r.selected, r.design_weight, r.response_weight, r.reporting ? "yes" : "no",
+    sample.seed, sample.retrospective ? "yes" : "no", r.inclusion_probability || 1 / r.design_weight,
+    sample.source_parent || "", r.stratum || r.m, r.geography || r.stratum || r.m])]
+    .map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+}
+function sampleUploadTiming(sample) {
+  const total = sample.sample_size || sample.selected || (sample.sample_stations || []).length;
+  const times = (sample.sample_stations || []).map(r => Date.parse(r.prior_first_upload))
+    .filter(Number.isFinite).sort((a, b) => a - b);
+  return {total, known: times.length, milestones: [0, .5, .8, .9, .95, 1].map(fraction => {
+    const required = fraction === 0 ? 1 : Math.ceil(total * fraction);
+    return {fraction, required, at: required > 0 && required <= times.length ?
+      new Date(times[required - 1]).toISOString() : null};
+  })};
+}
+function estimateTable(headers, values) {
+  const table = mk("table", null, "estimate-table"), head = mk("thead"), tr = mk("tr"), body = mk("tbody");
+  for (const label of headers) tr.append(mk("th", label));
+  head.append(tr);
+  for (const valuesRow of values) {
+    const row = mk("tr");
+    for (const value of valuesRow) row.append(mk("td", value));
+    body.append(row);
+  }
+  table.append(head, body);
+  return table;
+}
+function renderEstimatePanel(id, value, sampled, built) {
+  const speed = sampled && value && value.design_kind === "speed_balanced_nonprobability";
+  const box = $(id), title = speed ? value.sample_label + " sample estimate" :
+    id === "morningview" ? "Morning sample estimate" : sampled ? "Sample estimate" : "All-arrivals projection";
+  const state = box.estimateViewState || (box.estimateViewState = {parent: null, sections: {}, key: null});
+  for (const details of box.querySelectorAll("details[data-estimate-section]")) {
+    state.sections[details.dataset.estimateSection] = details.open;
+  }
+  const parent = T && T.parent;
+  if (parent && parent !== state.parent) {
+    state.parent = parent; state.sections = {}; state.key = null;
+  }
+  const key = JSON.stringify([state.parent, value, built, feedRevision > tallyRevision]);
+  if (key === state.key) return; // Feed polls must not disturb reading/selection when nothing changed.
+  state.key = key;
+  function section(name) {
+    const details = mk("details");
+    details.dataset.estimateSection = name;
+    details.open = !!state.sections[name];
+    return details;
+  }
+  const historical = speed || (sampled && value && value.design_kind === "prior_election_early");
+  const samplingInterval = historical && value.interval_kind === "conditional_95_pivotal_hh";
+  box.replaceChildren(mk("h2", title + (speed ? "" : " · operator-only experiment")));
+  const info = speed ? section("method") : box;
+  if (speed) info.append(mk("summary", "Method & details"));
+  info.append(mk("p", "Estimated national shares, not counted results. " + (speed ?
+    "Fixed speed-focused purposive sample, NOT a national probability sample. " : historical ?
+    "Fixed historical sample: membership was selected from PRIOR results and reporting times, not incoming returns. " :
+    "Geography-only station-total expansion. ") +
+    "Always uses corrected eligible readings; the counted-results filters do not change these estimates.", "warnbox"));
+  if (!value) {
+    box.append(mk("p", "Building/loading the operator snapshot. This can take a few minutes after restart; " +
+      "it does not require every station to report.", "warnbox"));
+    return;
+  }
+  const pct = n => n == null ? "unavailable" : (100 * n).toFixed(2) + "%";
+  const count = n => Number(n || 0).toLocaleString("en-GB");
+  const stale = feedRevision > tallyRevision ? " · Updating: newer form changes are not in this snapshot." : "";
+  if (speed) {
+    const clock = at => new Intl.DateTimeFormat("en-GB", {timeZone:"Europe/Belgrade", hour:"2-digit",
+      minute:"2-digit", hourCycle:"h23"}).format(new Date(at));
+    const last = sampleUploadTiming(value).milestones.find(r => r.fraction === 1).at;
+    box.append(mk("p", count(value.reporting) + " / " + count(value.selected) + " stations received · Updated " +
+      epoch(Date.parse(built) / 1000) + (stale ? " · Updating" : "")));
+    box.append(mk("p", "Target: " + clock(value.completion_target) +
+      (value.sample_role === "morning" ? " next morning" : " election night") +
+      " · Last election: " + (last ? clock(last) : "timing unknown") + " (Belgrade time; not guaranteed).", "mut"));
+    box.append(mk("p", (value.retrospective ? "Retrospective test. " : "Experimental estimate. ") +
+      "Not counted results. No validated error margin.", "warnbox"));
+  }
+  info.append(mk("p", "Snapshot " + epoch(Date.parse(built) / 1000) + stale, "mut"));
+  info.append(mk("p", "Usable stations: " + count(value.reporting) + " / " + count(value.population) +
+    " in the national roster. " + (sampled ? "Selected sample: " + count(value.selected) +
+    "; response " + pct(value.response_rate) + ". " : "Station coverage: " + pct(value.station_coverage) + ". ") +
+    "Electorate coverage: unknown."));
+  if (sampled && value.retrospective) info.append(mk("p", "RETROSPECTIVE sample — selected after results existed.", "warnbox"));
+  if (sampled && value.seed) info.append(mk("p", "Seed: " + value.seed + "; frame " +
+    String(value.frame_hash).slice(0, 16), "mut"));
+  if (speed) info.append(mk("p", "Prior election: " + value.source_parent + "; historical completion target for " +
+    "all selected stations: " + new Intl.DateTimeFormat("en-GB", {timeZone:"Europe/Belgrade",year:"numeric",
+      month:"short",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).format(new Date(value.completion_target)) +
+    " Europe/Belgrade. This is not a future timing guarantee.", "mut"));
+  else if (historical) info.append(mk("p", "Prior election: " + value.source_parent + "; early-reporting preference: " +
+    value.early_strength + ". Frozen selection probabilities and response-adjusted weights are used.", "mut"));
+  if (historical) info.append(mk("p", (speed ? "Selected prior-electorate proxy returned: " :
+    "Design-weighted prior-electorate proxy returned: ") +
+    pct(value.prior_electorate_response) + ". This is not current-electorate coverage; both sample count " +
+    "and this historical proxy must reach 80%.", "mut"));
+  if (historical) {
+    const explanation = mk("div", null, "warnbox");
+    explanation.append(mk("h3", "Historical benchmark — not a forecast margin"));
+    const benchmark = value.historical_benchmark;
+    const pp = n => n == null ? "unavailable" : Number(n).toFixed(2) + " pp";
+    if (benchmark) {
+      explanation.append(mk("p", "Source election " + benchmark.source_parent +
+        ". This fixed sample's largest historical list-share error: " + pp(benchmark.sample_max_error_pp) + "."));
+      explanation.append(mk("p", speed ? "This is a prior fitting residual, not independently tested forecast accuracy." :
+        benchmark.design_p95_max_error_pp == null ?
+        "Trial benchmark unavailable for this manifest." :
+        "Across " + count(benchmark.design_trials) + " trial samples of this design, the 95th-percentile " +
+        "largest historical list-share error was " + pp(benchmark.design_p95_max_error_pp) + "."));
+      explanation.append(mk("p", "Stored historical reference: " + count(benchmark.reference_usable) + " / " +
+        count(benchmark.reference_population) + " usable stations. " +
+        (benchmark.reference_usable < benchmark.reference_population ? "Partial reference; " : "") +
+        "not certified final-result accuracy."));
+    } else explanation.append(mk("p", "Historical benchmark unavailable in this snapshot."));
+    explanation.append(mk("p", "The same election informed design and evaluation: this is not independent " +
+      "validation for future parliamentary or presidential elections. Historical errors are not ± forecast margins."));
+    explanation.append(mk("p", "Completeness, not accuracy: " + count(value.reporting) + " / " +
+      count(value.selected) + " selected stations returned (" + pct(value.response_rate) + "); " + (speed ? "selected " : "weighted ") +
+      "prior-electorate response " + pct(value.prior_electorate_response) + "."));
+    explanation.append(mk("p", speed ? "No probability-based sampling interval or error margin applies to this " +
+      "purposive set. Later stations have no inclusion probability; changing voting patterns, excluded groups " +
+      "and reporting delays can bias the estimate." : "Sampling intervals below use conservative weighted station-level " +
+      "Hansen–Hurwitz ratio linearization. They are approximate and pointwise, assume exchangeable missing " +
+      "returns, and do not cover reporting bias or reading errors. The readiness gate and repeated checks " +
+      "do not provide a validated 95% forecast guarantee."));
+    info.append(explanation);
+    if (speed && value.speed_fit) info.append(mk("p", "Historical eligible pool: " +
+      count(value.speed_fit.eligible_count) + " stations, containing " + pct(value.speed_fit.eligible_prior_electorate_fraction) +
+      " of the known prior electorate. Domains absent from that pool: " +
+      (value.speed_fit.pool_missing_domains.join(", ") || "none") + ". Prior electorate-size fitting discrepancy: " +
+      pct(value.speed_fit.registered_relative_error) + ".", "warnbox"));
+    const timing = sampleUploadTiming(value);
+    if (timing.known) {
+      const details = section("timing");
+      details.append(mk("summary", "Historical reporting times — prior uploads, not a prediction"));
+      details.append(mk("p", "Source election " + value.source_parent + "; Europe/Belgrade time. " +
+        "Recorded first-original-upload timestamps: " + count(timing.known) + " / " + count(timing.total) +
+        " selected stations. Upload time is not analysis-ready time; future reporting may differ."));
+      const format = new Intl.DateTimeFormat("en-GB", {timeZone: "Europe/Belgrade", year: "numeric",
+        month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+      details.append(estimateTable(["Selected stations uploaded", "Historical local date/time"],
+        timing.milestones.map(r => [r.fraction === 0 ? "First known station" :
+          (100 * r.fraction) + "% (" + count(r.required) + ")" + (r.fraction === 1 ? " — last selected" : ""),
+          r.at == null ? "Unavailable: missing historical timestamps" : format.format(new Date(r.at))])));
+      info.append(details);
+    } else info.append(mk("p", "Historical reporting times unavailable: no recorded upload timestamps.", "mut"));
+  }
+  if ((value.blockers || []).length) {
+    box.append(mk("h3", "Estimate unavailable"));
+    const blockers = mk("ul", null, "warnbox");
+    for (const reason of value.blockers) blockers.append(mk("li", reason));
+    box.append(blockers);
+  } else if ((value.results || []).length) {
+    const census = value.status === "complete";
+    if (!speed) box.append(mk("p", census ? "Complete usable roster: these match the counted shares. Zero sampling error " +
+      "does not mean zero reading error." : "Experimental estimate — no ±1/±2pp accuracy validated.", "warnbox"));
+    box.append(estimateTable(speed ? ["List / candidate", "Estimated share"] : ["List / candidate", "Estimated share", census ? "Sampling interval (census)" :
+      samplingInterval ? "Approx. 95% sampling interval" : historical ? "Forecast interval (not validated)" :
+      "Nominal conditional 95% interval", ...(historical && !speed ? ["Approx. sampling margin"] : [])],
+      value.results.map(r => speed ? [r.row + " · " + r.name, pct(r.share)] : [r.row + " · " + r.name, pct(r.share),
+        r.low == null ? (samplingInterval ? "No observed variation: interval unavailable" : historical ?
+          "Not available: historical design interval not validated" : "Unavailable: no observed variance") :
+          pct(r.low) + " – " + pct(r.high), ...(historical && !speed ?
+          [r.margin_pp == null ? "unavailable" : "±" + Number(r.margin_pp).toFixed(2) + " pp"] : [])])));
+  }
+  const warnings = mk("ul", null, "mut");
+  for (const warning of value.warnings || []) warnings.append(mk("li", warning));
+  info.append(warnings);
+  if ((value.strata || []).length) {
+    const details = section("coverage");
+    details.append(mk("summary", (historical ? "Coverage by sampling stratum" : "Coverage by municipality") +
+      " — no national estimate when any group is missing/sparse"));
+    details.append(estimateTable([historical ? "Historical sampling/response group" : "Municipality",
+      "Roster", "Selected", "Reporting", "Average weight N/r"],
+      value.strata.map(r => [r.m, count(r.population), count(r.selected), count(r.reporting),
+        r.weight == null ? "unavailable" : r.weight.toFixed(2)])));
+    info.append(details);
+  }
+  if (historical && value.historical_balance && value.historical_balance.geography.length) {
+    const details = section("geography");
+    details.append(mk("summary", "Historical geographic balance — frozen design inputs, not upcoming votes"));
+    details.append(estimateTable(["Prior geographic cell", "Roster", "Selected", "Prior electorate share",
+      speed ? "Selected prior electorate share" : "Design-weighted sample share"], value.historical_balance.geography.map(r => [r.geography,
+      count(r.population), count(r.selected), pct(r.prior_electorate_share), pct(r.sample_prior_electorate_share)])));
+    info.append(details);
+  }
+  if (sampled && (value.sample_stations || []).length) {
+    const downloadButton = mk("button", "Download selected stations CSV");
+    downloadButton.type = "button";
+    downloadButton.onclick = () => download(["rg2-sample", value.sample_role, T.parent].filter(Boolean).join("-")
+      .replace(/[^\w.-]+/g, "_") + ".csv", sampleCsv(value));
+    box.append(downloadButton);
+    const details = section("stations");
+    details.append(mk("summary", "Selected stations — missing stations are never replaced"));
+    details.append(estimateTable(["Municipality", "Station", speed ? "Prior registered" : "Design weight 1/pi", "Usable result"],
+      value.sample_stations.map(r => [r.m, r.no, speed ? count(r.prior_registered) : r.design_weight.toFixed(2),
+        r.reporting ? "reporting" : "missing / excluded"])));
+    info.append(details);
+  }
+  if (speed) box.append(info);
+}
+function renderEstimates() {
+  const estimates = T && T.estimates;
+  const morning = estimates && estimates.samples && estimates.samples.morning;
+  $("tabmorning").hidden = !morning;
+  $("tabsample").textContent = morning ? "Quick sample" : "Sample estimate";
+  renderEstimatePanel("sampleview", estimates && estimates.sample, true, estimates && estimates.built);
+  renderEstimatePanel("morningview", morning, true, estimates && estimates.built);
+  renderEstimatePanel("projectionview", estimates && estimates.arrivals, false, estimates && estimates.built);
+}
+
 // ---- results (unofficial tally) -----------------------------------------------------------
 const nf = new Intl.NumberFormat("en-GB");
 const SOURCE_ROUND_LABEL = {original: "оригинални РГ-2", repeat_i: "поновљено гласање I (РГ-2)",
@@ -1876,6 +2108,7 @@ $("taudit").addEventListener("toggle", () => {
   if ($("taudit").open && teTable) teTable.columns.adjust();
 });
 function renderTally() {
+  renderEstimates();
   $("hmode").value = $("tmode").value;
   $("hview").value = $("tview").value;
   $("tabres").hidden = !T;
@@ -2631,14 +2864,21 @@ function loadOfficialResults() {
 }
 
 function activeTab() {
-  return !$("resview").hidden ? "results" : !$("officialview").hidden ? "official" : "forms";
+  return !$("sampleview").hidden ? "sample" : !$("morningview").hidden ? "morning" : !$("projectionview").hidden ? "projection" :
+    !$("resview").hidden ? "results" : !$("officialview").hidden ? "official" : "forms";
 }
 function setTab(name, updateHash = true) {
-  name = ["results", "official"].includes(name) ? name : "forms";
+  name = ["results", "official", "sample", "morning", "projection"].includes(name) ? name : "forms";
   const res = name === "results", official = name === "official";
-  $("formsview").hidden = res || official; $("resview").hidden = !res; $("officialview").hidden = !official;
-  $("tabforms").classList.toggle("on", !res && !official); $("tabres").classList.toggle("on", res);
+  $("formsview").hidden = name !== "forms"; $("resview").hidden = !res; $("officialview").hidden = !official;
+  $("sampleview").hidden = name !== "sample"; $("projectionview").hidden = name !== "projection";
+  $("morningview").hidden = name !== "morning";
+  $("tabforms").classList.toggle("on", name === "forms"); $("tabres").classList.toggle("on", res);
   $("tabofficial").classList.toggle("on", official);
+  $("tabsample").classList.toggle("on", name === "sample");
+  $("tabmorning").classList.toggle("on", name === "morning");
+  $("tabprojection").classList.toggle("on", name === "projection");
+  if (name === "sample" || name === "morning" || name === "projection") renderEstimates();
   if (res && tmTable) { tmTable.columns.adjust(); teTable.columns.adjust(); }
   if (official) loadOfficialResults();
   if (updateHash) writeHash();
@@ -2646,6 +2886,9 @@ function setTab(name, updateHash = true) {
 $("tabforms").onclick = () => setTab("forms");
 $("tabres").onclick = () => setTab("results");
 $("tabofficial").onclick = () => setTab("official");
+$("tabsample").onclick = () => setTab("sample");
+$("tabmorning").onclick = () => setTab("morning");
+$("tabprojection").onclick = () => setTab("projection");
 $("tmode").addEventListener("input", () => { if (T) renderTally(); });
 $("tview").addEventListener("input", () => { writeHash(); if (T) renderTally(); });
 $("onlyclear").onclick = () => { onlyId = null; $("onlyid").hidden = true; redraw(); };
@@ -2765,6 +3008,7 @@ function staleTallyRow(row) {
 }
 function invalidateTally() {
   T = null;
+  renderEstimates();
   tallyRevision = 0;
   acceptedSnapshot = {generation: feedGeneration || acceptedSnapshot.generation,
     order: feedOrderSignature || acceptedSnapshot.order, revision: -1, id: null};
@@ -2778,6 +3022,7 @@ function beginBootstrap(clear = false, cursor = null) {
   if (clear) {
     bootstrapEpoch++;
     feedGeneration = null; feedRevision = tallyRevision = 0; T = null;
+    renderEstimates();
     feedOrderSignature = null; clearRenderedGroups();
     acceptedSnapshot = {generation: null, order: null, revision: -1, id: null};
     if (bootstrapBusy) { bootstrapResetPending = true; return; }
@@ -2846,6 +3091,7 @@ function pollFeed(force = false) {
       }
       applyFeedGroups(change.groups || [], change.tombstones || []);
       feedRevision = change.through;
+      if (!$("sampleview").hidden || !$("morningview").hidden || !$("projectionview").hidden) renderEstimates();
       feedState(change.more ? "catching up…" : "forms current · tally " +
         (tallyRevision >= feedRevision ? "current" : "Updating"));
       if (change.more) pollFeed(true);
