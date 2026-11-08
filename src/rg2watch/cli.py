@@ -180,6 +180,51 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--out", type=Path, default=Path("public-results"),
                    help="output directory (default: public-results)")
 
+    s = sub.add_parser("estimate-sample", parents=[common],
+                       help="freeze an operator-only random station sample; no API/DB writes")
+    s.add_argument("--parent", help="national election (default: newest registered)")
+    s.add_argument("--size", type=_positive_int,
+                   help="station count (historical proposal size, or 1600 for the legacy comparison)")
+    s.add_argument("--seed", required=True, help="predeclared reproducible randomization seed")
+    s.add_argument("--retrospective", action="store_true",
+                   help="explicitly label a sample created after results exist as retrospective")
+    s.add_argument("--history-design", type=Path,
+                   help="frozen prior-election design proposal; target returns never affect membership")
+    s.add_argument("--confirm-station-mapping", action="store_true",
+                   help="confirm historical and upcoming station identities/boundaries match")
+
+    s = sub.add_parser("estimate-design", parents=[common],
+                       help="design a smaller fixed early-reporting sample from a PRIOR election")
+    s.add_argument("--history-db", type=Path, required=True)
+    s.add_argument("--history-parent", required=True)
+    s.add_argument("--history-snapshot", type=Path, required=True,
+                   help="explicit prior operator data.json; reused without any reanalysis")
+    s.add_argument("--sizes", default="200,300,400,600,800")
+    s.add_argument("--geography", choices=("ordered", "grid", "municipal"), default="ordered",
+                   help="implicit geographic ordering (default); hard grid/municipal strata are comparisons")
+    s.add_argument("--early-strengths", default="0,1,2,3")
+    s.add_argument("--trials", type=_positive_int, default=20)
+    s.add_argument("--seed", required=True, help="predeclared proposal seed, not selected for a lucky fit")
+    s.add_argument("--out", type=Path, required=True, help="new design/report JSON; never overwritten")
+    s.add_argument("--stations-out", type=Path, help="optional new CSV of the frozen proposed stations")
+
+    s = sub.add_parser("estimate-speed-samples", parents=[common],
+                       help="build fixed Quick 23:00 / Morning 08:00 prior-balanced experimental samples")
+    s.add_argument("--history-sample", type=Path, required=True,
+                   help="validated prior manifest containing frozen source profiles; no DB/network access")
+    s.add_argument("--size", type=_positive_int, default=200, help="stations per sample (default: 200)")
+    s.add_argument("--seed", required=True, help="predeclared optimizer seed; never chosen from upcoming returns")
+    s.add_argument("--iterations", type=_positive_int, default=40000)
+    s.add_argument("--out", type=Path, required=True, help="new speed-sample bundle JSON; never overwritten")
+
+    s = sub.add_parser("estimate-replay", parents=[common],
+                       help="offline arrival-bias experiment on stored readings; no reanalysis")
+    s.add_argument("--parent", help="national election (default: newest registered)")
+    s.add_argument("--snapshot", type=Path, help="reuse an explicit private data.json instead of rebuilding tally")
+    s.add_argument("--sizes", default="100,200,400,800,1200,1600")
+    s.add_argument("--trials", type=_positive_int, default=20)
+    s.add_argument("--out", type=Path, help="new JSON report file; never overwritten")
+
     s = sub.add_parser("review", parents=[common], help="record or list operator verdicts on forms")
     s.add_argument("url", nargs="?", help="document URL (one version of a form)")
     s.add_argument("verdict", nargs="?", choices=VERDICTS)
@@ -517,6 +562,196 @@ def _cmd_tally(args) -> int:
     return 0
 
 
+def _cmd_estimate_sample(args) -> int:
+    from .estimates import check_observed_frame, make_sample, sample_path, store_frame
+    from .tally import scope_of
+    try:
+        cfg = _config(args)
+        store = Store(cfg.db_path, read_only=True)
+        try:
+            with store.read_snapshot() as source:
+                parent = default_parent(source, args.parent)
+                if scope_of(source, cfg, parent)[0] != "national":
+                    raise ValueError("requires national tally_scope (including presidential elections)")
+                docs = source.browse_rows(parent)[0]
+                has_results = any(d["doc_type"] in (6, 10, 15, 16) for d in docs)
+                if has_results and not args.retrospective:
+                    raise ValueError("results already exist: use --retrospective for a labelled test sample")
+                roster = store_frame(source, parent)
+                check_observed_frame(roster, docs, parent)
+                if args.history_design:
+                    from .historical_design import activate_sample, attach_design_diagnostics
+                    if not args.confirm_station_mapping:
+                        raise ValueError("confirm station identities/boundaries with --confirm-station-mapping")
+                    design = json.loads(args.history_design.read_text(encoding="utf-8"))
+                    if not isinstance(design, dict):
+                        raise ValueError("historical design must be a JSON object")
+                    recommendation = design.get("recommendation")
+                    if ("recommendation" in design and (not isinstance(recommendation, dict)
+                            or recommendation.get("meets_historical_targets") is not True)):
+                        raise ValueError("historical design did not meet its diagnostic targets; do not activate the fallback")
+                    proposal = design.get("proposal", design)
+                    if "recommendation" in design:
+                        proposal = attach_design_diagnostics(proposal, design)
+                    if args.seed != proposal["seed"] or (args.size is not None and args.size != proposal["size"]):
+                        raise ValueError("use the frozen historical proposal's seed and size; no target-time reselection")
+                    if proposal.get("version") == 3:
+                        from .speed_samples import activate_speed_bundle
+                        sample = activate_speed_bundle(proposal, roster, parent, args.retrospective)
+                    else:
+                        sample = activate_sample(proposal, roster, parent, args.retrospective)
+                else:
+                    sample = make_sample(roster, parent, args.size or 1600, args.seed,
+                                         retrospective=args.retrospective)
+                path = sample_path(source)
+            text = json.dumps(sample, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+            with path.open("x", encoding="utf-8") as fh:
+                fh.write(text)
+        finally:
+            store.close()
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+        print(f"estimate-sample: {exc}", file=sys.stderr)
+        return 2
+    print(f"Frozen {sample['size']} stations at {path} "
+          f"({'retrospective experiment' if sample['retrospective'] else 'prospective sample'}).")
+    return 0
+
+
+def _cmd_estimate_design(args) -> int:
+    from .historical_design import benchmark_design, design_summary, historical_profiles, proposal_csv
+    from .estimates import check_observed_frame, store_frame, tally_readings
+    try:
+        if args.out.exists() or (args.stations_out and args.stations_out.exists()):
+            raise FileExistsError("design output already exists; choose new JSON/CSV paths")
+        if args.stations_out and args.out.resolve() == args.stations_out.resolve():
+            raise ValueError("JSON and station CSV must use different paths")
+        sizes = [int(v) for v in args.sizes.split(",")]
+        strengths = [float(v) for v in args.early_strengths.split(",")]
+        if any(size < 1 for size in sizes):
+            raise ValueError("sample sizes must be positive")
+        if any(not math.isfinite(value) or not 0 <= value <= 4 for value in strengths):
+            raise ValueError("early preferences must be finite numbers between 0 and 4")
+        store = Store(args.history_db, read_only=True)
+        try:
+            with store.read_snapshot() as source:
+                parent = args.history_parent
+                saved = json.loads(args.history_snapshot.read_text(encoding="utf-8"))
+                if not isinstance(saved, dict):
+                    raise ValueError("historical snapshot must be a JSON object")
+                tally = saved.get("tally") or {}
+                if saved.get("db") != source.name or tally.get("parent") != parent:
+                    raise ValueError("historical snapshot must match the explicit PRIOR database/election")
+                if tally.get("scope") != "national":
+                    raise ValueError("historical design requires a national ballot")
+                roster = store_frame(source, parent)
+                docs = source.browse_rows(parent)[0]
+                check_observed_frame(roster, docs, parent)
+                by_id = {d["id"]: d for d in docs}
+                readings = tally_readings(tally)
+                for r in readings:
+                    d = by_id[r["id"]]
+                    if (r["m"], r["no"]) != (d["municipality"], d["station_no"]):
+                        raise ValueError("historical snapshot/document identities differ")
+                profiles = historical_profiles(roster, readings, docs, parent, len(tally["names"]), args.geography)
+            # All prior inputs are frozen in memory; do not pin the source WAL during CPU-heavy trials.
+            result = benchmark_design(profiles, parent, sizes, strengths,
+                                      [f"{args.seed}:trial:{i}" for i in range(args.trials)], args.seed)
+            result.update(source_snapshot_built=saved.get("built"), prior_names=tally["names"],
+                          geography=args.geography)
+            with args.out.open("x", encoding="utf-8") as fh:
+                json.dump(result, fh, ensure_ascii=False, indent=2, allow_nan=False)
+                fh.write("\n")
+            if args.stations_out:
+                with args.stations_out.open("x", encoding="utf-8", newline="") as fh:
+                    fh.write(proposal_csv(result["proposal"]))
+        finally:
+            store.close()
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+        print(f"estimate-design: {exc}", file=sys.stderr)
+        return 2
+    print(design_summary(result))
+    print(f"Historical proposal: {args.out}")
+    return 0
+
+
+def _cmd_estimate_speed_samples(args) -> int:
+    from .estimates import validate_sample
+    from .speed_samples import make_speed_bundle, speed_estimate
+    try:
+        if args.out.exists():
+            raise FileExistsError("output already exists; choose a new speed-sample bundle path")
+        prior = json.loads(args.history_sample.read_text(encoding="utf-8"))
+        validate_sample(prior, prior["source_profiles"], prior["parent"])
+        bundle = make_speed_bundle(prior["source_profiles"], prior["source_parent"], args.size,
+                                   args.seed, args.iterations)
+        with args.out.open("x", encoding="utf-8") as fh:
+            json.dump(bundle, fh, ensure_ascii=False, indent=2, allow_nan=False)
+            fh.write("\n")
+        print("Two fixed speed-focused samples; purposive, NOT probability samples. No sampling intervals.")
+        for role, sample in bundle["samples"].items():
+            summary = speed_estimate(bundle, role, [], ["unused"])
+            fit = summary["speed_fit"]
+            last = max(row["prior_first_upload"] for row in sample["stations"])
+            print(f"{sample['label']}: {bundle['size']} stations; prior cutoff {sample['cutoff']}; "
+                  f"last selected prior upload {last}; prior fitting residual {fit['share_error_pp']:.3f}pp.")
+        print(f"Frozen bundle: {args.out}. No election activated; historical targets are not future guarantees.")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"estimate-speed-samples: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _cmd_estimate_replay(args) -> int:
+    from .estimate_replay import run_replay, summary
+    from .estimates import check_observed_frame, store_frame, tally_readings
+    try:
+        cfg = _config(args)
+        sizes = [int(v) for v in args.sizes.split(",")]
+        if not sizes or any(n < 1 for n in sizes):
+            raise ValueError("sizes must be positive comma-separated station counts")
+        store = Store(cfg.db_path, read_only=True)
+        try:
+            with store.read_snapshot() as source:
+                parent = default_parent(source, args.parent)
+                built = None
+                if args.snapshot:
+                    saved = json.loads(args.snapshot.read_text(encoding="utf-8"))
+                    tally = saved.get("tally") or {}
+                    if saved.get("db") != source.name or tally.get("parent") != parent:
+                        raise ValueError("snapshot does not match the database/election")
+                    built = saved.get("built")
+                else:
+                    tally = build_tally(source, cfg, parent, stored_model(cfg.model),
+                                        include_station_results=True)
+                if tally.get("scope") != "national":
+                    raise ValueError("replay requires a national parliamentary/presidential tally")
+                docs = {d["id"]: d for d in source.browse_rows(parent)[0]}
+                roster = store_frame(source, parent)
+                check_observed_frame(roster, list(docs.values()), parent)
+                readings = tally_readings(tally)
+                for row in readings:
+                    doc = docs[row["id"]]
+                    if (row["m"], row["no"]) != (doc["municipality"], doc["station_no"]):
+                        raise ValueError("snapshot station identity differs from stored document")
+                    row["uploaded_at"] = doc["uploaded_at"]
+                report = run_replay(roster, readings, tally["names"], parent,
+                                    sizes=sizes, seeds=[f"rg2watch-replay-{i}" for i in range(args.trials)])
+                report["source_snapshot_built"] = built
+            if args.out:
+                text = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+                with args.out.open("x", encoding="utf-8") as fh:
+                    fh.write(text)
+        finally:
+            store.close()
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
+        print(f"estimate-replay: {exc}", file=sys.stderr)
+        return 2
+    print(summary(report))
+    if args.out:
+        print(f"JSON report: {args.out}")
+    return 0
+
+
 def _cmd_export_results(args) -> int:
     cfg = _config(args)
     store = _open_store(cfg)
@@ -605,10 +840,17 @@ def _snapshot_stale(store: Store, out: Path, cfg: Config) -> bool:
         parent = default_parent(store, None)
         generation = OperatorFeed(store, cfg, _cache_dir(cfg)).generation(parent)
         revision = store.operator_feed_state(parent)[1]
-        return not (data.get("snapshot_id") == meta.get("snapshot_id")
+        current = (data.get("snapshot_id") == meta.get("snapshot_id")
                     and data.get("generation") == meta.get("generation") == generation
                     and data.get("snapshot_revision") == meta.get("snapshot_revision")
                     and data.get("snapshot_revision", -1) >= revision)
+        if not current:
+            return True
+        tally = data.get("tally") or {}
+        if tally.get("scope") == "national":
+            from .estimates import estimate_input_signature
+            return (tally.get("estimates") or {}).get("input_signature") != estimate_input_signature(store, parent)
+        return False
     except (OSError, ValueError, TypeError, KeyError):
         return True
 
@@ -1436,6 +1678,9 @@ def main(argv: list[str] | None = None) -> int:
                "fixtures": _cmd_fixtures, "analyze": _cmd_analyze, "eval": _cmd_eval,
                "requeue": _cmd_requeue, "browse": _cmd_browse, "serve": _cmd_serve, "status": _cmd_status, "tally": _cmd_tally,
                "export-results": _cmd_export_results,
+               "estimate-sample": _cmd_estimate_sample, "estimate-replay": _cmd_estimate_replay,
+               "estimate-design": _cmd_estimate_design,
+               "estimate-speed-samples": _cmd_estimate_speed_samples,
                "review": _cmd_review, "labels": _cmd_labels, "drive-auth": _cmd_drive_auth,
                "revise-viber": _cmd_revise_viber,
                "drive-root": _cmd_drive_root}[args.cmd]

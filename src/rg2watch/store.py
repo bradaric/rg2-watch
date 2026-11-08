@@ -1680,6 +1680,17 @@ class Store:
                 (parent,)).fetchall()
         return {r[0]: r[1] for r in rows}
 
+    def station_roster(self, parent: str) -> list[dict]:
+        """Raw sampling identities, preserving duplicates, missing rosters and orphan rows."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT m.name AS m,s.station_no AS no FROM municipalities m LEFT JOIN stations s "
+                "ON s.parent=m.parent AND s.municipality_id=m.id WHERE m.parent=? "
+                "UNION ALL SELECT NULL,s.station_no FROM stations s LEFT JOIN municipalities m "
+                "ON m.parent=s.parent AND m.id=s.municipality_id WHERE s.parent=? AND m.id IS NULL",
+                (parent, parent)).fetchall()
+        return [dict(r) for r in rows]
+
     def tally_municipalities(self, parent: str) -> list[str]:
         """Municipality names of an election: from its first-round forms and the municipality list."""
         with self._lock:

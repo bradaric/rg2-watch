@@ -358,6 +358,7 @@ def test_stale_tally_is_discarded_without_clearing_form_revisions():
     script = f"""
 const assert = require("assert");
 let T = {{old: true}}, tallyRevision = 9;
+const renderEstimates = () => {{}};
 let feedGeneration = "g", feedOrderSignature = "o";
 let acceptedSnapshot = {{generation: "g", order: "o", revision: 9, id: "S"}};
 let rows = [{{id: 1, tally_state: "selected", correctable: true,
@@ -395,6 +396,7 @@ def test_snapshot_loader_preserves_forms_invalidates_owned_rows_and_recovers_sam
 const assert = require("assert");
 const HTTP = true;
 let T = {{old: true}}, tallyRevision = 9, feedRevision = 7, bootstrapEpoch = 0;
+const renderEstimates = () => {{}};
 let feedGeneration = "g", feedOrderSignature = "o";
 let snapshotLoadPromise = null, snapshotLoadQueued = false;
 let acceptedSnapshot = {{generation: "g", order: "o", revision: 9, id: "S"}};
@@ -463,7 +465,7 @@ const pair = () => [response(200, {{generation:"g", model_order_signature:"o",
 def test_old_snapshot_404_cannot_invalidate_new_epoch_tally_through_real_lifecycle():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     merge = html[html.index("function groupTag("):html.index(
-        "// ---- results", html.index("function groupTag("))]
+        "// ---- operator estimates", html.index("function groupTag("))]
     loading = html[html.index("let feedGeneration ="):html.index(
         "loadStatus();", html.index("let feedGeneration ="))]
     script = f"""
@@ -476,6 +478,7 @@ const $ = id => id === "built" ? built : (id === "auto" ? {{checked:true}} : {{}
 const prep = value => value;
 const child = () => null;
 const renderTally = () => {{}};
+const renderEstimates = () => {{}};
 const epoch = () => "now";
 const console = {{error: () => {{}}}};
 const clone = value => JSON.parse(JSON.stringify(value));

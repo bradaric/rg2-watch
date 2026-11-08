@@ -13,6 +13,7 @@ from pathlib import Path
 from .analyze import ARITHMETIC_PROMPT_VERSION, stored_model
 from .analysis_selection import preferred_analyses
 from .config import Config
+from .estimates import operator_estimates, unavailable
 from .models import DOC_TYPES, Doc
 from .operator_corrections import OperatorCorrections, Type13Corrections
 from .pipeline import PROMPT_VERSION, RG7_PROMPT_VERSION
@@ -550,7 +551,16 @@ def build_data(store: Store, cache_dir: Path, parent: str | None = None,
             "can_edit": state["can_edit"], "source_token": state["source_token"],
         })
     mark("rows")
-    return {"db": store.name, "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "interval": interval,
+    built = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if tally is not None:
+        try:
+            tally["estimates"] = {"built": built, **operator_estimates(store, tally, docs)}
+        except Exception:
+            log.exception("operator estimates unavailable; counted tally preserved")
+            tally["estimates"] = {"built": built, **{
+                k: unavailable("Estimate calculation failed; consult local log.")
+                for k in ("sample", "arrivals")}}
+    return {"db": store.name, "built": built, "interval": interval,
             "elections": {p: e.title for p, e in elections.items()}, "rows": rows, "tally": tally,
             "rules": RULE_INFO}
 

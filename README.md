@@ -97,6 +97,7 @@ See the [operator runbook](docs/runbook.md) for preparation and recovery, and
 | [Operator runbook](docs/runbook.md) | Scripts, election night, alerts, troubleshooting and rehearsals |
 | [Analysis and evaluation](docs/analysis.md) | Claude, Ollama, second opinions, budgets and labelled evaluation |
 | [Review and sharing](docs/review-and-sharing.md) | Browse UI, verdicts, unofficial tally, RG-7 and Drive/Viber handoff |
+| [Experimental national estimates](docs/estimates.md) | Operator-only sample/projection tabs, frozen samples, offline arrival-bias tests and limitations |
 | [Runtime reference](docs/reference.md) | File layout, server restrictions, throttling and privacy |
 | [Historical case recovery](docs/historical-case-recovery.md) | Specific past-case corrections and recovery procedures |
 
